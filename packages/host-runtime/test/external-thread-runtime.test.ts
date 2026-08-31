@@ -33,6 +33,7 @@ function record(): StoredThreadRecordV1 {
     cwd: "/synthetic",
     title: "Pi Thread",
     archived: false,
+    isPinned: false,
     transportModelId: "codexhost/pi-native",
     ephemeral: false,
     historyMode: "legacy",

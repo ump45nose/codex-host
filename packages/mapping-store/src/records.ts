@@ -45,6 +45,8 @@ export const storedThreadRecordV1Schema = z
     cwd: nonBlankTextSchema.max(16_384),
     title: z.string().max(4_096),
     archived: z.boolean(),
+    // Older v1 records did not persist pin state; treat them as unpinned during read migration.
+    isPinned: z.boolean().default(false),
     transportModelId: nonBlankTextSchema.max(1_024),
     ephemeral: z.boolean(),
     historyMode: z.enum(["legacy", "paginated"]),

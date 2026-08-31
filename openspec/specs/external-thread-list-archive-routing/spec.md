@@ -48,8 +48,9 @@ Host SHALL apply supported `thread/list` filters to External records using only 
 
 #### Scenario: Pinned rows are requested
 - **WHEN** `isPinned=true`
-- **THEN** Host SHALL omit External records because External Pin is unsupported
-- **AND** when pinned is false, null, or absent, returned External rows SHALL expose `isPinned=false`
+- **THEN** Host SHALL include only External records with persisted `isPinned=true`
+- **AND** when `isPinned=false`, Host SHALL include only External records with persisted `isPinned=false`
+- **AND** when pin state is null or absent, Host SHALL include both pin states and expose the persisted value
 
 #### Scenario: Unknown filter semantics are received
 - **WHEN** a future `thread/list` field could change which External records match and Host cannot safely interpret it
@@ -131,11 +132,16 @@ Host SHALL preserve original official Codex behavior for Thread list and managem
 - **WHEN** the official process exits or Host closes before an internal list response arrives
 - **THEN** every pending aggregate request SHALL settle with failure in bounded time
 
-### Requirement: Unsupported External metadata changes fail closed
+### Requirement: External pin changes are persisted while unsupported metadata fails closed
 A current or future management request that references a persisted External Thread MUST be handled by a supported Host operation or fail explicitly. It MUST NOT fall through to official Codex merely because Host does not support that metadata field.
 
 #### Scenario: External Pin update is requested
 - **WHEN** `thread/metadata/update` references an External Thread and requests `isPinned`
+- **THEN** Host SHALL persist the requested pin state in Mapping Store and return the updated Thread
+- **AND** it SHALL not modify the Harness Native Session or forward the External Thread ID to official Codex
+
+#### Scenario: Unsupported External metadata update is requested
+- **WHEN** `thread/metadata/update` references an External Thread and requests any metadata besides `isPinned`
 - **THEN** Host SHALL return explicit unsupported
 - **AND** it SHALL not modify Mapping Store or forward the External Thread ID to official Codex
 

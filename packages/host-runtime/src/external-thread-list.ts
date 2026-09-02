@@ -151,7 +151,8 @@ function includesExternalRecord(
   ) {
     return false;
   }
-  if (query.isPinned === true) return false;
+  // 外部任务的置顶状态由 Mapping Store 持久化；列表查询必须与官方任务采用相同过滤语义。
+  if (query.isPinned !== null && record.isPinned !== query.isPinned) return false;
   return true;
 }
 

@@ -70,7 +70,11 @@ import {
   writeNewThreadAgentPreference,
   writeNewThreadExternalConfigurationPreference,
 } from "./renderer-new-thread-preference.js";
-import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
+import {
+  installRendererSidebarAgentIcons,
+  installRendererSidebarExternalPinning,
+} from "./renderer-sidebar-agent-icons.js";
+import { supportsCodexHostPrivateRpc } from "./renderer-host-capability.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
 import type {
   RendererConnectionDiagnostics,
@@ -597,6 +601,15 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocalAgent: localAgentForSidebarThread,
   });
+  const stopSidebarExternalPinning = installRendererSidebarExternalPinning({
+    getClient: (hostId) => modelClientForHost(hostId),
+    reportError: (error) => {
+      console.error(
+        "codexhost External Thread pin update failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    },
+  });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getUpdateClient: () => modelControl,
@@ -867,6 +880,16 @@ export function installRendererBindingProbe(
     }
     const requestModelControl = modelControl;
     const requestHostId = activeModelHostId();
+    if (!supportsCodexHostPrivateRpc(requestHostId)) {
+      // 自动发现的 SSH Host 是官方 app-server：保持原生 Codex 状态，不做私有所有权探测。
+      mounted.hostId = requestHostId;
+      mounted.ownershipStatus = "not-required";
+      mounted.threadConfiguration = undefined;
+      mounted.modelView = { status: "idle" };
+      mounted.permissionModeView = { status: "idle" };
+      renderMounted(mounted);
+      return;
+    }
     const client = modelClientForHostFrom(requestModelControl, requestHostId);
     const generation = controller.beginOwnershipRequest(mounted.composer);
     const usageGeneration = mounted.usageRequestGeneration;
@@ -1754,7 +1777,7 @@ export function installRendererBindingProbe(
     control: RendererModelClient | null,
     hostId: string | null,
   ): RendererModelClient | null {
-    if (!control || !hostId) return null;
+    if (!control || !supportsCodexHostPrivateRpc(hostId)) return null;
     const selected = control.clientForHost?.(hostId);
     if (selected) return selected;
     const currentHostId = control.currentHostId?.() ?? "local";
@@ -2471,6 +2494,7 @@ export function installRendererBindingProbe(
       modelControl = null;
       mutationObserver.disconnect();
       sidebarAgentIcons.dispose();
+      stopSidebarExternalPinning();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
       document.removeEventListener("submit", onSubmit, true);

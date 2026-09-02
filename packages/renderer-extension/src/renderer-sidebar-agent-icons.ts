@@ -13,6 +13,7 @@ export const SIDEBAR_THREAD_ROW_SELECTOR = `[${SIDEBAR_THREAD_ROW_ATTRIBUTE}]`;
 export const SIDEBAR_THREAD_ID_ATTRIBUTE = "data-app-action-sidebar-thread-id";
 export const SIDEBAR_THREAD_HOST_ID_ATTRIBUTE = "data-app-action-sidebar-thread-host-id";
 export const SIDEBAR_AGENT_ICON_ATTRIBUTE = "data-codexhost-sidebar-agent-icon";
+export const SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE = "data-codexhost-sidebar-external-thread";
 
 export interface RendererSidebarContractInspection {
   rowCount: number;
@@ -174,9 +175,11 @@ class BrowserSidebarAgentIconRow implements SidebarAgentIconRow {
       icons[0]?.parentElement === titleTrigger &&
       icons[0].getAttribute(SIDEBAR_AGENT_ICON_ATTRIBUTE) === agent
     ) {
+      this.element.setAttribute(SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE, "true");
       return;
     }
     this.clear();
+    this.element.setAttribute(SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE, "true");
 
     const label = `${RENDERER_AGENT_LABELS[agent]} Agent`;
     const marker = this.element.ownerDocument.createElement("span");
@@ -196,10 +199,76 @@ class BrowserSidebarAgentIconRow implements SidebarAgentIconRow {
   }
 
   clear(): void {
+    this.element.removeAttribute(SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE);
     for (const icon of this.element.querySelectorAll(`[${SIDEBAR_AGENT_ICON_ATTRIBUTE}]`)) {
       icon.remove();
     }
   }
+}
+
+export interface SidebarExternalPinAction {
+  hostId: string;
+  threadId: ReturnType<typeof hostThreadIdSchema.parse>;
+  isPinned: boolean;
+}
+
+/** 从原生侧栏置顶按钮解析 External Thread 的目标状态。 */
+export function sidebarExternalPinActionFromTarget(
+  target: EventTarget | null,
+): SidebarExternalPinAction | null {
+  if (!(target instanceof Element)) return null;
+  const button = target.closest<HTMLButtonElement>("button");
+  const row = target.closest<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR);
+  if (!button || !row || row.getAttribute(SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE) !== "true") {
+    return null;
+  }
+  // 原生侧栏行的首个快捷操作是置顶/取消置顶；归档按钮必须保持原生行为。
+  if (row.querySelector<HTMLButtonElement>("button") !== button) return null;
+  const attributes = sidebarThreadAttributes(row);
+  const threadId = hostThreadIdSchema.safeParse(threadIdFromSidebarRowElement(row));
+  if (!attributes || !threadId.success) return null;
+  return {
+    hostId: attributes.hostId,
+    threadId: threadId.data,
+    isPinned: row.getAttribute("data-app-action-sidebar-thread-pinned") !== "true",
+  };
+}
+
+/**
+ * 为原生侧栏的乐观置顶操作补齐 External Thread 的标准 RPC。
+ * 捕获阶段先发起持久化，避免原生列表刷新把乐观状态立即覆盖。
+ */
+export function installRendererSidebarExternalPinning(options: {
+  getClient(hostId: string): RendererModelClient | null;
+  root?: Document;
+  reportError?(error: unknown): void;
+}): () => void {
+  const root = options.root ?? document;
+  const replayingButtons = new WeakSet<HTMLButtonElement>();
+  const onClick = (event: Event): void => {
+    const action = sidebarExternalPinActionFromTarget(event.target);
+    if (!action) return;
+    const button =
+      event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
+    if (!button) return;
+    if (replayingButtons.delete(button)) return;
+    const update = options.getClient(action.hostId)?.updateThreadPinned;
+    if (!update) return;
+    // 先阻止原生乐观更新；Store 写入成功后再重放点击，消除“闪一下又消失”的竞态。
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void update({ threadId: action.threadId, isPinned: action.isPinned })
+      .then(() => {
+        if (button.isConnected === false) return;
+        replayingButtons.add(button);
+        button.click();
+      })
+      .catch((error) => {
+        options.reportError?.(error);
+      });
+  };
+  root.addEventListener("click", onClick, true);
+  return () => root.removeEventListener("click", onClick, true);
 }
 
 class BrowserSidebarAgentIconDom implements SidebarAgentIconDom {

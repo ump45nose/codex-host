@@ -72,6 +72,7 @@ vi.mock("../src/versioned-renderer-adapter.js", async (importOriginal) => {
 
 vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
   installRendererSidebarAgentIcons: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererSidebarExternalPinning: () => vi.fn(),
 }));
 
 vi.mock("../src/renderer-settings-lifecycle.js", () => ({
@@ -201,6 +202,45 @@ afterEach(() => {
 });
 
 describe("Renderer binding Host-scoped Claude catalogs", () => {
+  it("does not probe CodexHost ownership on a stock discovered SSH Host", async () => {
+    installFakeBrowser();
+    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const remote = {
+      inspectThread: vi.fn(),
+      inspectHarness: vi.fn(),
+    };
+    const modelControl = {
+      currentHostId: () => "remote-ssh-discovered:nas",
+      clientForHost: vi.fn((hostId: string) => (hostId === "local" ? local : remote)),
+      inspectHarness: remote.inspectHarness,
+      inspectThread: remote.inspectThread,
+      inspectThreadCommands: vi.fn(),
+      inspectThreadUsage: vi.fn(),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      modelControl as never,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(remote.inspectThread).not.toHaveBeenCalled();
+    expect(remote.inspectHarness).not.toHaveBeenCalled();
+    expect(modelControl.clientForHost).not.toHaveBeenCalledWith("remote-ssh-discovered:nas");
+    expect(testState.renderedModelViews).not.toContainEqual(
+      expect.objectContaining({ status: "error" }),
+    );
+  });
+
   it("does not let a stale remote Host response mark a locked Claude Model unavailable", async () => {
     installFakeBrowser();
     let currentHostId = "host-a";

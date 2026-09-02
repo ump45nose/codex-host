@@ -36,12 +36,14 @@ export {
   THREAD_PERMISSION_MODE_SELECT_METHOD,
   THREAD_THINKING_SELECT_METHOD,
   THREAD_OWNERSHIP_LIST_METHOD,
+  THREAD_METADATA_UPDATE_METHOD,
   THREAD_USAGE_INSPECT_METHOD,
   UPDATE_CHECK_METHOD,
   UPDATE_START_METHOD,
   UPDATE_STATUS_METHOD,
   createRendererModelClient,
 } from "./renderer-model-client.js";
+export { supportsCodexHostPrivateRpc } from "./renderer-host-capability.js";
 export type { RendererModelClient } from "./renderer-model-client.js";
 export {
   TRANSCRIPT_ITEM_IDS_ATTRIBUTE,
@@ -147,6 +149,9 @@ export type {
 } from "./versioned-renderer-adapter.js";
 export {
   inspectRendererSidebarContract,
+  installRendererSidebarExternalPinning,
+  sidebarExternalPinActionFromTarget,
+  SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE,
   SIDEBAR_AGENT_ICON_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,

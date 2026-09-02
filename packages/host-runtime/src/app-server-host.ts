@@ -159,7 +159,6 @@ import {
   type CodexQuestionProjection,
   type DecodedThreadForkRequest,
   type DecodedThreadListRequest,
-  type DecodedThreadMetadataUpdateRequest,
   type DecodedThreadRevertRequest,
   type DecodedThreadRollbackRequest,
   type ExternalThreadRpcError,
@@ -744,11 +743,9 @@ export class AppServerHost {
       }
       if (request.method === "thread/metadata/update") {
         let threadId: string;
-        let decoded: DecodedThreadMetadataUpdateRequest;
         try {
-          const parsed = decodeThreadMetadataUpdateRequest(request);
-          if (!parsed) throw new Error("Expected thread/metadata/update request");
-          decoded = parsed;
+          const decoded = decodeThreadMetadataUpdateRequest(request);
+          if (!decoded) throw new Error("Expected thread/metadata/update request");
           threadId = decoded.threadId;
         } catch (error) {
           await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
@@ -760,15 +757,9 @@ export class AppServerHost {
           await writeFrame(official.stdin, frame);
           continue;
         }
-        if (location.kind !== "external") continue;
-        // External Thread 仅接受纯置顶更新；其他元数据继续失败关闭，禁止误转发官方 Codex。
-        if (decoded.isPinned === undefined || decoded.gitInfo !== undefined) {
-          await this.#writer.json(
-            rpcError(request, -32078, "External Thread metadata updates are unsupported"),
-          );
-          continue;
-        }
-        await this.#setExternalThreadPinned(request, location, decoded.isPinned ?? false);
+        await this.#writer.json(
+          rpcError(request, -32078, "External Thread metadata updates are unsupported"),
+        );
         continue;
       }
       let createRoute: CreateRequestRouteObservation | null;
@@ -1647,51 +1638,6 @@ export class AppServerHost {
       method: archived ? "thread/archived" : "thread/unarchived",
       params: { threadId: record.hostThreadId },
     });
-  }
-
-  /** 持久化置顶变更，并向 Desktop 返回更新后的 External Thread 投影。 */
-  async #setExternalThreadPinned(
-    request: JsonRpcRequest,
-    location: Extract<ExternalThreadLocation, { kind: "external" }>,
-    isPinned: boolean,
-  ): Promise<void> {
-    if (location.record.state !== "ready" || !location.record.nativeSessionRef) {
-      await this.#writer.json(rpcError(request, -32079, "External Native Session is unavailable"));
-      return;
-    }
-    const sessionId =
-      location.thread?.sessionId ??
-      (await this.#repository.sessionTreeId(location.record).catch(() => null));
-    if (!sessionId) {
-      await this.#writer.json(
-        rpcError(request, -32081, "External Thread metadata could not be projected"),
-      );
-      return;
-    }
-    let record: StoredThreadRecordV1;
-    try {
-      record = await this.#repository.setPinned(location.record.hostThreadId, isPinned);
-    } catch {
-      await this.#writer.json(
-        rpcError(request, -32081, "External Thread pin state could not be persisted"),
-      );
-      return;
-    }
-    const projected = externalThreadValue({
-      record,
-      turns: [],
-      sessionId,
-      ...(location.thread ? { running: location.thread.running } : { loaded: false }),
-    });
-    if (location.thread) {
-      location.thread.record = record;
-      location.thread.thread = {
-        ...location.thread.thread,
-        ...projected,
-        turns: location.thread.thread.turns ?? [],
-      };
-    }
-    await this.#writer.json(rpcEnvelope(request, { result: { thread: projected } }));
   }
 
   async #handleUpdateRequest(request: JsonRpcRequest): Promise<void> {

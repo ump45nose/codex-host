@@ -131,6 +131,7 @@ function installFakeBrowser(): void {
   const composer = {
     isConnected: true,
     matches: (selector: string) => selector === "[data-codex-composer-root]",
+    closest: (selector: string) => (selector === "button" ? testState.sendButton : null),
     querySelectorAll: (selector: string) => (selector === "button" ? [testState.sendButton] : []),
     querySelector: (selector: string) => (selector.includes("textarea") ? testState.editor : null),
   } as unknown as Element;
@@ -239,6 +240,81 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     expect(testState.renderedModelViews).not.toContainEqual(
       expect.objectContaining({ status: "error" }),
     );
+  });
+
+  it("leaves stock SSH Remote text input and submission to the native Composer", async () => {
+    installFakeBrowser();
+    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const remote = {
+      inspectThread: vi.fn(),
+      inspectHarness: vi.fn(),
+    };
+    const modelControl = {
+      currentHostId: () => "remote-ssh-discovered:nas",
+      clientForHost: vi.fn((hostId: string) => (hostId === "local" ? local : remote)),
+      inspectHarness: remote.inspectHarness,
+      inspectThread: remote.inspectThread,
+      inspectThreadCommands: vi.fn(),
+      inspectThreadUsage: vi.fn(),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      modelControl as never,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    /** 创建可观测的原生 Composer 事件，确认 CodexHost 捕获层没有取消它。 */
+    const dispatchNativeEvent = (type: string, fields: Record<string, unknown> = {}): void => {
+      const preventDefault = vi.fn();
+      const stopImmediatePropagation = vi.fn();
+      testState.documentListeners.get(type)?.({
+        target: testState.editor,
+        preventDefault,
+        stopImmediatePropagation,
+        ...fields,
+      } as unknown as Event);
+      expect(preventDefault).not.toHaveBeenCalled();
+      expect(stopImmediatePropagation).not.toHaveBeenCalled();
+    };
+
+    // 普通英文/数字、beforeinput、Enter、submit 与发送按钮都必须交回官方远程页面。
+    dispatchNativeEvent("keydown", {
+      key: "a",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      isComposing: false,
+    });
+    dispatchNativeEvent("keydown", {
+      key: "7",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      isComposing: false,
+    });
+    dispatchNativeEvent("beforeinput", { inputType: "insertText", data: "a" });
+    dispatchNativeEvent("keydown", {
+      key: "Enter",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      isComposing: false,
+    });
+    dispatchNativeEvent("submit");
+    dispatchNativeEvent("click");
   });
 
   it("does not let a stale remote Host response mark a locked Claude Model unavailable", async () => {

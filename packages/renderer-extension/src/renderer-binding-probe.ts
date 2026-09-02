@@ -2243,6 +2243,16 @@ export function installRendererBindingProbe(
     event.preventDefault();
     event.stopImmediatePropagation();
   };
+  /**
+   * 判断当前 Composer 是否应完全沿用官方 SSH Remote 的原生输入与提交链路。
+   *
+   * 自动发现的 SSH Host 不承载 CodexHost 私有 RPC；此时 Renderer 注入层既不能
+   * 恢复任务归属，也不应阻断官方页面的键盘、输入法或发送事件。
+   */
+  const usesNativeRemoteComposerRouting = (mounted: MountedComposer | undefined): boolean =>
+    mounted?.hostId !== null &&
+    mounted?.hostId !== undefined &&
+    !supportsCodexHostPrivateRpc(mounted.hostId);
   const prepareComposer = (composer: Element): boolean | null => {
     const mounted = mountedByComposer.get(composer);
     if (!mounted) return null;
@@ -2269,6 +2279,8 @@ export function installRendererBindingProbe(
     if (!composer) return;
     controller.clearPendingSubmission(composer);
     const mounted = mountedByComposer.get(composer);
+    // 官方 SSH Remote 必须自行处理文本和 IME 事件，避免普通英文/数字被捕获阶段吞掉。
+    if (usesNativeRemoteComposerRouting(mounted)) return;
     if (mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) return;
     if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
   };
@@ -2277,6 +2289,8 @@ export function installRendererBindingProbe(
     const candidate = element ? composerForElement(element) : null;
     const composer = candidate && isMountedComposer(candidate) ? candidate : null;
     if (!composer) return;
+    // 原生 Remote 的 submit 事件必须继续交给官方 Renderer，CodexHost 不参与归属冻结。
+    if (usesNativeRemoteComposerRouting(mountedByComposer.get(composer))) return;
     const prepared = prepareComposer(composer);
     if (prepared === null) return;
     if (!prepared) {
@@ -2288,6 +2302,8 @@ export function installRendererBindingProbe(
   const onKeyDown = (event: KeyboardEvent): void => {
     const composer = isComposerInputIntent(event) ? composerForTarget(event.target) : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;
+    // 放行官方 SSH Remote 的字符键、编辑键和 Enter，由其原生 Composer 统一处理。
+    if (composer && usesNativeRemoteComposerRouting(mounted)) return;
     if (composer && controller.isSwitching(composer)) {
       blockEvent(event);
       return;
@@ -2315,6 +2331,8 @@ export function installRendererBindingProbe(
     const composer = candidate && isMountedComposer(candidate) ? candidate : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;
     if (!composer || mounted?.control.sendButton !== button) return;
+    // 点击发送同样属于官方 SSH Remote 的原生职责，不能在捕获阶段阻止。
+    if (usesNativeRemoteComposerRouting(mounted)) return;
     if (!prepareComposer(composer)) {
       blockEvent(event);
       return;

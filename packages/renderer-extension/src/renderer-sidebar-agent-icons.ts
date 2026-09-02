@@ -23,6 +23,7 @@ export interface RendererSidebarContractInspection {
 }
 
 const OWNERSHIP_RETRY_DELAYS_MS = [100, 300, 800, 1_500, 3_000] as const;
+const PIN_REPLAY_RETRY_DELAYS_MS = [50, 150, 300] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -245,6 +246,55 @@ export function installRendererSidebarExternalPinning(options: {
 }): () => void {
   const root = options.root ?? document;
   const replayingButtons = new WeakSet<HTMLButtonElement>();
+  const replayTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  /** 按 Host 和 Thread 身份重新定位重绘后的 External Thread 侧栏行。 */
+  const currentPinRow = (action: SidebarExternalPinAction): HTMLElement | null => {
+    for (const row of root.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
+      const attributes = sidebarThreadAttributes(row);
+      if (
+        attributes?.hostId === action.hostId &&
+        row.getAttribute(SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE) === "true" &&
+        threadIdFromSidebarRowElement(row) === action.threadId
+      ) {
+        return row;
+      }
+    }
+    return null;
+  };
+
+  /**
+   * 在 Store 持久化成功后重放官方置顶动作。
+   *
+   * 官方侧栏可能在 RPC 等待期间替换整行 DOM，因此不能只持有初次点击的按钮引用；
+   * 若新列表已经反映目标状态则直接结束，否则在当前行上重放一次原生点击。
+   */
+  const replayNativePinAction = (
+    action: SidebarExternalPinAction,
+    originalButton: HTMLButtonElement,
+    retryIndex = 0,
+  ): void => {
+    const row = currentPinRow(action);
+    if (row?.getAttribute("data-app-action-sidebar-thread-pinned") === String(action.isPinned)) {
+      return;
+    }
+    const currentButton =
+      row?.querySelector<HTMLButtonElement>("button") ??
+      (originalButton.isConnected === false ? null : originalButton);
+    if (currentButton) {
+      replayingButtons.add(currentButton);
+      currentButton.click();
+      return;
+    }
+    const delay = PIN_REPLAY_RETRY_DELAYS_MS[retryIndex];
+    if (delay === undefined) return;
+    const timer = setTimeout(() => {
+      replayTimers.delete(timer);
+      replayNativePinAction(action, originalButton, retryIndex + 1);
+    }, delay);
+    replayTimers.add(timer);
+  };
+
   const onClick = (event: Event): void => {
     const action = sidebarExternalPinActionFromTarget(event.target);
     if (!action) return;
@@ -259,16 +309,18 @@ export function installRendererSidebarExternalPinning(options: {
     event.stopImmediatePropagation();
     void update({ threadId: action.threadId, isPinned: action.isPinned })
       .then(() => {
-        if (button.isConnected === false) return;
-        replayingButtons.add(button);
-        button.click();
+        replayNativePinAction(action, button);
       })
       .catch((error) => {
         options.reportError?.(error);
       });
   };
   root.addEventListener("click", onClick, true);
-  return () => root.removeEventListener("click", onClick, true);
+  return () => {
+    root.removeEventListener("click", onClick, true);
+    for (const timer of replayTimers) clearTimeout(timer);
+    replayTimers.clear();
+  };
 }
 
 class BrowserSidebarAgentIconDom implements SidebarAgentIconDom {

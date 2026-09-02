@@ -187,6 +187,7 @@ describe("Renderer sidebar Agent ownership", () => {
         clickListener = listener;
       }),
       removeEventListener: vi.fn(),
+      querySelectorAll: vi.fn(() => []),
     } as unknown as Document;
     const updateThreadPinned = vi.fn(async () => undefined);
     const stop = installRendererSidebarExternalPinning({
@@ -206,6 +207,82 @@ describe("Renderer sidebar Agent ownership", () => {
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(stopImmediatePropagation).toHaveBeenCalledOnce();
     expect(nativeClick).toHaveBeenCalledOnce();
+    stop();
+    vi.unstubAllGlobals();
+  });
+
+  it("replays External pinning on the replacement row after native sidebar redraw", async () => {
+    const attributes = {
+      "data-app-action-sidebar-thread-row": "",
+      "data-app-action-sidebar-thread-id": "local:external-thread",
+      "data-app-action-sidebar-thread-host-id": "local",
+      "data-app-action-sidebar-thread-pinned": "false",
+      [SIDEBAR_EXTERNAL_THREAD_ATTRIBUTE]: "true",
+    };
+    class FakeElement {
+      constructor(readonly kind: "row" | "button" | "target") {}
+
+      closest(selector: string): FakeElement | null {
+        if (selector === "button") return this.kind === "row" ? null : originalButton;
+        return selector.includes("data-app-action-sidebar-thread-row") ? originalRow : null;
+      }
+    }
+    const originalRow = new FakeElement("row");
+    const originalButton = new FakeElement("button");
+    const originalTarget = new FakeElement("target");
+    const replacementRow = new FakeElement("row");
+    const replacementButton = new FakeElement("button");
+    const originalClick = vi.fn();
+    const replacementClick = vi.fn();
+    (originalButton as unknown as HTMLButtonElement).click = originalClick;
+    (replacementButton as unknown as HTMLButtonElement).click = replacementClick;
+    Object.defineProperty(originalButton, "isConnected", { value: false });
+    for (const row of [originalRow, replacementRow]) {
+      (row as unknown as HTMLElement).getAttribute = (name: string) =>
+        attributes[name as keyof typeof attributes] ?? null;
+      Object.defineProperty(row, "__reactFiber$test", {
+        value: {
+          memoizedProps: { conversationId: "external-thread", dataAttributes: attributes },
+          return: null,
+        },
+      });
+    }
+    (originalRow as unknown as HTMLElement).querySelector = vi.fn(
+      () => originalButton as unknown as HTMLButtonElement,
+    );
+    (replacementRow as unknown as HTMLElement).querySelector = vi.fn(
+      () => replacementButton as unknown as HTMLButtonElement,
+    );
+    vi.stubGlobal("Element", FakeElement);
+    let clickListener: EventListener = () => {
+      throw new Error("Synthetic click listener was not installed");
+    };
+    const root = {
+      addEventListener: vi.fn((_type: string, listener: EventListener) => {
+        clickListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+      querySelectorAll: vi.fn(() => [replacementRow]),
+    } as unknown as Document;
+    const updateThreadPinned = vi.fn(async () => undefined);
+    const stop = installRendererSidebarExternalPinning({
+      getClient: () => ({ ...clientWith(async () => ({ threads: [] })), updateThreadPinned }),
+      root,
+    });
+
+    clickListener({
+      target: originalTarget,
+      preventDefault: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+    } as unknown as Event);
+    await settle();
+
+    expect(updateThreadPinned).toHaveBeenCalledWith({
+      threadId: "external-thread",
+      isPinned: true,
+    });
+    expect(originalClick).not.toHaveBeenCalled();
+    expect(replacementClick).toHaveBeenCalledOnce();
     stop();
     vi.unstubAllGlobals();
   });

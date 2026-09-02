@@ -453,6 +453,7 @@ export class MappingStore {
         cwd: input.cwd,
         title: input.title ?? "",
         archived: false,
+        isPinned: false,
         transportModelId: input.transportModelId,
         ephemeral: input.ephemeral,
         historyMode: input.historyMode,
@@ -467,6 +468,7 @@ export class MappingStore {
     });
     if (!result) throw new MappingStoreError("IO_ERROR", "Provisional create produced no result");
     return result;
+
   }
 
   async commitReady(input: CommitReadyThreadInput): Promise<StoredThreadRecordV1> {
@@ -654,6 +656,13 @@ export class MappingStore {
   async setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1> {
     return this.#update(hostThreadId, (current) =>
       current.archived === archived ? null : { ...current, archived },
+    );
+  }
+
+  /** 持久化 External Thread 的置顶状态，不改变其 Native Session 映射。 */
+  async setPinned(hostThreadId: HostThreadId, isPinned: boolean): Promise<StoredThreadRecordV1> {
+    return this.#update(hostThreadId, (current) =>
+      current.isPinned === isPinned ? null : { ...current, isPinned },
     );
   }
 

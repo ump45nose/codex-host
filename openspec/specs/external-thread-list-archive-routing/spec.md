@@ -48,8 +48,8 @@ Host SHALL apply supported `thread/list` filters to External records using only 
 
 #### Scenario: Pinned rows are requested
 - **WHEN** `isPinned=true`
-- **THEN** Host SHALL include only External records whose persisted `isPinned` is true
-- **AND** `isPinned=false` SHALL include only unpinned External records while null or omission SHALL include both states
+- **THEN** Host SHALL omit External records because External Pin is unsupported
+- **AND** when pinned is false, null, or absent, returned External rows SHALL expose `isPinned=false`
 
 #### Scenario: Unknown filter semantics are received
 - **WHEN** a future `thread/list` field could change which External records match and Host cannot safely interpret it
@@ -131,21 +131,17 @@ Host SHALL preserve original official Codex behavior for Thread list and managem
 - **WHEN** the official process exits or Host closes before an internal list response arrives
 - **THEN** every pending aggregate request SHALL settle with failure in bounded time
 
-### Requirement: External pin updates persist while unsupported metadata fails closed
-A current or future management request that references a persisted External Thread MUST be handled by a supported Host operation or fail explicitly. A pure pin update SHALL persist in Mapping Store without changing the Native Session. Unsupported or mixed metadata updates MUST NOT fall through to official Codex.
+### Requirement: Unsupported External metadata changes fail closed
+A current or future management request that references a persisted External Thread MUST be handled by a supported Host operation or fail explicitly. It MUST NOT fall through to official Codex merely because Host does not support that metadata field.
 
 #### Scenario: External Pin update is requested
 - **WHEN** `thread/metadata/update` references an External Thread and requests `isPinned`
-- **THEN** Host SHALL persist the requested pin state and return the updated projected Thread
-- **AND** it SHALL not open or modify the Native Session or forward the External Thread ID to official Codex
+- **THEN** Host SHALL return explicit unsupported
+- **AND** it SHALL not modify Mapping Store or forward the External Thread ID to official Codex
 
 #### Scenario: External Git metadata update is requested
 - **WHEN** `thread/metadata/update` references an External Thread and includes Git metadata
 - **THEN** Host SHALL return explicit unsupported without changing Native or Host state
-
-#### Scenario: External Pin and Git metadata are mixed
-- **WHEN** `thread/metadata/update` combines `isPinned` with Git metadata for an External Thread
-- **THEN** Host SHALL reject the whole request without partially changing pin state
 
 #### Scenario: Official metadata update is requested
 - **WHEN** `thread/metadata/update` references no persisted External Thread

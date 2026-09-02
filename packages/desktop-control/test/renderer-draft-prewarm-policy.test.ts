@@ -452,6 +452,27 @@ describe("Renderer draft prewarm policy", () => {
     });
   });
 
+  it.each(["remote-ssh-discovered:nas", "remote-ssh-codex-managed:nas"])(
+    "keeps official SSH Remote requests on the native transport for %s",
+    async (hostId) => {
+      const sendRequest = vi.fn(async () => ({ thread: { id: "official-remote-thread" } }));
+      const manager = requestManagerFixture();
+      const bridge = requestBridgeFixture({ sendRequest });
+      const target: DraftPrewarmPolicyTarget = {};
+      installDraftPrewarmPolicyBridge(manager, bridge, hostId, target, {
+        discardAllPrewarmedThreads: vi.fn(),
+      });
+
+      // 官方 SSH Remote 必须继续使用 Desktop 自带的 SSH transport，不能启动 Remote Control bridge。
+      await bridge.sendRequest("thread/read", { threadId: "official-remote-thread" });
+
+      expect(sendRequest).toHaveBeenCalledWith("thread/read", {
+        threadId: "official-remote-thread",
+      });
+      expect(sendRequest).not.toHaveBeenCalledWith("process/spawn", expect.anything());
+    },
+  );
+
   it("routes the current request client's direct and prewarm Thread starts", async () => {
     const sendRequest = vi.fn<(method: string, parameters: unknown) => Promise<void>>(
       async () => undefined,

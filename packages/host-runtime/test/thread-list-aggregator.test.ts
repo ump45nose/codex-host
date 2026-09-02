@@ -37,7 +37,6 @@ function external(id: string, timestamp: number): StoredThreadRecordV1 {
     cwd: "/workspace",
     title: id,
     archived: false,
-    isPinned: false,
     transportModelId: "codexhost/pi-native",
     ephemeral: false,
     historyMode: "legacy",

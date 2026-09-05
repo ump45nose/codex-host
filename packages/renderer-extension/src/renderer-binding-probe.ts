@@ -76,7 +76,9 @@ import {
   installRendererSidebarExternalPinning,
 } from "./renderer-sidebar-agent-icons.js";
 import { supportsCodexHostPrivateRpc } from "./renderer-host-capability.js";
+import { routeRendererHarnessCommandSelection } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
+import { openRendererThread } from "./renderer-fork-control.js";
 import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
@@ -103,6 +105,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Record<ExternalRendererAgent, CodexhostError | undefined>;
+type HarnessWebUiAvailability = Record<ExternalRendererAgent, boolean>;
 
 function isRetryableHarnessAvailability(
   availability: RendererAgentAvailability | undefined,
@@ -146,6 +149,7 @@ export function harnessAvailabilityDuringInspect(
 interface HostHarnessAvailabilityState {
   availability: HarnessAvailability;
   errors: HarnessAvailabilityErrors;
+  webUi: HarnessWebUiAvailability;
   requestGeneration: number;
   request: { client: RendererModelClient; promise: Promise<void> } | null;
   retryTimer: number | null;
@@ -637,6 +641,18 @@ export function installRendererBindingProbe(
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getUpdateClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
+    getSessionImportClient: () => {
+      const client = modelClientForHost("local");
+      const list = client?.listDeepSeekModernSessions;
+      const importSession = client?.importDeepSeekModernSession;
+      if (!list || !importSession) return null;
+      return {
+        listDeepSeekModernSessions: (input) => list(input),
+        importDeepSeekModernSession: (input) => importSession(input),
+      };
+    },
+    openImportedThread: (threadId, signal) =>
+      openRendererThread(threadId, { hostId: "local", signal }),
     onLocaleChange() {
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
     },
@@ -660,6 +676,9 @@ export function installRendererBindingProbe(
       omp: undefined,
       antigravity: undefined,
     },
+    webUi: Object.fromEntries(
+      externalAgents.map((agent) => [agent, false]),
+    ) as HarnessWebUiAvailability,
     requestGeneration: 0,
     request: null,
     retryTimer: null,
@@ -789,6 +808,20 @@ export function installRendererBindingProbe(
     } finally {
       mounted.control.harnessCommands.setExecuting(null);
     }
+  };
+
+  const selectCommand = (mounted: MountedComposer, command: HarnessCommandDescriptor): void => {
+    const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+    if (!threadId || !modelControl || controller.get(mounted.composer).agent === "codex") return;
+    const editor = mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    if (
+      routeRendererHarnessCommandSelection(editor, command, () => {
+        void executeCommand(mounted, command);
+      })
+    ) {
+      return;
+    }
+    console.error("codexhost Harness command could not claim the current Composer editor");
   };
 
   const applyThreadUsageUpdate = (update: ThreadUsageInspection): void => {
@@ -1848,12 +1881,17 @@ export function installRendererBindingProbe(
         agentsToInspect.map(async (agent) => {
           let status: RendererAgentAvailability = "error";
           let nextError: CodexhostError | undefined;
+          let webUiAvailable = false;
           try {
             const inspection = await client.inspectHarness({
               harnessId: externalHarnessIds[agent],
               refresh,
             });
             status = inspection.status === "ready" ? "ready" : inspection.status;
+            webUiAvailable =
+              hostId === "local" &&
+              inspection.status === "ready" &&
+              inspection.webUi?.open === true;
             if (inspection.status !== "ready") {
               const error = inspection.error;
               nextError = {
@@ -1879,6 +1917,7 @@ export function installRendererBindingProbe(
           const previousStatus = state.availability[agent];
           state.errors[agent] = nextError;
           state.availability = { ...state.availability, [agent]: status };
+          state.webUi = { ...state.webUi, [agent]: webUiAvailable };
           if (hostId !== activeAvailabilityHostId) {
             publishConnectionStatus();
             return;
@@ -1996,6 +2035,7 @@ export function installRendererBindingProbe(
               agent,
               availability: state.availability[agent] ?? "checking",
               error: state.errors[agent] ?? null,
+              ...(state.webUi[agent] ? { webUiAvailable: true as const } : {}),
             })),
           };
         }),
@@ -2005,6 +2045,25 @@ export function installRendererBindingProbe(
       return refreshConnectionHosts(harnessAvailabilityByHost.keys(), (hostId) =>
         refreshHarnessAvailabilityForHost(hostId, true, false, true),
       );
+    },
+    async openWebUi(hostId: string, agent: ExternalRendererAgent): Promise<void> {
+      const state = hostHarnessAvailabilityState(hostId);
+      const client = hostId === "local" ? modelClientForHost(hostId) : null;
+      if (
+        state.availability[agent] !== "ready" ||
+        state.webUi[agent] !== true ||
+        !client?.openHarnessWebUi
+      ) {
+        throw new Error("Harness Web UI is unavailable");
+      }
+      try {
+        await client.openHarnessWebUi({ harnessId: externalHarnessIds[agent] });
+      } catch (error) {
+        state.webUi = { ...state.webUi, [agent]: false };
+        publishConnectionStatus();
+        void refreshHarnessAvailabilityForHost(hostId, true, false, true).catch(() => undefined);
+        throw error;
+      }
     },
     subscribe(listener: () => void): () => void {
       connectionListeners.add(listener);
@@ -2061,7 +2120,7 @@ export function installRendererBindingProbe(
       },
       (command) => {
         const mounted = mountedByComposer.get(composer);
-        if (mounted) void executeCommand(mounted, command);
+        if (mounted) selectCommand(mounted, command);
       },
     );
     const mounted: MountedComposer = {

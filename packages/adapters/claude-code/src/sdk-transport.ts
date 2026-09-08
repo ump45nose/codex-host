@@ -10,7 +10,8 @@ import {
   type SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 import { sanitizeDiagnosticTail } from "@codexhost/harness-adapter";
-import type { HarnessThinkingOptionId } from "@codexhost/shared-contracts";
+import type { HarnessAccountSnapshot, HarnessThinkingOptionId } from "@codexhost/shared-contracts";
+import { projectClaudeAccountUsage } from "./account-usage.js";
 
 import { resolveClaudeCodeExecutable, withNodeRuntimeOnPath } from "./command.js";
 import type { ClaudeModelInspectionSnapshot } from "./model-catalog.js";
@@ -554,17 +555,29 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
       return Promise.reject(new Error("Claude SDK Interaction is not pending"));
     }
     if (response.type === "approval") {
-      if (pending.request.type !== "approval") {
+      if (pending.request.type !== "approval" && pending.request.type !== "planApproval") {
         return Promise.reject(new Error("Claude SDK Interaction response type does not match"));
       }
       let result: PermissionResult;
       if (response.decision === "deny") {
-        result = denied(pending.toolUseId, "User denied the Tool request");
+        result = denied(
+          pending.toolUseId,
+          pending.request.type === "planApproval"
+            ? "User chose to stay in plan mode. Do not begin implementation."
+            : "User denied the Tool request",
+        );
       } else if (response.decision === "allowOnce") {
+        if (pending.request.type === "planApproval" && !pending.request.plan) {
+          return Promise.reject(new Error("Claude SDK plan text is unavailable for approval"));
+        }
         result = allowed(pending.toolUseId, pending.input);
       } else {
         const requestedScope = response.decision === "allowForSession" ? "session" : "always";
-        if (pending.request.suggestedScope !== requestedScope || !pending.suggestions) {
+        if (
+          pending.request.type !== "approval" ||
+          pending.request.suggestedScope !== requestedScope ||
+          !pending.suggestions
+        ) {
           return Promise.reject(new Error("Claude SDK Approval scope is not pending"));
         }
         result = allowed(pending.toolUseId, pending.input, pending.suggestions);
@@ -657,6 +670,12 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     if (toolName === "AskUserQuestion") {
       const questions = parseQuestions(input);
       request = questions ? { type: "question", requestId, questions } : null;
+    } else if (toolName === "ExitPlanMode") {
+      request = {
+        type: "planApproval",
+        requestId,
+        plan: typeof input.plan === "string" && input.plan.trim().length > 0 ? input.plan : null,
+      };
     } else {
       request = parseApprovalRequest(requestId, toolName, options);
     }
@@ -883,7 +902,7 @@ export class ClaudeSdkModelInspector implements ClaudeModelInspector {
     this.#queryFactory = options.queryFactory ?? query;
   }
 
-  async inspect(): Promise<ClaudeModelInspectionSnapshot> {
+  #createQuery(): Query {
     if (this.#closePromise) throw new Error("Claude SDK Model inspector is closing");
     const executable = resolveClaudeCodeExecutable({
       ...(this.#command ? { command: this.#command } : {}),
@@ -907,6 +926,33 @@ export class ClaudeSdkModelInspector implements ClaudeModelInspector {
       },
     });
     this.#query = activeQuery;
+    return activeQuery;
+  }
+
+  async inspectAccount(): Promise<HarnessAccountSnapshot | null> {
+    const timeout = rejectAfter(10_000, "Claude SDK account inspection timed out");
+    try {
+      const activeQuery = this.#createQuery();
+      return await Promise.race([
+        (async () => {
+          await activeQuery.initializationResult();
+          const getUsage = activeQuery.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+          if (typeof getUsage !== "function") return null;
+          const usage = await getUsage.call(activeQuery);
+          if (!usage.rate_limits_available || !usage.rate_limits) return null;
+          const account = await activeQuery.accountInfo();
+          return projectClaudeAccountUsage(usage, account);
+        })(),
+        timeout.promise,
+      ]);
+    } finally {
+      timeout.cancel();
+      await this.close();
+    }
+  }
+
+  async inspect(): Promise<ClaudeModelInspectionSnapshot> {
+    const activeQuery = this.#createQuery();
     try {
       const initialized = await activeQuery.initializationResult();
       const candidate = activeQuery as unknown as Record<string, unknown>;

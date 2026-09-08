@@ -1,4 +1,5 @@
 import type {
+  HarnessAccountSnapshot,
   HarnessCommandCatalog,
   HarnessId,
   HarnessInspection,
@@ -521,16 +522,31 @@ export interface HarnessWebUiAction {
   open(): Promise<HarnessResult<void>>;
 }
 
+/** Fresh native metadata and the complete resumable identity; never sent to Renderer. */
+export interface HarnessSessionImportSource {
+  candidate: HarnessSessionImportCandidate;
+  nativeRef: NativeSessionRef;
+}
+
 /** Optional discovery of existing Native Sessions that codexhost can map and resume. */
 export interface HarnessSessionImportCapability {
   listCandidates(): Promise<HarnessResult<readonly HarnessSessionImportCandidate[]>>;
+  /** Read-only revalidation. Omission keeps older discovery-only plugins valid, not importable. */
+  resolveCandidate?(nativeSessionId: string): Promise<HarnessResult<HarnessSessionImportSource>>;
 }
 
 export interface HarnessAdapter {
   readonly harnessId: HarnessId;
+  /** Static command metadata. Reading it must not inspect, connect to, or open a Native Session. */
+  readonly commandCatalog?: HarnessCommandCatalog;
   readonly sessionImport?: HarnessSessionImportCapability;
   readonly subagents?: HarnessSubagentCapability;
   readonly webUi?: HarnessWebUiAction;
+  /** Fresh read-only quota for current native authentication. Return null when unavailable;
+   * never return session spend, old authentication caches, or start a model Turn.
+   * Implementations must bound requests and release inspection resources on close.
+   */
+  inspectAccount?(): Promise<HarnessAccountSnapshot | null>;
 
   inspect(input?: InspectHarnessInput): Promise<HarnessInspection>;
   open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>>;

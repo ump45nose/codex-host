@@ -36,6 +36,7 @@ function clientWith(inspection: ThreadInspection): RendererModelClient {
     forkThread: vi.fn(async () => ({ threadId: hostThreadIdSchema.parse("derived-thread") })),
     inspectHarness: vi.fn(),
     inspectThread: vi.fn(async () => inspection),
+    inspectHarnessCommands: vi.fn(),
     inspectThreadCommands: vi.fn(),
     executeThreadCommand: vi.fn(),
     inspectThreadUsage: vi.fn(),
@@ -46,6 +47,14 @@ function clientWith(inspection: ThreadInspection): RendererModelClient {
     checkUpdate: vi.fn(),
     startUpdate: vi.fn(),
     readUpdateStatus: vi.fn(),
+    listCodexAccounts: vi.fn(),
+    refreshCodexAccounts: vi.fn(),
+    createCodexAccount: vi.fn(),
+    deleteCodexAccount: vi.fn(),
+    activateCodexAccount: vi.fn(),
+    startCodexAccountLogin: vi.fn(),
+    cancelCodexAccountLogin: vi.fn(),
+    subscribeCodexAccountLogin: vi.fn(),
   };
 }
 

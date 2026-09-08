@@ -1,3 +1,4 @@
+import { harnessIdSchema } from "@codexhost/shared-contracts";
 import { hostThreadIdSchema, type UpdateCheckResult } from "@codexhost/shared-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -118,8 +119,13 @@ describe("Renderer Settings lifecycle", () => {
   it("binds Session import to its narrow client and closes only after navigation", async () => {
     const events: string[] = [];
     const client = {
-      listDeepSeekModernSessions: vi.fn(),
-      importDeepSeekModernSession: vi.fn(),
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(),
+      importHarnessSession: vi.fn(),
     };
     const openImportedThread = vi.fn(async () => {
       events.push("opened");
@@ -136,8 +142,8 @@ describe("Renderer Settings lifecycle", () => {
       openImportedThread,
     });
     const call = vi.mocked(createDefaultRendererSettingsPages).mock.calls.at(-1);
-    const getClient = call?.[3];
-    const open = call?.[4];
+    const getClient = call?.[4];
+    const open = call?.[5];
     if (!getClient || !open) throw new Error("Session Import settings seams were not installed");
 
     expect(getClient()).toBe(client);

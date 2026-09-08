@@ -1,14 +1,34 @@
 import {
-  deepSeekModernSessionImportParamsSchema,
-  deepSeekModernSessionImportResultSchema,
-  deepSeekModernSessionListParamsSchema,
-  deepSeekModernSessionListResultSchema,
+  harnessAccountListResultSchema,
+  type HarnessAccountListResult,
+  codexAccountUsageParamsSchema,
+  codexAccountUsageResultSchema,
+  codexAccountResetCreditConsumeParamsSchema,
+  codexAccountResetCreditConsumeResultSchema,
+  type CodexAccountUsageParams,
+  type CodexAccountUsageResult,
+  type CodexAccountResetCreditConsumeParams,
+  type CodexAccountResetCreditConsumeResult,
+  codexAccountActivateParamsSchema,
+  codexAccountCreateParamsSchema,
+  codexAccountDeleteParamsSchema,
+  codexAccountDeleteResultSchema,
+  codexAccountListResultSchema,
+  codexAccountLoginCancelParamsSchema,
+  codexAccountLoginCancelResultSchema,
+  codexAccountLoginCompletedSchema,
+  codexAccountLoginStartParamsSchema,
+  codexAccountLoginStartResultSchema,
+  codexAccountMutationResultSchema,
   externalThreadForkParamsSchema,
   externalThreadForkResultSchema,
   harnessCommandCatalogSchema,
+  harnessCommandsInspectParamsSchema,
   harnessConfigurationStateSchema,
   harnessInspectParamsSchema,
   harnessInspectionSchema,
+  harnessPluginListResultSchema,
+  type HarnessPluginListResult,
   harnessWebUiOpenParamsSchema,
   harnessWebUiOpenResultSchema,
   harnessModelSelectionStateSchema,
@@ -31,11 +51,19 @@ import {
   updateStatusResultSchema,
   type ExternalThreadForkParams,
   type ExternalThreadForkResult,
-  type DeepSeekModernSessionImportParams,
-  type DeepSeekModernSessionImportResult,
-  type DeepSeekModernSessionListParams,
-  type DeepSeekModernSessionListResult,
+  type CodexAccountActivateParams,
+  type CodexAccountCreateParams,
+  type CodexAccountDeleteParams,
+  type CodexAccountDeleteResult,
+  type CodexAccountListResult,
+  type CodexAccountLoginCancelParams,
+  type CodexAccountLoginCancelResult,
+  type CodexAccountLoginCompleted,
+  type CodexAccountLoginStartParams,
+  type CodexAccountLoginStartResult,
+  type CodexAccountMutationResult,
   type HarnessCommandCatalog,
+  type HarnessCommandsInspectParams,
   type HarnessConfigurationState,
   type HarnessInspection,
   type HarnessInspectParams,
@@ -58,12 +86,21 @@ import {
   type UpdateStatusResult,
 } from "@codexhost/shared-contracts";
 
+import {
+  createRendererRequestSender,
+  RendererMethodUnavailableError,
+} from "./renderer-request-sender.js";
+import {
+  createRendererSessionImportClient,
+  type RendererSessionImportClient,
+} from "./renderer-session-import-client.js";
+
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
-export const DEEPSEEK_MODERN_SESSION_LIST_METHOD = "codexhost/deepseek/modern-session/list";
-export const DEEPSEEK_MODERN_SESSION_IMPORT_METHOD = "codexhost/deepseek/modern-session/import";
+export const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
 export const HARNESS_WEB_UI_OPEN_METHOD = "codexhost/harness/web-ui/open";
 export const THREAD_FORK_METHOD = "codexhost/thread/fork";
 export const THREAD_INSPECT_METHOD = "codexhost/thread/inspect";
+export const HARNESS_COMMANDS_INSPECT_METHOD = "codexhost/harness/commands/inspect";
 export const THREAD_COMMANDS_INSPECT_METHOD = "codexhost/thread/commands/inspect";
 export const THREAD_COMMAND_EXECUTE_METHOD = "codexhost/thread/command/execute";
 export const THREAD_MODEL_SELECT_METHOD = "codexhost/thread/model/select";
@@ -77,21 +114,19 @@ export const THREAD_TOKEN_USAGE_UPDATED_METHOD = "thread/tokenUsage/updated";
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
 export const UPDATE_STATUS_METHOD = "codexhost/update/status";
-
-export class RendererDeepSeekSessionUnavailableError extends Error {
-  constructor() {
-    super("DeepSeek Modern Session import is unavailable");
-    this.name = "RendererDeepSeekSessionUnavailableError";
-  }
-}
+export const CODEX_ACCOUNT_LIST_METHOD = "codexhost/account/list";
+export const CODEX_ACCOUNT_REFRESH_METHOD = "codexhost/account/refresh";
+export const CODEX_ACCOUNT_CREATE_METHOD = "codexhost/account/create";
+export const CODEX_ACCOUNT_DELETE_METHOD = "codexhost/account/delete";
+export const CODEX_ACCOUNT_ACTIVATE_METHOD = "codexhost/account/activate";
+export const CODEX_ACCOUNT_LOGIN_START_METHOD = "codexhost/account/login/start";
+export const CODEX_ACCOUNT_LOGIN_CANCEL_METHOD = "codexhost/account/login/cancel";
+export const CODEX_ACCOUNT_LOGIN_COMPLETED_METHOD = "codexhost/account/login/completed";
+export const CODEX_ACCOUNT_RESET_CREDIT_CONSUME_METHOD =
+  "codexhost/account/rate-limit-reset/consume";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeDeepSeekSessionError(error: unknown): unknown {
-  const code = isRecord(error) ? error.code : undefined;
-  return code === -32076 || code === -32077 ? new RendererDeepSeekSessionUnavailableError() : error;
 }
 
 function notifiedThreadId(notification: unknown): ThreadUsageInspectionParams["threadId"] | null {
@@ -123,19 +158,15 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
   return nested && typeof nested.addNotificationCallback === "function" ? nested : null;
 }
 
-export interface RendererModelClient {
+export interface RendererModelClient extends Partial<RendererSessionImportClient> {
   currentHostId?(): string | null;
+  listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
-  listDeepSeekModernSessions?(
-    input: DeepSeekModernSessionListParams,
-  ): Promise<DeepSeekModernSessionListResult>;
-  importDeepSeekModernSession?(
-    input: DeepSeekModernSessionImportParams,
-  ): Promise<DeepSeekModernSessionImportResult>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
   inspectHarness(input: HarnessInspectParams): Promise<HarnessInspection>;
   openHarnessWebUi?(input: HarnessWebUiOpenParams): Promise<void>;
   inspectThread(input: ThreadInspectionParams): Promise<ThreadInspection>;
+  inspectHarnessCommands(input: HarnessCommandsInspectParams): Promise<HarnessCommandCatalog>;
   inspectThreadCommands(input: ThreadCommandsInspectParams): Promise<HarnessCommandCatalog>;
   executeThreadCommand(input: ThreadCommandExecuteParams): Promise<ThreadCommandExecuteResult>;
   listThreadOwnership(input: ThreadOwnershipListParams): Promise<ThreadOwnershipListResult>;
@@ -154,6 +185,23 @@ export interface RendererModelClient {
   checkUpdate(): Promise<UpdateCheckResult>;
   startUpdate(): Promise<UpdateStartResult>;
   readUpdateStatus(): Promise<UpdateStatusResult>;
+  inspectCodexAccountUsage?(input: CodexAccountUsageParams): Promise<CodexAccountUsageResult>;
+  consumeCodexAccountResetCredit?(
+    input: CodexAccountResetCreditConsumeParams,
+  ): Promise<CodexAccountResetCreditConsumeResult>;
+  listHarnessAccounts?(): Promise<HarnessAccountListResult>;
+  listCodexAccounts(): Promise<CodexAccountListResult>;
+  refreshCodexAccounts(): Promise<CodexAccountListResult>;
+  createCodexAccount(input: CodexAccountCreateParams): Promise<CodexAccountMutationResult>;
+  deleteCodexAccount(input: CodexAccountDeleteParams): Promise<CodexAccountDeleteResult>;
+  activateCodexAccount(input: CodexAccountActivateParams): Promise<CodexAccountMutationResult>;
+  startCodexAccountLogin(
+    input: CodexAccountLoginStartParams,
+  ): Promise<CodexAccountLoginStartResult>;
+  cancelCodexAccountLogin(
+    input: CodexAccountLoginCancelParams,
+  ): Promise<CodexAccountLoginCancelResult>;
+  subscribeCodexAccountLogin(listener: (result: CodexAccountLoginCompleted) => void): () => void;
 }
 
 export function createThreadUsageSubscriptionRelay(): {
@@ -202,14 +250,25 @@ export function createRendererModelClient(
       Required<Pick<RequestManagerCandidate, "sendRequest">> =>
       typeof candidate.sendRequest === "function",
   );
-  const manager = managers[0];
-  if (managers.length !== 1 || !manager) return null;
-  const pendingDeepSeekImports = new Map<string, Promise<DeepSeekModernSessionImportResult>>();
+  const source = managers[0];
+  if (managers.length !== 1 || !source) return null;
+  const manager = {
+    sendRequest: createRendererRequestSender((method, params) =>
+      source.sendRequest(method, params),
+    ),
+  };
 
   const inspectHarness = async (input: HarnessInspectParams): Promise<HarnessInspection> => {
     const params = harnessInspectParamsSchema.parse(input);
     const result = await manager.sendRequest(HARNESS_INSPECT_METHOD, params);
     return harnessInspectionSchema.parse(result);
+  };
+  const inspectHarnessCommands = async (
+    input: HarnessCommandsInspectParams,
+  ): Promise<HarnessCommandCatalog> => {
+    const params = harnessCommandsInspectParamsSchema.parse(input);
+    const result = await manager.sendRequest(HARNESS_COMMANDS_INSPECT_METHOD, params);
+    return harnessCommandCatalogSchema.parse(result);
   };
   const inspectThreadCommands = async (
     input: ThreadCommandsInspectParams,
@@ -253,47 +312,22 @@ export function createRendererModelClient(
     const result = await manager.sendRequest(THREAD_PERMISSION_MODE_SELECT_METHOD, params);
     return harnessConfigurationStateSchema.parse(result);
   };
-  const importDeepSeekModernSession = async (
-    input: DeepSeekModernSessionImportParams,
-  ): Promise<DeepSeekModernSessionImportResult> => {
-    const params = deepSeekModernSessionImportParamsSchema.parse(input);
-    const pending = pendingDeepSeekImports.get(params.nativeSessionId);
-    if (pending) return pending;
-    const request = (async () => {
-      try {
-        const result = await manager.sendRequest(DEEPSEEK_MODERN_SESSION_IMPORT_METHOD, params);
-        return deepSeekModernSessionImportResultSchema.parse(result);
-      } catch (error) {
-        throw normalizeDeepSeekSessionError(error);
-      }
-    })().finally(() => {
-      if (pendingDeepSeekImports.get(params.nativeSessionId) === request) {
-        pendingDeepSeekImports.delete(params.nativeSessionId);
-      }
-    });
-    pendingDeepSeekImports.set(params.nativeSessionId, request);
-    return request;
-  };
 
   return Object.freeze({
-    async listDeepSeekModernSessions(
-      input: DeepSeekModernSessionListParams,
-    ): Promise<DeepSeekModernSessionListResult> {
-      const params = deepSeekModernSessionListParamsSchema.parse(input);
-      try {
-        const result = await manager.sendRequest(DEEPSEEK_MODERN_SESSION_LIST_METHOD, params);
-        return deepSeekModernSessionListResultSchema.parse(result);
-      } catch (error) {
-        throw normalizeDeepSeekSessionError(error);
-      }
-    },
-    importDeepSeekModernSession,
+    ...createRendererSessionImportClient(async (method, params) =>
+      manager.sendRequest(method, params),
+    ),
     async forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult> {
       const params = externalThreadForkParamsSchema.parse(input);
       const result = await manager.sendRequest(THREAD_FORK_METHOD, params);
       return externalThreadForkResultSchema.parse(result);
     },
     inspectHarness,
+    async listHarnessPlugins(): Promise<HarnessPluginListResult> {
+      return harnessPluginListResultSchema.parse(
+        await manager.sendRequest(HARNESS_PLUGIN_LIST_METHOD, {}),
+      );
+    },
     async openHarnessWebUi(input: HarnessWebUiOpenParams): Promise<void> {
       const params = harnessWebUiOpenParamsSchema.parse(input);
       const result = await manager.sendRequest(HARNESS_WEB_UI_OPEN_METHOD, params);
@@ -301,9 +335,37 @@ export function createRendererModelClient(
     },
     async inspectThread(input: ThreadInspectionParams): Promise<ThreadInspection> {
       const params = threadInspectionParamsSchema.parse(input);
-      const result = await manager.sendRequest(THREAD_INSPECT_METHOD, params);
+      let result: unknown;
+      try {
+        result = await manager.sendRequest(THREAD_INSPECT_METHOD, params);
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+
+        // Stock Codex has no Host inspection API. Verify its native Thread on
+        // this same connection; neither an RPC failure nor a missing Account
+        // establishes ownership. Match the external markers used by the Host.
+        const native = await manager.sendRequest("thread/read", {
+          threadId: params.threadId,
+          includeTurns: false,
+        });
+        const thread = isRecord(native) ? native.thread : null;
+        if (
+          !isRecord(thread) ||
+          thread.id !== params.threadId ||
+          typeof thread.modelProvider !== "string" ||
+          !thread.modelProvider ||
+          thread.modelProvider === "codexhost" ||
+          typeof thread.cliVersion !== "string" ||
+          !thread.cliVersion ||
+          thread.cliVersion === "codexhost"
+        ) {
+          throw new Error("Native Thread response cannot establish Codex ownership");
+        }
+        return { owner: "codex", locked: true };
+      }
       return threadInspectionSchema.parse(result);
     },
+    inspectHarnessCommands,
     inspectThreadCommands,
     executeThreadCommand,
     async listThreadOwnership(
@@ -332,7 +394,7 @@ export function createRendererModelClient(
     },
     inspectThreadUsage,
     subscribeThreadUsage(listener: (update: ThreadUsageInspection) => void): () => void {
-      const notifications = notificationTarget(manager);
+      const notifications = notificationTarget(source);
       if (!notifications?.addNotificationCallback) {
         throw new Error("Renderer Usage notification callback is unavailable");
       }
@@ -382,6 +444,97 @@ export function createRendererModelClient(
         updateEmptyParamsSchema.parse({}),
       );
       return updateStatusResultSchema.parse(result);
+    },
+    async inspectCodexAccountUsage(
+      input: CodexAccountUsageParams,
+    ): Promise<CodexAccountUsageResult> {
+      const result = await manager.sendRequest(
+        "codexhost/account/usage/inspect",
+        codexAccountUsageParamsSchema.parse(input),
+      );
+      return codexAccountUsageResultSchema.parse(result);
+    },
+    async consumeCodexAccountResetCredit(
+      input: CodexAccountResetCreditConsumeParams,
+    ): Promise<CodexAccountResetCreditConsumeResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_RESET_CREDIT_CONSUME_METHOD,
+        codexAccountResetCreditConsumeParamsSchema.parse(input),
+      );
+      return codexAccountResetCreditConsumeResultSchema.parse(result);
+    },
+    async listHarnessAccounts(): Promise<HarnessAccountListResult> {
+      return harnessAccountListResultSchema.parse(
+        await manager.sendRequest("codexhost/harness/accounts/list", {}),
+      );
+    },
+    async listCodexAccounts(): Promise<CodexAccountListResult> {
+      const result = await manager.sendRequest(CODEX_ACCOUNT_LIST_METHOD, {});
+      return codexAccountListResultSchema.parse(result);
+    },
+    async refreshCodexAccounts(): Promise<CodexAccountListResult> {
+      const result = await manager.sendRequest(CODEX_ACCOUNT_REFRESH_METHOD, {});
+      return codexAccountListResultSchema.parse(result);
+    },
+    async createCodexAccount(input: CodexAccountCreateParams): Promise<CodexAccountMutationResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_CREATE_METHOD,
+        codexAccountCreateParamsSchema.parse(input),
+      );
+      return codexAccountMutationResultSchema.parse(result);
+    },
+    async deleteCodexAccount(input: CodexAccountDeleteParams): Promise<CodexAccountDeleteResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_DELETE_METHOD,
+        codexAccountDeleteParamsSchema.parse(input),
+      );
+      return codexAccountDeleteResultSchema.parse(result);
+    },
+    async activateCodexAccount(
+      input: CodexAccountActivateParams,
+    ): Promise<CodexAccountMutationResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_ACTIVATE_METHOD,
+        codexAccountActivateParamsSchema.parse(input),
+      );
+      return codexAccountMutationResultSchema.parse(result);
+    },
+    async startCodexAccountLogin(
+      input: CodexAccountLoginStartParams,
+    ): Promise<CodexAccountLoginStartResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_LOGIN_START_METHOD,
+        codexAccountLoginStartParamsSchema.parse(input),
+      );
+      return codexAccountLoginStartResultSchema.parse(result);
+    },
+    async cancelCodexAccountLogin(
+      input: CodexAccountLoginCancelParams,
+    ): Promise<CodexAccountLoginCancelResult> {
+      const result = await manager.sendRequest(
+        CODEX_ACCOUNT_LOGIN_CANCEL_METHOD,
+        codexAccountLoginCancelParamsSchema.parse(input),
+      );
+      return codexAccountLoginCancelResultSchema.parse(result);
+    },
+    subscribeCodexAccountLogin(listener: (result: CodexAccountLoginCompleted) => void): () => void {
+      const notifications = notificationTarget(source);
+      if (!notifications?.addNotificationCallback) {
+        throw new Error("Renderer Account login notification callback is unavailable");
+      }
+      return notifications.addNotificationCallback(
+        CODEX_ACCOUNT_LOGIN_COMPLETED_METHOD,
+        (notification) => {
+          if (
+            !isRecord(notification) ||
+            notification.method !== CODEX_ACCOUNT_LOGIN_COMPLETED_METHOD
+          ) {
+            return;
+          }
+          const result = codexAccountLoginCompletedSchema.safeParse(notification.params);
+          if (result.success) listener(result.data);
+        },
+      );
     },
   });
 }

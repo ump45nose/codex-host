@@ -117,6 +117,7 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
   <tr>
     <td colspan="2" valign="top">
       <img src="docs/imgs/grok-usage-limits.png" alt="五小时与七天窗口的剩余额度和重置时间">
+      <p>macOS 会在原生 ChatGPT 菜单栏图标内追加剩余额度百分比，Windows 则使用任务栏覆盖图标；优先使用 5 小时窗口，没有时回退到 7 天窗口。</p>
     </td>
   </tr>
   <tr>
@@ -135,19 +136,19 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 流式回复 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 工具状态 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Edit Diff | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| 提问 / 取消 | 原生 | ✅ | — / ✅ | ✅ | ✅ | ✅ | ✅ | — / ✅ |
+| Edit Diff | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 提问 / 取消 | 原生 | ✅ | — / ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Model / Thinking 选择 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 工具审批 | 原生 | ✅ | — | ✅ | ✅ | ✅ | ✅ | — |
+| 工具审批 | 原生 | ✅ | — | ✅ | ✅ | ✅ | ✅ | ✅¹ |
 | 权限模式 | 原生 | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Agent 间任务协作 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Usage | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Fork | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-> **Antigravity 当前状态：**接入仍在完善中，工作目录目前固定为 `~/.gemini/antigravity-cli/scratch`。
+> **Antigravity：**¹ 工具审批需选择 **Desktop approvals**，支持允许一次或拒绝；该模式使用进程级自动执行配合审批 Hook，启动前校验 Hook 已加载，现有权限模式保持不变。提问支持单选和文本，子代理支持原生卡片与只读过程记录。详见[工具审批](docs/antigravity-tool-approval.md)和[子代理说明](docs/antigravity-subagents.md)。
 
 ## 跨 Agent 协作
 
@@ -236,7 +237,7 @@ CodexHost 尽量不走这条路：
       <sub><strong>欢迎一起贡献~ </strong></sub>
     </td>
     <td align="center">
-      <img width="230" alt="7ba6eda891ba4c8d091f2a71a8b8e81d" src="https://github.com/user-attachments/assets/e40b162e-a961-43ac-9728-af59890c4d72" />
+      <img width="230" alt="7ba6eda891ba4c8d091f2a71a8b8e81d" src="https://github.com/user-attachments/assets/6bdddc62-596a-477a-9953-936d4752667c" />
     </td>
   </tr>
 </table>
@@ -251,6 +252,19 @@ cd codex-host
 npm ci
 npm start
 ```
+
+### 运行架构
+
+以 Pi 为例。从左到右是一次请求的调用链：Desktop → 公共层 → Pi 插件 → 原生进程。
+
+<div align="center">
+  <img width="100%" src="docs/imgs/pi-runtime-architecture.png" alt="以 Pi 为例的运行架构：Desktop 到公共层，再到 Pi 插件和原生进程">
+</div>
+
+### 新增 Harness
+
+主要实现插件的 Manifest、工厂、Adapter、Session 及原生通信与转换逻辑。当前 Renderer 仍有静态接线，完整 Desktop 接入还需单独处理。
+新增 Harness 时，可以让编码 Agent 使用仓库内的 [codexhost-add-harness Skill](.agents/skills/codexhost-add-harness/SKILL.md)。它说明了插件结构、公共 Adapter 接口、能力实现与测试要求。
 
 ## 鸣谢
 

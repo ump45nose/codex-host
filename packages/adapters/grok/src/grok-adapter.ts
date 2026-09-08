@@ -103,7 +103,8 @@ import {
   stateForGrokModel,
   type GrokModelState,
 } from "./grok-models.js";
-import { fetchGrokCredits, type GrokCreditsSnapshot } from "./grok-credits.js";
+import { fetchGrokAccount, fetchGrokCredits, type GrokCreditsSnapshot } from "./grok-credits.js";
+import type { HarnessAccountSnapshot } from "@codexhost/shared-contracts";
 import {
   combineUsage,
   sessionUsageFromHistory,
@@ -125,6 +126,10 @@ export interface GrokAdapterDependencies {
   createTransport(options: GrokAcpTransportOptions): GrokAcpTransportLike;
   randomUUID(): string;
   fetchCredits?(input: { environment?: NodeJS.ProcessEnv }): Promise<GrokCreditsSnapshot | null>;
+  fetchAccount?(input: {
+    environment?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+  }): Promise<HarnessAccountSnapshot | null>;
 }
 
 export interface GrokAcpTransportLike {
@@ -1255,6 +1260,7 @@ class GrokHarnessSession implements HarnessSession {
 }
 
 export class GrokAdapter implements HarnessAdapter {
+  readonly commandCatalog = grokCommandCatalog;
   readonly harnessId: HarnessId = grokHarnessId;
   readonly #closeTimeoutMs: number;
   readonly #dependencies: GrokAdapterDependencies;
@@ -1268,6 +1274,7 @@ export class GrokAdapter implements HarnessAdapter {
   #closePromise: Promise<void> | null = null;
   #credits: GrokCreditsSnapshot | null = null;
   #creditsRefresh: Promise<GrokCreditsSnapshot | null> | null = null;
+  readonly #accountAbort = new AbortController();
 
   constructor(options: GrokAdapterOptions = {}, dependencies?: GrokAdapterDependencies) {
     this.#closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
@@ -1288,6 +1295,14 @@ export class GrokAdapter implements HarnessAdapter {
               ? { environment: this.#environment }
               : {},
         ));
+  }
+
+  async inspectAccount(): Promise<HarnessAccountSnapshot | null> {
+    if (this.#closePromise) return null;
+    return (this.#dependencies.fetchAccount ?? fetchGrokAccount)({
+      ...(this.#environment ? { environment: this.#environment } : {}),
+      signal: this.#accountAbort.signal,
+    });
   }
 
   credits(): GrokCreditsSnapshot | null {
@@ -1630,6 +1645,7 @@ export class GrokAdapter implements HarnessAdapter {
 
   close(): Promise<void> {
     if (!this.#closePromise) {
+      this.#accountAbort.abort();
       this.#inspectionCache.clear();
       this.#closePromise = Promise.all([...this.#sessions].map((session) => session.close())).then(
         () => undefined,

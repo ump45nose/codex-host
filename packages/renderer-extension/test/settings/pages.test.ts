@@ -1,5 +1,8 @@
 import {
+  harnessIdSchema,
   hostThreadIdSchema,
+  type HarnessAccountListResult,
+  type HarnessSessionListParams,
   type UpdateCheckResult,
   type UpdateStatus,
 } from "@codexhost/shared-contracts";
@@ -11,13 +14,12 @@ vi.mock("../../src/settings/icons.js", () => ({
 }));
 
 import { RendererSettingsPageScope } from "../../src/settings/core.js";
+import { mountHarnessAccounts } from "../../src/settings/harness-accounts.js";
 import { rendererSettingsMessages } from "../../src/settings/localization.js";
-import {
-  DEEPSEEK_MODERN_SESSION_IMPORT_METHOD,
-  DEEPSEEK_MODERN_SESSION_LIST_METHOD,
-  RendererDeepSeekSessionUnavailableError,
-  createRendererModelClient,
-} from "../../src/renderer-model-client.js";
+import { createRendererModelClient } from "../../src/renderer-model-client.js";
+import { RendererSessionImportUnavailableError } from "../../src/renderer-session-import-client.js";
+const HARNESS_SESSION_LIST_METHOD = "codexhost/harness/session-import/list";
+const HARNESS_SESSION_IMPORT_METHOD = "codexhost/harness/session-import/import";
 import {
   CODEXHOST_RELEASES_LATEST_URL,
   createDefaultRendererSettingsPages,
@@ -41,6 +43,7 @@ class FakeElement {
   textContent = "";
   title = "";
   type = "";
+  value = "";
   tabIndex = 0;
   disabled = false;
   focused = false;
@@ -65,12 +68,20 @@ class FakeElement {
     this.children.push(...children);
   }
 
+  get childElementCount(): number {
+    return this.children.filter((child) => child instanceof FakeElement).length;
+  }
+
   dispatch(name: string, event?: unknown): void {
     this.#listeners.get(name)?.(event);
   }
 
   focus(): void {
     this.focused = true;
+  }
+
+  getRootNode(): FakeDocument {
+    return this.ownerDocument;
   }
 
   scrollBy(options: ScrollToOptions): void {
@@ -197,6 +208,82 @@ function visibleText(root: FakeElement): string {
     .filter(Boolean)
     .join(" ");
 }
+
+describe("Read-only Harness accounts", () => {
+  const result: HarnessAccountListResult = {
+    accounts: [
+      {
+        harnessId: harnessIdSchema.parse("grok"),
+        harnessName: "Grok Build",
+        email: "person@example.com",
+        credits: { usedPercent: 25, periodType: "weekly" },
+      },
+    ],
+  };
+  it("shows only returned accounts with searchable read-only quota and shared display mode", async () => {
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const listHarnessAccounts = vi.fn(async () => result);
+    const mounted = mountHarnessAccounts(
+      {
+        content: content as unknown as HTMLElement,
+        signal: scope.signal,
+        runLatest: (op, handlers) => scope.runLatest(op, handlers),
+      },
+      rendererSettingsMessages("en"),
+      () => ({ listHarnessAccounts }),
+      vi.fn(),
+    );
+    expect(descendants(content).find((node) => node.tagName === "section")?.hidden).toBe(true);
+    await mounted.refresh();
+    expect(visibleText(content)).toContain("Grok Build");
+    expect(visibleText(content)).toContain("person@example.com");
+    expect(descendants(content).filter((node) => node.tagName === "button")).toHaveLength(0);
+    expect(
+      descendants(content)
+        .find((node) => node.attributes.get("role") === "meter")
+        ?.attributes.get("aria-valuenow"),
+    ).toBe("75");
+    mounted.update("grok", "used");
+    expect(
+      descendants(content)
+        .find((node) => node.attributes.get("role") === "meter")
+        ?.attributes.get("aria-valuenow"),
+    ).toBe("25");
+    mounted.update("not-found", "used");
+    expect(descendants(content).filter((node) => node.tagName === "article")).toHaveLength(0);
+    listHarnessAccounts.mockResolvedValueOnce({ accounts: [] });
+    await mounted.refresh();
+    expect(descendants(content).find((node) => node.tagName === "section")?.hidden).toBe(true);
+    expect(visibleText(content)).not.toContain("person@example.com");
+  });
+
+  it("coalesces refreshes and discards late results after page disposal", async () => {
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const pending = deferred<HarnessAccountListResult>();
+    const listHarnessAccounts = vi.fn(() => pending.promise);
+    const mounted = mountHarnessAccounts(
+      {
+        content: content as unknown as HTMLElement,
+        signal: scope.signal,
+        runLatest: (op, handlers) => scope.runLatest(op, handlers),
+      },
+      rendererSettingsMessages("en"),
+      () => ({ listHarnessAccounts }),
+      vi.fn(),
+    );
+    const refresh = mounted.refresh();
+    await mounted.refresh();
+    expect(listHarnessAccounts).toHaveBeenCalledOnce();
+    scope.dispose();
+    pending.resolve(result);
+    await refresh;
+    expect(visibleText(content)).not.toContain("person@example.com");
+  });
+});
 
 describe("Renderer Connections page", () => {
   it("opens managed DSH Web only for the local Host and coalesces repeated clicks", async () => {
@@ -427,6 +514,440 @@ describe("Renderer Connections page", () => {
     expect(hostTabs.scrollLeft).toBeGreaterThan(0);
 
     cleanup?.();
+  });
+});
+
+describe("Renderer Codex Accounts page", () => {
+  it("renders cached Accounts before live metadata refresh completes", async () => {
+    const refresh = Promise.withResolvers<{
+      accounts: Array<{
+        accountId: string;
+        label: string;
+        email: string;
+        codexHome: string;
+        active: boolean;
+        isDefault: boolean;
+      }>;
+    }>();
+    const cachedAccount = {
+      accountId: "default",
+      label: "Default",
+      codexHome: "/tmp/default",
+      active: true,
+      isDefault: true,
+    };
+    const client = {
+      listCodexAccounts: vi.fn(async () => ({ accounts: [cachedAccount] })),
+      refreshCodexAccounts: vi.fn(() => refresh.promise),
+      createCodexAccount: vi.fn(),
+      deleteCodexAccount: vi.fn(),
+      activateCodexAccount: vi.fn(),
+      startCodexAccountLogin: vi.fn(),
+      cancelCodexAccountLogin: vi.fn(),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Default"));
+    expect(client.refreshCodexAccounts).toHaveBeenCalledOnce();
+
+    refresh.resolve({ accounts: [{ ...cachedAccount, email: "cached@example.com" }] });
+    await vi.waitFor(() =>
+      expect(descendants(content).some((element) => element.title === "cached@example.com")).toBe(
+        true,
+      ),
+    );
+    expect(visibleText(content)).toContain("cached");
+    expect(visibleText(content)).toContain("example.com");
+    expect(visibleText(content)).not.toContain("/tmp/default");
+
+    scope.dispose();
+  });
+
+  it("creates an isolated Account and starts sign-in without asking for a name", async () => {
+    const createdAccount = {
+      accountId: "work",
+      label: "Codex Account",
+      codexHome: "/tmp/work",
+      active: false,
+      isDefault: false,
+    };
+    const client = {
+      listCodexAccounts: vi.fn(async () => ({ accounts: [] })),
+      createCodexAccount: vi.fn(async () => ({ account: createdAccount })),
+      deleteCodexAccount: vi.fn(),
+      activateCodexAccount: vi.fn(),
+      startCodexAccountLogin: vi.fn(async ({ accountId }: { accountId: string }) => ({
+        accountId,
+        loginId: "login-1",
+        verificationUrl: "https://example.com/device",
+        userCode: "ABCD-EFGH",
+      })),
+      cancelCodexAccountLogin: vi.fn(async () => ({ cancelled: true })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() => expect(client.listCodexAccounts).toHaveBeenCalledTimes(1));
+
+    expect(
+      descendants(content)
+        .filter(({ tagName }) => tagName === "input")
+        .map(({ type }) => type),
+    ).toEqual(["search"]);
+    const add = descendants(content).find(
+      ({ tagName, children }) => tagName === "button" && children.includes("Add Account"),
+    );
+    add?.dispatch("click");
+
+    await vi.waitFor(() => expect(client.createCodexAccount).toHaveBeenCalledWith({}));
+    await vi.waitFor(() =>
+      expect(client.startCodexAccountLogin).toHaveBeenCalledWith({ accountId: "work" }),
+    );
+    await vi.waitFor(() => expect(visibleText(content)).toContain("ABCD-EFGH"));
+
+    scope.dispose();
+  });
+
+  it("allows deleting only non-default Accounts", async () => {
+    const deleteCodexAccount = vi.fn(async ({ accountId }: { accountId: string }) => ({
+      deletedAccountId: accountId,
+    }));
+    const client = {
+      listCodexAccounts: vi.fn(async () => ({
+        accounts: [
+          {
+            accountId: "default",
+            label: "Default",
+            codexHome: "/tmp/default",
+            active: true,
+            isDefault: true,
+          },
+          {
+            accountId: "work",
+            label: "Work",
+            codexHome: "/tmp/work",
+            active: false,
+            isDefault: false,
+          },
+        ],
+      })),
+      createCodexAccount: vi.fn(),
+      deleteCodexAccount,
+      activateCodexAccount: vi.fn(),
+      startCodexAccountLogin: vi.fn(),
+      cancelCodexAccountLogin: vi.fn(),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+
+    const document = new FakeDocument();
+    document.defaultView.confirm = vi.fn(() => true);
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Work"));
+
+    const deleteButtons = descendants(content).filter(
+      (element) =>
+        element.tagName === "button" && element.getAttribute("aria-label")?.startsWith("Delete:"),
+    );
+    expect(deleteButtons).toHaveLength(1);
+    deleteButtons[0]?.dispatch("click");
+    expect(document.defaultView.confirm).toHaveBeenCalledWith(
+      "Delete this Account and its local data? This cannot be undone.",
+    );
+    await vi.waitFor(() => expect(deleteCodexAccount).toHaveBeenCalledWith({ accountId: "work" }));
+    await vi.waitFor(() => expect(visibleText(content)).not.toContain("Work"));
+    expect(visibleText(content)).toContain("Default");
+    expect(visibleText(content)).not.toContain("/tmp/work");
+
+    scope.dispose();
+  });
+
+  it("renders usage cards for signed-in Accounts and omits unsigned quota and CODEX_HOME", async () => {
+    const inspectCodexAccountUsage = vi.fn(async ({ accountId }: { accountId: string }) => {
+      if (accountId !== "work") throw new Error(`unexpected account ${accountId}`);
+      return {
+        accountId,
+        usage: null,
+        accountCredits: {
+          usedPercent: 27,
+          periodType: "weekly" as const,
+          resetsAt: "2026-09-10T03:32:00.000Z",
+          productUsage: [
+            {
+              product: "GrokBuild",
+              usagePercent: 27,
+              resetsAt: "2026-09-10T03:32:00.000Z",
+            },
+          ],
+        },
+      };
+    });
+    const client = {
+      listCodexAccounts: vi.fn(async () => ({
+        accounts: [
+          {
+            accountId: "work",
+            label: "Work",
+            email: "work@example.com",
+            codexHome: "/tmp/secret-home",
+            active: true,
+            isDefault: true,
+          },
+          {
+            accountId: "pending",
+            label: "Pending",
+            codexHome: "/tmp/pending-home",
+            active: false,
+            isDefault: false,
+          },
+        ],
+      })),
+      inspectCodexAccountUsage,
+      createCodexAccount: vi.fn(),
+      deleteCodexAccount: vi.fn(),
+      activateCodexAccount: vi.fn(),
+      startCodexAccountLogin: vi.fn(),
+      cancelCodexAccountLogin: vi.fn(),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+
+    await vi.waitFor(() =>
+      expect(inspectCodexAccountUsage).toHaveBeenCalledWith({ accountId: "work" }),
+    );
+    expect(inspectCodexAccountUsage).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(visibleText(content)).toContain("周额度"));
+    expect(visibleText(content)).toContain("Build");
+    expect(visibleText(content)).toContain("已用");
+    expect(visibleText(content)).toContain("work");
+    expect(visibleText(content)).toContain("example.com");
+    expect(visibleText(content)).toContain("Pending");
+    expect(visibleText(content)).not.toContain("work@example.com");
+    expect(visibleText(content)).not.toContain("/tmp/secret-home");
+    expect(visibleText(content)).not.toContain("/tmp/pending-home");
+    expect(
+      descendants(content).filter((element) =>
+        element.className.split(" ").includes("settings-account-usage"),
+      ),
+    ).toHaveLength(1);
+
+    scope.dispose();
+  });
+
+  it("hides login for valid Accounts and exposes device-code login for others", async () => {
+    let active = "personal";
+    const personal = { email: undefined as string | undefined };
+    let loginCompleted:
+      | ((result: {
+          accountId: string;
+          loginId: string;
+          success: boolean;
+          error: string | null;
+        }) => void)
+      | undefined;
+    const listCodexAccounts = vi.fn(async () => ({
+      accounts: [
+        {
+          accountId: "personal",
+          label: "Personal",
+          ...(personal.email ? { email: personal.email } : {}),
+          codexHome: "/tmp/personal",
+          active: active === "personal",
+          isDefault: true,
+        },
+        {
+          accountId: "work",
+          label: "Work",
+          email: "work@example.com",
+          codexHome: "/tmp/work",
+          active: active === "work",
+          isDefault: false,
+        },
+      ],
+    }));
+    const loginStart = Promise.withResolvers<{
+      accountId: string;
+      loginId: string;
+      verificationUrl: string;
+      userCode: string;
+    }>();
+    const client = {
+      listCodexAccounts,
+      refreshCodexAccounts: listCodexAccounts,
+      createCodexAccount: vi.fn(),
+      deleteCodexAccount: vi.fn(async ({ accountId }: { accountId: string }) => ({
+        deletedAccountId: accountId,
+      })),
+      activateCodexAccount: vi.fn(async ({ accountId }: { accountId: string }) => {
+        active = accountId;
+        return {
+          account: {
+            accountId,
+            label: "Work",
+            codexHome: "/tmp/work",
+            active: true,
+            isDefault: false,
+          },
+        };
+      }),
+      startCodexAccountLogin: vi.fn(() => loginStart.promise),
+      cancelCodexAccountLogin: vi.fn(async () => ({ cancelled: true })),
+      subscribeCodexAccountLogin: vi.fn((listener: typeof loginCompleted) => {
+        loginCompleted = listener;
+        return () => undefined;
+      }),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "accounts");
+    if (!page) throw new Error("Accounts page is not registered");
+
+    const document = new FakeDocument();
+    const openInBrowser = vi.fn(async () => undefined);
+    (
+      document.defaultView as Window & {
+        electronBridge: { sendMessageFromView: typeof openInBrowser };
+      }
+    ).electronBridge = { sendMessageFromView: openInBrowser };
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const cleanup = page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Personal"));
+    expect(visibleText(content)).toContain(
+      "Existing tasks keep the account they were created with",
+    );
+    expect(visibleText(content)).toContain("Enable device code authorization for Codex");
+    expect(visibleText(content)).not.toContain("token");
+    expect(
+      descendants(content).filter(
+        ({ tagName, textContent }) => tagName === "button" && textContent === "Sign in",
+      ),
+    ).toHaveLength(1);
+
+    const useWork = descendants(content).find(
+      ({ tagName, textContent }) => tagName === "button" && textContent === "Set as default",
+    );
+    useWork?.dispatch("click");
+    await vi.waitFor(() =>
+      expect(client.activateCodexAccount).toHaveBeenCalledWith({ accountId: "work" }),
+    );
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Default"));
+
+    const signIn = descendants(content).find(
+      ({ tagName, textContent }) => tagName === "button" && textContent === "Sign in",
+    );
+    signIn?.dispatch("click");
+    const signInButtons = descendants(content).filter(
+      ({ tagName, textContent }) => tagName === "button" && textContent === "Sign in",
+    );
+    expect(signInButtons.every(({ disabled }) => disabled)).toBe(true);
+    signInButtons.at(-1)?.dispatch("click");
+    expect(client.startCodexAccountLogin).toHaveBeenCalledTimes(1);
+    loginStart.resolve({
+      accountId: "personal",
+      loginId: "login-1",
+      verificationUrl: "https://example.com/device",
+      userCode: "ABCD-EFGH",
+    });
+    await vi.waitFor(() => expect(visibleText(content)).toContain("ABCD-EFGH"));
+    expect(visibleText(content)).toContain("https://example.com/device");
+    const verificationLink = descendants(content).find(
+      ({ tagName, href }) => tagName === "a" && href === "https://example.com/device",
+    );
+    const preventDefault = vi.fn();
+    verificationLink?.dispatch("click", { preventDefault });
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(openInBrowser).toHaveBeenCalledWith({
+      type: "open-in-browser",
+      url: "https://example.com/device",
+      initiator: "open_in_browser_bridge",
+      openTarget: "external-browser",
+      source: "manual",
+    });
+    expect(
+      descendants(content).find(
+        ({ tagName, textContent }) => tagName === "button" && textContent === "Sign in",
+      )?.disabled,
+    ).toBe(true);
+    personal.email = "personal@example.com";
+    const refreshAfterLogin = vi.mocked(document.defaultView.setTimeout).mock.calls.at(-1)?.[0];
+    if (typeof refreshAfterLogin !== "function") {
+      throw new Error("Account login refresh was not scheduled");
+    }
+    refreshAfterLogin();
+    await vi.waitFor(() =>
+      expect(
+        descendants(content).some(
+          ({ tagName, textContent }) => tagName === "button" && textContent === "Sign in",
+        ),
+      ).toBe(false),
+    );
+    expect(visibleText(content)).toContain("Sign-in completed");
+    expect(visibleText(content)).not.toContain("ABCD-EFGH");
+    expect(loginCompleted).toBeTypeOf("function");
+
+    cleanup?.();
+    scope.dispose();
   });
 });
 
@@ -699,6 +1220,261 @@ describe("Renderer Updates page", () => {
 });
 
 describe("Renderer Session Import page", () => {
+  it("configures page size, searches all metadata, rejects stale searches and locks controls during import", async () => {
+    const rows = Array.from({ length: 45 }, (_, index) => ({
+      nativeSessionId: `session-${index}`,
+      title: `Session ${index}`,
+      cwd: "C:\\work",
+      updatedAt: 1_000,
+      running: null,
+    }));
+    const slow = deferred<{ candidates: typeof rows; total: number }>();
+    const imported = deferred<{ threadId: ReturnType<typeof hostThreadIdSchema.parse> }>();
+    const client = {
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [{ harnessId: harnessIdSchema.parse("pi"), name: "Pi" }],
+      })),
+      listHarnessSessions: vi.fn(
+        async ({ query = "", offset = 0, limit = 20 }: HarnessSessionListParams) => {
+          if (query === "slow") return slow.promise;
+          const matched = rows.filter((row) =>
+            row.title.toLowerCase().includes(query.toLowerCase()),
+          );
+          return { candidates: matched.slice(offset, offset + limit), total: matched.length };
+        },
+      ),
+      importHarnessSession: vi.fn(() => imported.promise),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => null,
+      () => client,
+      async () => undefined,
+    ).find(({ id }) => id === "session-import");
+    if (!page) throw new Error("Import page missing");
+    const content = new FakeDocument().createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    const action = (name: string): FakeElement => {
+      const element = descendants(content).find(
+        ({ dataset }) => dataset.sessionImportAction === name,
+      );
+      if (!element) throw new Error(`Missing control ${name}`);
+      return element;
+    };
+    const visibleRows = () =>
+      descendants(content).filter(({ dataset }) => dataset.sessionImportId !== undefined);
+    const search = (query: string): void => {
+      action("search-input").value = query;
+      descendants(content)
+        .find(({ tagName }) => tagName === "form")
+        ?.dispatch("submit", { preventDefault: vi.fn() });
+    };
+    await vi.waitFor(() => expect(visibleRows()).toHaveLength(20));
+    expect(action("previous").disabled).toBe(true);
+    expect(action("page-summary").textContent).toBe("Page 1 of 3 · 45 sessions");
+    action("next").dispatch("click");
+    await vi.waitFor(() => expect(visibleRows()[0]?.dataset.sessionImportId).toBe("session-20"));
+    action("next").dispatch("click");
+    await vi.waitFor(() => expect(visibleRows()).toHaveLength(5));
+    expect(action("next").disabled).toBe(true);
+    action("previous").dispatch("click");
+    await vi.waitFor(() =>
+      expect(action("page-summary").textContent).toBe("Page 2 of 3 · 45 sessions"),
+    );
+    action("page-size").value = "50";
+    action("page-size").dispatch("change");
+    await vi.waitFor(() => expect(visibleRows()).toHaveLength(45));
+    expect(client.listHarnessSessions).toHaveBeenLastCalledWith({
+      harnessId: "pi",
+      query: "",
+      offset: 0,
+      limit: 50,
+    });
+    search("slow");
+    await vi.waitFor(() =>
+      expect(client.listHarnessSessions).toHaveBeenLastCalledWith({
+        harnessId: "pi",
+        query: "slow",
+        offset: 0,
+        limit: 50,
+      }),
+    );
+    search("SESSION 32");
+    await vi.waitFor(() => expect(visibleRows()).toHaveLength(1));
+    expect(visibleRows()[0]?.dataset.sessionImportId).toBe("session-32");
+    slow.resolve({ candidates: rows, total: 45 });
+    await slow.promise;
+    await Promise.resolve();
+    expect(visibleRows()).toHaveLength(1);
+    expect(action("page-summary").textContent).toBe("Page 1 of 1 · 1 sessions");
+    search("absent");
+    await vi.waitFor(() => expect(visibleText(content)).toContain("No sessions match"));
+    expect(action("previous").disabled).toBe(true);
+    expect(action("next").disabled).toBe(true);
+    search("Session 32");
+    await vi.waitFor(() => expect(visibleRows()).toHaveLength(1));
+    action("import").dispatch("click");
+    expect(action("search-input").disabled).toBe(true);
+    expect(action("page-size").disabled).toBe(true);
+    search("absent"); // Synthetic submission must not invalidate a pending import.
+    imported.resolve({ threadId: hostThreadIdSchema.parse("imported") });
+    await vi.waitFor(() => expect(action("search-input").disabled).toBe(false));
+    expect(client.listHarnessSessions).toHaveBeenLastCalledWith({
+      harnessId: "pi",
+      query: "Session 32",
+      offset: 0,
+      limit: 50,
+    });
+    scope.dispose();
+  });
+
+  it("returns to a valid page when refresh removes the current last page", async () => {
+    const rows = Array.from({ length: 41 }, (_, index) => ({
+      nativeSessionId: `row-${index}`,
+      title: null,
+      cwd: "C:\\work",
+      updatedAt: 1,
+      running: null,
+    }));
+    const client = {
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [{ harnessId: harnessIdSchema.parse("pi"), name: "Pi" }],
+      })),
+      listHarnessSessions: vi.fn(async ({ offset = 0, limit = 20 }: HarnessSessionListParams) => ({
+        candidates: rows.slice(offset, offset + limit),
+        total: rows.length,
+      })),
+      importHarnessSession: vi.fn(),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => null,
+      () => client,
+    ).find(({ id }) => id === "session-import");
+    if (!page) throw new Error("Import page missing");
+    const content = new FakeDocument().createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    const control = (name: string) =>
+      descendants(content).find(({ dataset }) => dataset.sessionImportAction === name);
+    await vi.waitFor(() => expect(control("page-summary")?.textContent).toContain("Page 1 of 3"));
+    control("next")?.dispatch("click");
+    await vi.waitFor(() => expect(control("page-summary")?.textContent).toContain("Page 2 of 3"));
+    control("next")?.dispatch("click");
+    await vi.waitFor(() => expect(control("page-summary")?.textContent).toContain("Page 3 of 3"));
+    rows.splice(1);
+    control("refresh")?.dispatch("click");
+    await vi.waitFor(() =>
+      expect(control("page-summary")?.textContent).toBe("Page 1 of 1 · 1 sessions"),
+    );
+    expect(client.listHarnessSessions).toHaveBeenLastCalledWith({
+      harnessId: "pi",
+      query: "",
+      offset: 0,
+      limit: 20,
+    });
+    expect(
+      descendants(content).filter(({ dataset }) => dataset.sessionImportId !== undefined),
+    ).toHaveLength(1);
+    scope.dispose();
+  });
+
+  it("discovers Harness options, ignores stale Harness results, and imports Pi with an activity warning", async () => {
+    const oldList = deferred<{ candidates: []; total: number }>();
+    const client = {
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+          { harnessId: harnessIdSchema.parse("pi"), name: "Pi" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(async ({ harnessId }: { harnessId: string }) =>
+        harnessId === "deepseek-harness"
+          ? oldList.promise
+          : {
+              total: 1,
+              candidates: [
+                {
+                  nativeSessionId: "pi-session",
+                  title: "Pi original",
+                  cwd: "C:\\work",
+                  running: null,
+                  updatedAt: 1_000,
+                },
+              ],
+            },
+      ),
+      importHarnessSession: vi.fn(async () => ({
+        threadId: hostThreadIdSchema.parse("pi-imported"),
+      })),
+    };
+    const open = vi.fn(async () => undefined);
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => null,
+      () => client,
+      open,
+    ).find(({ id }) => id === "session-import");
+    if (!page) throw new Error("Session import page missing");
+    const content = new FakeDocument().createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() =>
+      expect(client.listHarnessSessions).toHaveBeenCalledWith({
+        harnessId: "deepseek-harness",
+        query: "",
+        offset: 0,
+        limit: 20,
+      }),
+    );
+    const options = descendants(content).filter(
+      ({ dataset }) => dataset.sessionImportHarnessOption !== undefined,
+    );
+    expect(options.map(({ textContent }) => textContent)).toEqual(["DeepSeek Harness", "Pi"]);
+    options[1]?.dispatch("click");
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Pi original"));
+    oldList.resolve({ candidates: [], total: 0 });
+    await oldList.promise;
+    await Promise.resolve();
+    expect(visibleText(content)).toContain("Pi original");
+    expect(visibleText(content)).toContain("Activity unknown");
+    expect(visibleText(content)).toContain("close the session in its native client");
+    const button = descendants(content).find(
+      ({ dataset }) => dataset.sessionImportAction === "import",
+    );
+    expect(button?.disabled).toBe(false);
+    button?.dispatch("click");
+    await vi.waitFor(() =>
+      expect(client.importHarnessSession).toHaveBeenCalledWith({
+        harnessId: "pi",
+        nativeSessionId: "pi-session",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(open).toHaveBeenCalledWith("pi-imported", expect.any(AbortSignal)),
+    );
+    scope.dispose();
+  });
+
   it("renders loading and empty states, ignores an older list, and recovers through Refresh", async () => {
     const candidate = {
       nativeSessionId: "recovered-session",
@@ -707,19 +1483,25 @@ describe("Renderer Session Import page", () => {
       cwd: "C:\\work",
       running: false,
     };
-    const first = deferred<{ candidates: (typeof candidate)[] }>();
-    const second = deferred<{ candidates: (typeof candidate)[] }>();
+    const first = deferred<{ candidates: (typeof candidate)[]; total: number }>();
+    const second = deferred<{ candidates: (typeof candidate)[]; total: number }>();
     const client = {
-      listDeepSeekModernSessions: vi
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi
         .fn()
         .mockImplementationOnce(() => first.promise)
         .mockImplementationOnce(() => second.promise)
         .mockRejectedValueOnce(new Error("private list detail"))
-        .mockResolvedValueOnce({ candidates: [candidate] }),
-      importDeepSeekModernSession: vi.fn(),
+        .mockResolvedValueOnce({ candidates: [candidate], total: 1 }),
+      importHarnessSession: vi.fn(),
     };
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("en"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -742,19 +1524,21 @@ describe("Renderer Session Import page", () => {
     expect(visibleNotesText(refresh)).toContain("Loading local sessions");
     expect(visibleText(content)).toContain("Loading local sessions");
 
+    await vi.waitFor(() => expect(client.listHarnessSessions).toHaveBeenCalledOnce());
     // A synthetic second activation proves runLatest still rejects stale results even if
     // browser-level disabled handling is bypassed.
     refresh.dispatch("click");
-    second.resolve({ candidates: [] });
-    await vi.waitFor(() => expect(visibleText(content)).toContain("No local DeepSeek Harness"));
+    second.resolve({ candidates: [], total: 0 });
+    await vi.waitFor(() => expect(visibleText(content)).toContain("No local sessions"));
     expect(refresh.disabled).toBe(false);
 
     first.resolve({
+      total: 1,
       candidates: [{ ...candidate, nativeSessionId: "stale-session", title: "Ignored stale" }],
     });
     await first.promise;
     await Promise.resolve();
-    expect(visibleText(content)).toContain("No local DeepSeek Harness");
+    expect(visibleText(content)).toContain("No local sessions");
     expect(visibleText(content)).not.toContain("Ignored stale");
 
     refresh.dispatch("click");
@@ -763,13 +1547,19 @@ describe("Renderer Session Import page", () => {
 
     refresh.dispatch("click");
     await vi.waitFor(() => expect(visibleText(content)).toContain("Recovered session"));
-    expect(client.listDeepSeekModernSessions).toHaveBeenCalledTimes(4);
+    expect(client.listHarnessSessions).toHaveBeenCalledTimes(4);
     scope.dispose();
   });
 
   it("lists local DSH Modern sessions and imports only an idle row", async () => {
     const client = {
-      listDeepSeekModernSessions: vi.fn(async () => ({
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(async () => ({
+        total: 2,
         candidates: [
           {
             nativeSessionId: "idle-session-identifier-that-is-long",
@@ -787,13 +1577,14 @@ describe("Renderer Session Import page", () => {
           },
         ],
       })),
-      importDeepSeekModernSession: vi.fn(async () => ({
+      importHarnessSession: vi.fn(async () => ({
         threadId: hostThreadIdSchema.parse("imported-thread"),
       })),
     };
     const openImportedThread = vi.fn(async () => undefined);
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("zh-CN"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -809,7 +1600,14 @@ describe("Renderer Session Import page", () => {
       runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
     });
 
-    await vi.waitFor(() => expect(client.listDeepSeekModernSessions).toHaveBeenCalledWith({}));
+    await vi.waitFor(() =>
+      expect(client.listHarnessSessions).toHaveBeenCalledWith({
+        harnessId: "deepseek-harness",
+        query: "",
+        offset: 0,
+        limit: 20,
+      }),
+    );
     await vi.waitFor(() => expect(visibleText(content)).toContain("既有会话"));
     expect(visibleText(content)).toContain("未命名会话");
     expect(visibleText(content)).toContain("运行中");
@@ -823,7 +1621,7 @@ describe("Renderer Session Import page", () => {
       "会话导入",
     );
     expect(visibleText(content)).toContain(
-      "当前仅支持导入 DeepSeek Harness Modern 会话；其他 Harness 的会话导入能力敬请期待。",
+      "可选 Harness 来自本地 Host。运行状态未知时，请先在原生客户端关闭该会话再导入，避免同时写入。",
     );
     const harnessSelector = descendants(content).find(
       ({ dataset }) => dataset.sessionImportHarness === "selector",
@@ -832,15 +1630,7 @@ describe("Renderer Session Import page", () => {
     const harnessOptions = descendants(harnessSelector).filter(
       ({ dataset }) => dataset.sessionImportHarnessOption !== undefined,
     );
-    expect(harnessOptions.map(({ textContent }) => textContent)).toEqual([
-      "Pi",
-      "Claude Code",
-      "DeepSeek Harness",
-      "OpenCode",
-      "Grok",
-      "Oh My Pi",
-      "Antigravity CLI",
-    ]);
+    expect(harnessOptions.map(({ textContent }) => textContent)).toEqual(["DeepSeek Harness"]);
     expect(
       harnessOptions.filter(({ disabled }) => !disabled).map(({ textContent }) => textContent),
     ).toEqual(["DeepSeek Harness"]);
@@ -849,8 +1639,8 @@ describe("Renderer Session Import page", () => {
         ?.textContent,
     ).toBe("DeepSeek Harness");
     for (const option of harnessOptions) option.dispatch("click");
-    expect(client.listDeepSeekModernSessions).toHaveBeenCalledOnce();
-    expect(client.importDeepSeekModernSession).not.toHaveBeenCalled();
+    expect(client.listHarnessSessions).toHaveBeenCalledOnce();
+    expect(client.importHarnessSession).not.toHaveBeenCalled();
     expect(
       descendants(content).find(
         ({ className, textContent }) =>
@@ -863,7 +1653,7 @@ describe("Renderer Session Import page", () => {
         ({ className, textContent }) =>
           className === "settings-visually-hidden" && textContent.startsWith("运行中:"),
       )?.textContent,
-    ).toBe("运行中: 请先在 DSH 中停止该会话，然后刷新。");
+    ).toBe("运行中: 请先在原生客户端关闭该会话，再刷新并导入。");
 
     const actions = descendants(content).filter(
       ({ dataset }) => dataset.sessionImportAction === "import",
@@ -872,14 +1662,15 @@ describe("Renderer Session Import page", () => {
     expect(actions[0]?.disabled).toBe(false);
     expect(actions[1]?.disabled).toBe(true);
     actions[1]?.dispatch("click");
-    expect(client.importDeepSeekModernSession).not.toHaveBeenCalled();
+    expect(client.importHarnessSession).not.toHaveBeenCalled();
     actions[0]?.dispatch("click");
     expect(descendants(content)).toContain(actions[0]);
     expect(actions[0]?.getAttribute("aria-disabled")).toBe("true");
     expect(actions[0]?.getAttribute("aria-busy")).toBe("true");
     actions[0]?.dispatch("click");
-    await vi.waitFor(() => expect(client.importDeepSeekModernSession).toHaveBeenCalledOnce());
-    expect(client.importDeepSeekModernSession).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(client.importHarnessSession).toHaveBeenCalledOnce());
+    expect(client.importHarnessSession).toHaveBeenCalledWith({
+      harnessId: "deepseek-harness",
       nativeSessionId: "idle-session-identifier-that-is-long",
     });
     await vi.waitFor(() =>
@@ -890,7 +1681,13 @@ describe("Renderer Session Import page", () => {
 
   it("shows a localized focused error when import fails before commit", async () => {
     const client = {
-      listDeepSeekModernSessions: vi.fn(async () => ({
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(async () => ({
+        total: 1,
         candidates: [
           {
             nativeSessionId: "idle-session",
@@ -901,13 +1698,12 @@ describe("Renderer Session Import page", () => {
           },
         ],
       })),
-      importDeepSeekModernSession: vi.fn(async () =>
-        Promise.reject(new Error("private import detail")),
-      ),
+      importHarnessSession: vi.fn(async () => Promise.reject(new Error("private import detail"))),
     };
     const openImportedThread = vi.fn();
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("en"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -949,19 +1745,24 @@ describe("Renderer Session Import page", () => {
       running: false,
     };
     const sendRequest = vi.fn((method: string): Promise<unknown> => {
-      if (method === DEEPSEEK_MODERN_SESSION_LIST_METHOD) {
-        return Promise.resolve({ candidates: [candidate] });
+      if (method === HARNESS_SESSION_LIST_METHOD) {
+        return Promise.resolve({ candidates: [candidate], total: 1 });
       }
-      if (method === DEEPSEEK_MODERN_SESSION_IMPORT_METHOD) return imported.promise;
+      if (method === HARNESS_SESSION_IMPORT_METHOD) return imported.promise;
       return Promise.reject(new Error(`Unexpected method: ${method}`));
     });
     const modelClient = createRendererModelClient([{ sendRequest }]);
-    if (!modelClient?.listDeepSeekModernSessions || !modelClient.importDeepSeekModernSession) {
+    if (!modelClient?.listHarnessSessions || !modelClient.importHarnessSession) {
       throw new Error("DSH Modern Session client was not created");
     }
     const client = {
-      listDeepSeekModernSessions: modelClient.listDeepSeekModernSessions,
-      importDeepSeekModernSession: modelClient.importDeepSeekModernSession,
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: modelClient.listHarnessSessions,
+      importHarnessSession: modelClient.importHarnessSession,
     };
     const navigated: string[] = [];
     const openImportedThread = vi.fn(async (threadId: string, signal: AbortSignal) => {
@@ -970,6 +1771,7 @@ describe("Renderer Session Import page", () => {
     });
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("en"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -991,9 +1793,7 @@ describe("Renderer Session Import page", () => {
       ?.dispatch("click");
     await vi.waitFor(() =>
       expect(
-        sendRequest.mock.calls.filter(
-          ([method]) => method === DEEPSEEK_MODERN_SESSION_IMPORT_METHOD,
-        ),
+        sendRequest.mock.calls.filter(([method]) => method === HARNESS_SESSION_IMPORT_METHOD),
       ).toHaveLength(1),
     );
     const staleContent = visibleText(firstContent);
@@ -1012,7 +1812,7 @@ describe("Renderer Session Import page", () => {
       .find(({ dataset }) => dataset.sessionImportAction === "import")
       ?.dispatch("click");
     expect(
-      sendRequest.mock.calls.filter(([method]) => method === DEEPSEEK_MODERN_SESSION_IMPORT_METHOD),
+      sendRequest.mock.calls.filter(([method]) => method === HARNESS_SESSION_IMPORT_METHOD),
     ).toHaveLength(1);
 
     imported.resolve({ threadId: "imported-thread" });
@@ -1025,15 +1825,21 @@ describe("Renderer Session Import page", () => {
     const messages = rendererSettingsMessages("zh-CN");
     const document = new FakeDocument();
     for (const [error, expected] of [
-      [new RendererDeepSeekSessionUnavailableError(), messages.sessionImportUnavailable],
+      [new RendererSessionImportUnavailableError(), messages.sessionImportUnavailable],
       [new Error("private native failure detail"), messages.sessionImportLoadFailed],
     ] as const) {
       const client = {
-        listDeepSeekModernSessions: vi.fn(async () => Promise.reject(error)),
-        importDeepSeekModernSession: vi.fn(),
+        listSessionImportSources: vi.fn(async () => ({
+          harnesses: [
+            { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+          ],
+        })),
+        listHarnessSessions: vi.fn(async () => Promise.reject(error)),
+        importHarnessSession: vi.fn(),
       };
       const page = createDefaultRendererSettingsPages(
         messages,
+        () => null,
         () => null,
         () => null,
         () => client,
@@ -1055,7 +1861,13 @@ describe("Renderer Session Import page", () => {
 
   it("keeps project recovery actions after committed import navigation fails", async () => {
     const client = {
-      listDeepSeekModernSessions: vi.fn(async () => ({
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(async () => ({
+        total: 1,
         candidates: [
           {
             nativeSessionId: "idle-session",
@@ -1066,7 +1878,7 @@ describe("Renderer Session Import page", () => {
           },
         ],
       })),
-      importDeepSeekModernSession: vi.fn(async () => ({
+      importHarnessSession: vi.fn(async () => ({
         threadId: hostThreadIdSchema.parse("imported-thread"),
       })),
     };
@@ -1076,6 +1888,7 @@ describe("Renderer Session Import page", () => {
       .mockResolvedValueOnce(undefined);
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("en"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -1123,7 +1936,7 @@ describe("Renderer Session Import page", () => {
         ?.disabled,
     ).toBe(true);
     await vi.waitFor(() => expect(openImportedThread).toHaveBeenCalledTimes(2));
-    expect(client.importDeepSeekModernSession).toHaveBeenCalledOnce();
+    expect(client.importHarnessSession).toHaveBeenCalledOnce();
     scope.dispose();
   });
 
@@ -1141,7 +1954,7 @@ describe("Renderer Session Import page", () => {
       runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
     });
 
-    expect(visibleText(content)).toContain("codexhost-managed DeepSeek Harness 0.1.2-rc.1");
+    expect(visibleText(content)).toContain("Session import is unavailable for this local Harness");
     expect(
       descendants(content).filter(({ dataset }) => dataset.sessionImportAction === "import"),
     ).toHaveLength(0);
@@ -1149,13 +1962,19 @@ describe("Renderer Session Import page", () => {
   });
 
   it("ignores a Session list that resolves after the settings page is disposed", async () => {
-    const listed = deferred<{ candidates: never[] }>();
+    const listed = deferred<{ candidates: never[]; total: number }>();
     const client = {
-      listDeepSeekModernSessions: vi.fn(() => listed.promise),
-      importDeepSeekModernSession: vi.fn(),
+      listSessionImportSources: vi.fn(async () => ({
+        harnesses: [
+          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+        ],
+      })),
+      listHarnessSessions: vi.fn(() => listed.promise),
+      importHarnessSession: vi.fn(),
     };
     const page = createDefaultRendererSettingsPages(
       rendererSettingsMessages("en"),
+      () => null,
       () => null,
       () => null,
       () => client,
@@ -1172,7 +1991,7 @@ describe("Renderer Session Import page", () => {
     const before = visibleText(content);
 
     scope.dispose();
-    listed.resolve({ candidates: [] });
+    listed.resolve({ candidates: [], total: 0 });
     await Promise.resolve();
     await Promise.resolve();
 

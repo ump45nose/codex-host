@@ -30,6 +30,7 @@ export {
   HARNESS_INSPECT_METHOD,
   THREAD_FORK_METHOD,
   THREAD_INSPECT_METHOD,
+  HARNESS_COMMANDS_INSPECT_METHOD,
   THREAD_COMMANDS_INSPECT_METHOD,
   THREAD_COMMAND_EXECUTE_METHOD,
   THREAD_MODEL_SELECT_METHOD,
@@ -94,6 +95,7 @@ export {
   isOwnershipSubmissionBlocked,
   permissionModeSelectionLocked,
   restoredThreadOwnership,
+  shouldRefreshCodexAccountsForAdapterState,
   shouldTransferComposerState,
 } from "./renderer-binding-probe.js";
 export type {
@@ -213,6 +215,7 @@ export type {
   RendererConnectionDiagnostics,
   RendererConnectionHostSnapshot,
   RendererConnectionSnapshot,
+  RendererCodexAccountClient,
   RendererUpdateClient,
 } from "./settings/pages.js";
 export {

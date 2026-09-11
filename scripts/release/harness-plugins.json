@@ -4,6 +4,7 @@
     "packages/adapters/claude-code",
     "packages/adapters/deepseek-harness",
     "packages/adapters/opencode",
+    "packages/adapters/zcode",
     "packages/adapters/grok",
     "packages/adapters/omp",
     "packages/adapters/antigravity",

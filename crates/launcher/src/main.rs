@@ -66,15 +66,6 @@ const DATA_DIRECTORY_ENV: &str = "CODEXHOST_DATA_DIR";
 const REMOTE_SSH_MANAGED_ENV: &str = "CODEXHOST_REMOTE_SSH_MANAGED";
 const PI_COMMAND_ENV: &str = "CODEXHOST_PI_COMMAND";
 const DEFAULT_AGENT_ENV: &str = "CODEXHOST_DEFAULT_AGENT";
-const ZCODE_ENABLED_ENV: &str = "CODEXHOST_ZCODE_ENABLED";
-const ZCODE_FORWARD_ENV: [&str; 6] = [
-    ZCODE_ENABLED_ENV,
-    "CODEXHOST_ZCODE_BASE_URL",
-    "CODEXHOST_ZCODE_API_KEY",
-    "CODEXHOST_ZCODE_MODELS",
-    "CODEXHOST_ZCODE_DEFAULT_MODEL",
-    "ZCODE_PROXY_API_KEY",
-];
 const LAUNCHER_PID_ENV: &str = "CODEXHOST_LAUNCHER_PID";
 const LAUNCHER_EXECUTABLE_ENV: &str = "CODEXHOST_LAUNCHER_EXECUTABLE";
 const RUNTIME_DESCRIPTOR_PATH_ENV: &str = "CODEXHOST_RUNTIME_DESCRIPTOR_PATH";
@@ -914,30 +905,7 @@ fn desktop_environment(
         environment.push((OsString::from(STARTUP_TRACE_ENV), OsString::from("1")));
     }
     environment.extend(npm_update_runtime_environment(env::vars_os()));
-    environment.extend(zcode_provider_environment(env::vars_os()));
     environment
-}
-
-/// Enables local auto-discovery by default and forwards explicit ZCode Provider overrides.
-fn zcode_provider_environment(
-    variables: impl IntoIterator<Item = (OsString, OsString)>,
-) -> Vec<(OsString, OsString)> {
-    let variables = variables.into_iter().collect::<Vec<_>>();
-    ZCODE_FORWARD_ENV
-        .iter()
-        .filter_map(|name| {
-            variables
-                .iter()
-                .find(|(candidate, _)| candidate == name)
-                .map(|(_, value)| (OsString::from(*name), value.clone()))
-        })
-        .chain(
-            variables
-                .iter()
-                .all(|(candidate, _)| candidate != ZCODE_ENABLED_ENV)
-                .then(|| (OsString::from(ZCODE_ENABLED_ENV), OsString::from("auto"))),
-        )
-        .collect()
 }
 
 /// Forward absolute npm update paths. AppX and LaunchServices do not inherit
@@ -1313,12 +1281,11 @@ mod tests {
         CONTROL_NONCE_ENV, CONTROL_PORT_ENV, DEFAULT_AGENT_ENV, HOST_NODE_PATH_ENV,
         LAUNCHER_EXECUTABLE_ENV, LAUNCHER_PID_ENV, NPM_CLI_PATH_ENV, NPM_LAUNCHER_PATH_ENV,
         NPM_NODE_PATH_ENV, NPM_PACKAGE_ROOT_ENV, RUNTIME_DESCRIPTOR_PATH_ENV,
-        ResolvedLaunchOptions, RuntimeControl, STARTUP_TRACE_ENV, ZCODE_ENABLED_ENV,
-        absolute_directory, allocate_runtime_control, desktop_controller_command,
-        desktop_environment, emit_ready_line, managed_desktop_data_directory,
-        npm_update_runtime_environment, parse_inspect_options, parse_launch_options,
-        read_bounded_controller_line, read_bounded_loopback_url, validate_loopback_root_url,
-        zcode_provider_environment,
+        ResolvedLaunchOptions, RuntimeControl, STARTUP_TRACE_ENV, absolute_directory,
+        allocate_runtime_control, desktop_controller_command, desktop_environment, emit_ready_line,
+        managed_desktop_data_directory, npm_update_runtime_environment, parse_inspect_options,
+        parse_launch_options, read_bounded_controller_line, read_bounded_loopback_url,
+        validate_loopback_root_url,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{DESKTOP_TREE_REFRESH_INTERVAL, desktop_tree_refresh_due};
@@ -1604,7 +1571,6 @@ mod tests {
                 .map(|(_, value)| value)
         };
         assert_eq!(value(DEFAULT_AGENT_ENV), Some(&OsString::from("codex")));
-        assert_eq!(value(ZCODE_ENABLED_ENV), Some(&OsString::from("auto")));
         assert_eq!(
             value(LAUNCHER_PID_ENV),
             Some(&OsString::from(std::process::id().to_string()))
@@ -1627,26 +1593,6 @@ mod tests {
             value(CONTROL_NONCE_ENV),
             Some(&OsString::from(&control.nonce))
         );
-    }
-
-    #[test]
-    fn zcode_provider_environment_preserves_explicit_overrides() {
-        let values = zcode_provider_environment([
-            (OsString::from(ZCODE_ENABLED_ENV), OsString::from("0")),
-            (
-                OsString::from("CODEXHOST_ZCODE_BASE_URL"),
-                OsString::from("http://127.0.0.1:8181/v1"),
-            ),
-            (
-                OsString::from("UNRELATED_SECRET"),
-                OsString::from("never-forward"),
-            ),
-        ]);
-        assert!(values.contains(&(OsString::from(ZCODE_ENABLED_ENV), OsString::from("0"))));
-        assert!(values.iter().any(|(name, value)| {
-            name == "CODEXHOST_ZCODE_BASE_URL" && value == "http://127.0.0.1:8181/v1"
-        }));
-        assert!(values.iter().all(|(name, _)| name != "UNRELATED_SECRET"));
     }
 
     #[test]

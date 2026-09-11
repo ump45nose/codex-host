@@ -295,18 +295,6 @@ export type {
   UpdateStatus,
   UpdateStatusResult,
 } from "./updates.js";
-export {
-  DEFAULT_ZCODE_PROVIDER_BASE_URL,
-  DEFAULT_ZCODE_PROVIDER_MODELS,
-  ZCODE_PROVIDER_API_KEY_ENV,
-  ZCODE_PROVIDER_BASE_URL_ENV,
-  ZCODE_PROVIDER_DEFAULT_MODEL_ENV,
-  ZCODE_PROVIDER_ENABLED_ENV,
-  ZCODE_PROVIDER_MODELS_ENV,
-  ZCODE_RUNTIME_API_KEY_ENV,
-  resolveZcodeProviderConfiguration,
-} from "./zcode-provider.js";
-export type { ZcodeProviderConfiguration } from "./zcode-provider.js";
 export { WORKSPACE_CONTRACT_VERSION } from "./version.js";
 
 export const workspaceContractVersionSchema = z.literal(WORKSPACE_CONTRACT_VERSION);

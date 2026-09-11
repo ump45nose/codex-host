@@ -5,6 +5,7 @@ import antigravityAgentIconUrl from "../src/assets/antigravity-agent.svg";
 import kiroAgentIconUrl from "../src/assets/kiro-agent.svg";
 import codeBuddyAgentIconUrl from "../src/assets/codebuddy-agent.svg";
 import cursorAgentIconUrl from "../src/assets/cursor-agent.svg";
+import zcodeAgentIconUrl from "../src/assets/zcode-agent.svg";
 
 describe("Renderer Agent icons", () => {
   it("renders OpenCode with the bundled official square mark", () => {
@@ -80,6 +81,7 @@ describe("Renderer Agent icons", () => {
     ["kiro-cli", kiroAgentIconUrl],
     ["codebuddy", codeBuddyAgentIconUrl],
     ["cursor-cli", cursorAgentIconUrl],
+    ["zcode", zcodeAgentIconUrl],
   ] as const)("renders %s with the bundled SVG asset", (agent, assetUrl) => {
     const image = {
       src: "",

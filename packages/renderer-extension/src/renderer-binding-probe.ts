@@ -96,6 +96,7 @@ const externalHarnessIds = {
   "claude-code": harnessIdSchema.parse("claude-code"),
   "deepseek-harness": harnessIdSchema.parse("deepseek-harness"),
   opencode: harnessIdSchema.parse("opencode"),
+  zcode: harnessIdSchema.parse("zcode"),
   grok: harnessIdSchema.parse("grok"),
   omp: harnessIdSchema.parse("omp"),
   antigravity: harnessIdSchema.parse("antigravity"),
@@ -109,6 +110,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "claude-code",
   "deepseek-harness",
   "opencode",
+  "zcode",
   "grok",
   "omp",
   "antigravity",
@@ -117,7 +119,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "cursor-cli",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
-type HarnessAvailabilityErrors = Record<ExternalRendererAgent, CodexhostError | undefined>;
+type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
 type HarnessWebUiAvailability = Record<ExternalRendererAgent, boolean>;
 
 function isRetryableHarnessAvailability(
@@ -466,6 +468,7 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
     };
   }
   if (
+    inspection.harnessId === "zcode" ||
     inspection.harnessId === "kiro-cli" ||
     inspection.harnessId === "codebuddy" ||
     inspection.harnessId === "cursor-cli"
@@ -725,6 +728,7 @@ export function installRendererBindingProbe(
       "claude-code": undefined,
       "deepseek-harness": undefined,
       opencode: undefined,
+      zcode: undefined,
       grok: undefined,
       omp: undefined,
       antigravity: undefined,

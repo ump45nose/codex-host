@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createRendererAgentIcon } from "../src/renderer-agent-icon.js";
+import antigravityAgentIconUrl from "../src/assets/antigravity-agent.svg";
+import kiroAgentIconUrl from "../src/assets/kiro-agent.svg";
+import codeBuddyAgentIconUrl from "../src/assets/codebuddy-agent.svg";
+import cursorAgentIconUrl from "../src/assets/cursor-agent.svg";
 
 describe("Renderer Agent icons", () => {
   it("renders OpenCode with the bundled official square mark", () => {
@@ -71,7 +75,12 @@ describe("Renderer Agent icons", () => {
     expect(image.style.borderRadius).toBe("22.37%");
   });
 
-  it("renders Antigravity with the bundled image asset", () => {
+  it.each([
+    ["antigravity", antigravityAgentIconUrl],
+    ["kiro-cli", kiroAgentIconUrl],
+    ["codebuddy", codeBuddyAgentIconUrl],
+    ["cursor-cli", cursorAgentIconUrl],
+  ] as const)("renders %s with the bundled SVG asset", (agent, assetUrl) => {
     const image = {
       src: "",
       alt: "unset",
@@ -85,8 +94,8 @@ describe("Renderer Agent icons", () => {
       },
     } as unknown as Document;
 
-    expect(createRendererAgentIcon("antigravity", 16, ownerDocument)).toBe(image);
-    expect(image.src).toMatch(/^data:image\/svg\+xml,/);
+    expect(createRendererAgentIcon(agent, 16, ownerDocument)).toBe(image);
+    expect(image.src).toBe(assetUrl);
     expect(image.alt).toBe("");
     expect(image.draggable).toBe(false);
     expect(image.style.width).toBe("16px");

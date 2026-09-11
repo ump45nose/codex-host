@@ -78,6 +78,8 @@ import {
   type HarnessThinkingOptionId,
   type HostInteractionId,
   type HostTurnId,
+  ZCODE_RUNTIME_API_KEY_ENV,
+  resolveZcodeProviderConfiguration,
 } from "@codexhost/shared-contracts";
 import { executeExternalThreadFork } from "./external-thread-fork.js";
 import { isSessionImportRequest, SessionImportRequests } from "./session-import-requests.js";
@@ -147,6 +149,7 @@ import {
 } from "./codex-runtime/codex-runtime-pool.js";
 import { aggregateOfficialAccountThreadListPage } from "./multi-account-thread-list.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
+import { ZCODE_CODEX_ACCOUNT_ID, provisionZcodeCodexAccount } from "./zcode-codex-account.js";
 
 const SUBAGENT_TERMINAL_REFRESH_DELAYS_MS = [0, 50, 100, 150] as const;
 const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
@@ -319,6 +322,13 @@ export function officialEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEn
     "CODEXHOST_NPM_CLI_PATH",
     "CODEXHOST_NPM_LAUNCHER_PATH",
     "CODEXHOST_NPM_PACKAGE_ROOT",
+    "CODEXHOST_ZCODE_ENABLED",
+    "CODEXHOST_ZCODE_BASE_URL",
+    "CODEXHOST_ZCODE_API_KEY",
+    "CODEXHOST_ZCODE_MODELS",
+    "CODEXHOST_ZCODE_DEFAULT_MODEL",
+    "ZCODE_PROXY_API_KEY",
+    "ZCODE_API_KEY",
   ]);
   return Object.fromEntries(
     Object.entries(source).filter(([key]) => !internal.has(key) || allowed.has(key)),
@@ -327,9 +337,17 @@ export function officialEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEn
 
 export function officialAccountEnvironment(
   source: NodeJS.ProcessEnv,
-  account: Pick<CodexAccount, "codexHome">,
+  account: Pick<CodexAccount, "codexHome"> & Partial<Pick<CodexAccount, "accountId">>,
 ): NodeJS.ProcessEnv {
-  return { ...officialEnvironment(source), CODEX_HOME: account.codexHome };
+  const environment: NodeJS.ProcessEnv = {
+    ...officialEnvironment(source),
+    CODEX_HOME: account.codexHome,
+  };
+  if (account.accountId === ZCODE_CODEX_ACCOUNT_ID) {
+    // The isolated ZCode account needs a non-empty key for Codex, while proxy OAuth stays external.
+    environment[ZCODE_RUNTIME_API_KEY_ENV] = resolveZcodeProviderConfiguration(source).apiKey;
+  }
+  return environment;
 }
 
 function rpcEnvelope(request: JsonRpcRequest, value: JsonObject): JsonObject {
@@ -670,6 +688,11 @@ export class AppServerHost {
         for (const [id, adapter] of plugins.adapters) this.#externalAdapters.set(id, adapter);
       }
       await Promise.all([this.#repository.initialize(), this.#codexRuntimePool.initialize()]);
+      await provisionZcodeCodexAccount({
+        environment: this.#options.environment ?? process.env,
+        dataDirectory: this.#accountDataDirectory,
+        accounts: this.#accountRepository,
+      });
     } catch (error) {
       this.#diagnose(`Host initialization failed: ${errorMessage(error)}`);
       await Promise.allSettled(

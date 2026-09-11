@@ -52,6 +52,8 @@
 
 无需切换应用，**Pi、Claude Code、OpenCode、OMP、Grok Build 和 DeepSeek Harness** 都可以在同一个 Codex Desktop 窗口中直接使用。
 
+ZCode Weekend/Coding Plan 可通过本地 ZCode Proxy 接入现有 Codex 或 OpenCode Harness；详见 [ZCode Provider 接入](docs/zcode-provider.zh-CN.md)。
+
 https://github.com/user-attachments/assets/c48192d7-23ff-4f6e-b61a-6345a655bb76
 
 ### 界面

@@ -78,6 +78,11 @@ export type {
 } from "./remote-control-app-server.js";
 export { runRemoteHostCli } from "./remote-host-cli.js";
 export {
+  ZCODE_CODEX_ACCOUNT_ID,
+  provisionZcodeCodexAccount,
+  zcodeCodexConfigurationToml,
+} from "./zcode-codex-account.js";
+export {
   inspectRemoteHostInstallation,
   installRemoteHost,
   uninstallRemoteHost,

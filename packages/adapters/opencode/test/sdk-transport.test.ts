@@ -33,6 +33,30 @@ function clientWith(overrides: Record<string, unknown> = {}): OpencodeClient {
 }
 
 describe("OpenCode SDK transport", () => {
+  it("injects ZCode as a Provider while preserving existing OpenCode configuration", () => {
+    const environment = managedOpenCodeEnvironment({
+      CODEXHOST_ZCODE_ENABLED: "1",
+      CODEXHOST_ZCODE_BASE_URL: "http://127.0.0.1:9090",
+      CODEXHOST_ZCODE_DEFAULT_MODEL: "glm-5.3",
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "other/model", provider: { other: {} } }),
+    });
+    expect(environment.ZCODE_API_KEY).toBe("sk-codexhost-zcode-local");
+    expect(JSON.parse(environment.OPENCODE_CONFIG_CONTENT ?? "{}")).toMatchObject({
+      model: "other/model",
+      provider: {
+        other: {},
+        zcode: {
+          name: "ZCode Weekend Plan",
+          options: {
+            apiKey: "{env:ZCODE_API_KEY}",
+            baseURL: "http://127.0.0.1:9090/v1",
+          },
+          models: { "glm-5.3": { tool_call: true } },
+        },
+      },
+    });
+  });
+
   it("keeps default permissions native and scopes unattended permissions to the supplied Server env", () => {
     const input = {
       PATH: "/synthetic/bin",

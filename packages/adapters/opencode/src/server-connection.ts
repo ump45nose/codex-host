@@ -4,6 +4,10 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 
 import { sanitizeDiagnosticTail } from "@codexhost/harness-adapter";
+import {
+  ZCODE_RUNTIME_API_KEY_ENV,
+  resolveZcodeProviderConfiguration,
+} from "@codexhost/shared-contracts";
 
 import {
   OpenCodeExecutableError,
@@ -47,6 +51,38 @@ const SERVER_USERNAME = "codexhost";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Adds the ZCode OpenAI-compatible Provider without replacing user-managed OpenCode settings. */
+function mergeZcodeProviderConfiguration(
+  configuration: Record<string, unknown>,
+  environment: NodeJS.ProcessEnv,
+): Record<string, unknown> {
+  const zcode = resolveZcodeProviderConfiguration(environment);
+  if (!zcode.enabled) return configuration;
+  const existingProviders = isRecord(configuration.provider) ? configuration.provider : {};
+  const provider = Object.hasOwn(existingProviders, "zcode")
+    ? existingProviders
+    : {
+        ...existingProviders,
+        zcode: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "ZCode Weekend Plan",
+          options: { apiKey: `{env:${ZCODE_RUNTIME_API_KEY_ENV}}`, baseURL: zcode.baseUrl },
+          models: Object.fromEntries(
+            zcode.models.map((model) => [
+              model,
+              {
+                name: model,
+                tool_call: true,
+                limit: { context: 1_000_000, output: 128_000 },
+              },
+            ]),
+          ),
+        },
+      };
+  environment[ZCODE_RUNTIME_API_KEY_ENV] = zcode.apiKey;
+  return { ...configuration, provider };
 }
 
 function errorText(error: unknown): string {
@@ -140,14 +176,32 @@ export function managedOpenCodeEnvironment(
   for (const key of undefinedKeys) {
     Reflect.deleteProperty(merged, key);
   }
+  let config: Record<string, unknown> = {};
+  const existing = merged.OPENCODE_CONFIG_CONTENT;
+  if (existing !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(existing);
+      if (!isRecord(parsed)) throw new Error("OpenCode config content must be an object");
+      config = { ...parsed };
+    } catch (error) {
+      if (resolveZcodeProviderConfiguration(merged).enabled) {
+        throw new OpenCodeTransportError(
+          "unavailable",
+          "ZCode Provider requires valid JSON OPENCODE_CONFIG_CONTENT",
+          { cause: error },
+        );
+      }
+    }
+  }
+  const withZcode = mergeZcodeProviderConfiguration(config, merged);
+  if (withZcode !== config) merged.OPENCODE_CONFIG_CONTENT = JSON.stringify(withZcode);
   if (executionPolicy === "unattended-full-access") {
-    const existing = merged.OPENCODE_CONFIG_CONTENT;
-    let config: Record<string, unknown> = {};
-    if (existing !== undefined) {
+    let unattendedConfig = withZcode;
+    if (merged.OPENCODE_CONFIG_CONTENT !== undefined) {
       try {
-        const parsed: unknown = JSON.parse(existing);
+        const parsed: unknown = JSON.parse(merged.OPENCODE_CONFIG_CONTENT);
         if (!isRecord(parsed)) throw new Error("OpenCode config content must be an object");
-        config = { ...parsed };
+        unattendedConfig = { ...parsed };
       } catch (error) {
         throw new OpenCodeTransportError(
           "unavailable",
@@ -159,7 +213,7 @@ export function managedOpenCodeEnvironment(
     // This environment belongs to one managed Server only. Never use the
     // shared process-wide `always` reply; `allow` is the native config action
     // applied before this dedicated Server accepts any Session.
-    merged.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...config, permission: "allow" });
+    merged.OPENCODE_CONFIG_CONTENT = JSON.stringify({ ...unattendedConfig, permission: "allow" });
   }
   return merged;
 }

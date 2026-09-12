@@ -6,7 +6,6 @@ import codeBuddyAgentIconUrl from "./assets/codebuddy-agent.svg";
 import cursorAgentIconUrl from "./assets/cursor-agent.svg";
 import ompAgentIconUrl from "./assets/omp-agent.svg";
 import openCodeAgentIconUrl from "./assets/opencode-agent.png";
-import zcodeAgentIconUrl from "./assets/zcode-agent.svg";
 import type { RendererAgent } from "./agent-selection-state.js";
 
 export const RENDERER_AGENT_LABELS: Record<RendererAgent, string> = {
@@ -15,7 +14,6 @@ export const RENDERER_AGENT_LABELS: Record<RendererAgent, string> = {
   "claude-code": "Claude Code",
   "deepseek-harness": "DeepSeek Harness",
   opencode: "OpenCode",
-  zcode: "ZCode Weekend Plan",
   grok: "Grok",
   omp: "Oh My Pi",
   antigravity: "Antigravity CLI",
@@ -108,18 +106,6 @@ export function createRendererAgentIcon(
   if (agent === "omp") {
     const image = ownerDocument.createElement("img");
     image.src = ompAgentIconUrl;
-    image.alt = "";
-    image.draggable = false;
-    image.style.width = `${size}px`;
-    image.style.height = `${size}px`;
-    image.style.objectFit = "contain";
-    image.style.borderRadius = "22.37%";
-    image.style.flex = "none";
-    return image;
-  }
-  if (agent === "zcode") {
-    const image = ownerDocument.createElement("img");
-    image.src = zcodeAgentIconUrl;
     image.alt = "";
     image.draggable = false;
     image.style.width = `${size}px`;

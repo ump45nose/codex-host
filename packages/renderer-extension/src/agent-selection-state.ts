@@ -10,7 +10,6 @@ export const KNOWN_RENDERER_AGENTS = [
   "claude-code",
   "deepseek-harness",
   "opencode",
-  "zcode",
   "grok",
   "omp",
   "antigravity",
@@ -37,8 +36,6 @@ export interface DraftComposerState {
   deepSeekHarnessModel?: HarnessModelRef;
   openCodeModel?: HarnessModelRef;
   openCodeThinkingOptionId?: HarnessThinkingOptionId;
-  zcodeModel?: HarnessModelRef;
-  zcodeThinkingOptionId?: HarnessThinkingOptionId;
   grokModel?: HarnessModelRef;
   grokThinkingOptionId?: HarnessThinkingOptionId;
   ompModel?: HarnessModelRef;
@@ -218,8 +215,6 @@ export class DraftAgentController<Composer extends object> {
     else if (agent === "deepseek-harness") delete state.deepSeekHarnessModel;
     if (agent === "opencode" && model) state.openCodeModel = model;
     else if (agent === "opencode") delete state.openCodeModel;
-    if (agent === "zcode" && model) state.zcodeModel = model;
-    else if (agent === "zcode") delete state.zcodeModel;
     if (agent === "grok" && model) state.grokModel = model;
     else if (agent === "grok") delete state.grokModel;
     if (agent === "omp" && model) state.ompModel = model;
@@ -242,9 +237,6 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "opencode" && thinkingOptionId) {
       state.openCodeThinkingOptionId = thinkingOptionId;
     } else if (agent === "opencode") delete state.openCodeThinkingOptionId;
-    if (agent === "zcode" && thinkingOptionId) {
-      state.zcodeThinkingOptionId = thinkingOptionId;
-    } else if (agent === "zcode") delete state.zcodeThinkingOptionId;
     if (agent === "omp" && thinkingOptionId) state.ompThinkingOptionId = thinkingOptionId;
     else if (agent === "omp") delete state.ompThinkingOptionId;
     if (agent === "antigravity" && thinkingOptionId) {
@@ -263,7 +255,6 @@ export class DraftAgentController<Composer extends object> {
         "claude-code",
         "deepseek-harness",
         "opencode",
-        "zcode",
         "grok",
         "omp",
         "antigravity",
@@ -290,7 +281,6 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "claude-code") return state.claudeModel;
     if (agent === "deepseek-harness") return state.deepSeekHarnessModel;
     if (agent === "opencode") return state.openCodeModel;
-    if (agent === "zcode") return state.zcodeModel;
     if (agent === "grok") return state.grokModel;
     if (agent === "omp") return state.ompModel;
     if (agent === "antigravity") return state.antigravityModel;
@@ -309,7 +299,6 @@ export class DraftAgentController<Composer extends object> {
     if (agent === "claude-code") return state.claudeThinkingOptionId;
     if (agent === "grok") return state.grokThinkingOptionId;
     if (agent === "opencode") return state.openCodeThinkingOptionId;
-    if (agent === "zcode") return state.zcodeThinkingOptionId;
     if (agent === "omp") return state.ompThinkingOptionId;
     if (agent === "antigravity") return state.antigravityThinkingOptionId;
     if (agent === "kiro-cli") return state.kiroCliThinkingOptionId;
@@ -347,7 +336,6 @@ export class DraftAgentController<Composer extends object> {
     else if (agent === "claude-code") state.claudeModel = model;
     else if (agent === "deepseek-harness") state.deepSeekHarnessModel = model;
     else if (agent === "opencode") state.openCodeModel = model;
-    else if (agent === "zcode") state.zcodeModel = model;
     else if (agent === "grok") state.grokModel = model;
     else if (agent === "omp") state.ompModel = model;
     else if (agent === "antigravity") state.antigravityModel = model;
@@ -393,10 +381,6 @@ export class DraftAgentController<Composer extends object> {
       state.openCodeThinkingOptionId = thinkingOptionId;
     } else if (agent === "opencode") {
       delete state.openCodeThinkingOptionId;
-    } else if (agent === "zcode" && thinkingOptionId) {
-      state.zcodeThinkingOptionId = thinkingOptionId;
-    } else if (agent === "zcode") {
-      delete state.zcodeThinkingOptionId;
     } else if (agent === "omp" && thinkingOptionId) {
       state.ompThinkingOptionId = thinkingOptionId;
     } else if (agent === "omp") {

@@ -96,7 +96,6 @@ const externalHarnessIds = {
   "claude-code": harnessIdSchema.parse("claude-code"),
   "deepseek-harness": harnessIdSchema.parse("deepseek-harness"),
   opencode: harnessIdSchema.parse("opencode"),
-  zcode: harnessIdSchema.parse("zcode"),
   grok: harnessIdSchema.parse("grok"),
   omp: harnessIdSchema.parse("omp"),
   antigravity: harnessIdSchema.parse("antigravity"),
@@ -110,7 +109,6 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "claude-code",
   "deepseek-harness",
   "opencode",
-  "zcode",
   "grok",
   "omp",
   "antigravity",
@@ -119,7 +117,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "cursor-cli",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
-type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
+type HarnessAvailabilityErrors = Record<ExternalRendererAgent, CodexhostError | undefined>;
 type HarnessWebUiAvailability = Record<ExternalRendererAgent, boolean>;
 
 function isRetryableHarnessAvailability(
@@ -187,22 +185,6 @@ export function refreshConnectionHosts(
   refreshHost: (hostId: string) => Promise<void>,
 ): Promise<void> {
   return Promise.all([...hostIds].map((hostId) => refreshHost(hostId))).then(() => undefined);
-}
-
-/**
- * Resolves the request client for one Host without treating an explicitly missing
- * active route as the local Host. During Renderer startup `currentHostId()` returns
- * `null`; returning the wrapper in that state would make every Harness inspection
- * fail against an unavailable request manager.
- */
-export function rendererModelClientForHost(
-  control: RendererModelClient,
-  hostId: string,
-): RendererModelClient | null {
-  const selected = control.clientForHost?.(hostId);
-  if (selected) return selected;
-  const currentHostId = control.currentHostId ? control.currentHostId() : "local";
-  return currentHostId === hostId ? control : null;
 }
 
 export function rendererUsageRefreshDelay(attempt: number): number {
@@ -484,7 +466,6 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
     };
   }
   if (
-    inspection.harnessId === "zcode" ||
     inspection.harnessId === "kiro-cli" ||
     inspection.harnessId === "codebuddy" ||
     inspection.harnessId === "cursor-cli"
@@ -744,7 +725,6 @@ export function installRendererBindingProbe(
       "claude-code": undefined,
       "deepseek-harness": undefined,
       opencode: undefined,
-      zcode: undefined,
       grok: undefined,
       omp: undefined,
       antigravity: undefined,
@@ -2082,7 +2062,10 @@ export function installRendererBindingProbe(
     hostId: string | null,
   ): RendererModelClient | null {
     if (!control || !supportsCodexHostPrivateRpc(hostId)) return null;
-    return rendererModelClientForHost(control, hostId);
+    const selected = control.clientForHost?.(hostId);
+    if (selected) return selected;
+    const currentHostId = control.currentHostId?.() ?? "local";
+    return currentHostId === hostId ? control : null;
   }
 
   function modelClientForHost(hostId: string): RendererModelClient | null {

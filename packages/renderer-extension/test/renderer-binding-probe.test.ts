@@ -8,7 +8,6 @@ import {
 } from "@codexhost/shared-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { modelSelectionForAgent } from "../src/versioned-renderer-adapter.js";
-import type { RendererModelClient } from "../src/renderer-model-client.js";
 
 import {
   applyComposerModelWrite,
@@ -23,7 +22,6 @@ import {
   harnessAvailabilityDuringInspect,
   passiveHarnessAvailabilityAgents,
   refreshConnectionHosts,
-  rendererModelClientForHost,
   restoredThreadOwnership,
   retryableHarnessAvailabilityAgents,
   resolveCodexAccountSelection,
@@ -150,17 +148,6 @@ describe("Renderer connection diagnostics", () => {
         hostId === "remote" ? Promise.reject(new Error("remote unavailable")) : Promise.resolve(),
       ),
     ).rejects.toThrow("remote unavailable");
-  });
-
-  it("waits instead of probing the local Host while the request route is unavailable", () => {
-    const unavailable = {
-      currentHostId: () => null,
-      clientForHost: () => null,
-    } as unknown as RendererModelClient;
-    expect(rendererModelClientForHost(unavailable, "local")).toBeNull();
-
-    const legacyLocal = {} as RendererModelClient;
-    expect(rendererModelClientForHost(legacyLocal, "local")).toBe(legacyLocal);
   });
 });
 

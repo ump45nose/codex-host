@@ -189,6 +189,22 @@ export function refreshConnectionHosts(
   return Promise.all([...hostIds].map((hostId) => refreshHost(hostId))).then(() => undefined);
 }
 
+/**
+ * Resolves the request client for one Host without treating an explicitly missing
+ * active route as the local Host. During Renderer startup `currentHostId()` returns
+ * `null`; returning the wrapper in that state would make every Harness inspection
+ * fail against an unavailable request manager.
+ */
+export function rendererModelClientForHost(
+  control: RendererModelClient,
+  hostId: string,
+): RendererModelClient | null {
+  const selected = control.clientForHost?.(hostId);
+  if (selected) return selected;
+  const currentHostId = control.currentHostId ? control.currentHostId() : "local";
+  return currentHostId === hostId ? control : null;
+}
+
 export function rendererUsageRefreshDelay(attempt: number): number {
   const index = Math.max(0, Math.min(Math.trunc(attempt), rendererUsageRefreshDelays.length - 1));
   return rendererUsageRefreshDelays[index] ?? rendererUsageRefreshDelays[0];
@@ -2066,10 +2082,7 @@ export function installRendererBindingProbe(
     hostId: string | null,
   ): RendererModelClient | null {
     if (!control || !supportsCodexHostPrivateRpc(hostId)) return null;
-    const selected = control.clientForHost?.(hostId);
-    if (selected) return selected;
-    const currentHostId = control.currentHostId?.() ?? "local";
-    return currentHostId === hostId ? control : null;
+    return rendererModelClientForHost(control, hostId);
   }
 
   function modelClientForHost(hostId: string): RendererModelClient | null {

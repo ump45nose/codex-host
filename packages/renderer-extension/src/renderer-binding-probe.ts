@@ -2575,7 +2575,14 @@ export function installRendererBindingProbe(
     controller.clearPendingSubmission(composer);
     const mounted = mountedByComposer.get(composer);
     if (mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) return;
-    if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
+    if (controller.isSwitching(composer)) {
+      blockEvent(event);
+      return;
+    }
+    // A Host policy can be replaced just after the browser has accepted focus.
+    // Preserve draft editing while the controller rebinds the policy; submit
+    // paths below still fail closed until the final Agent route is available.
+    applyComposerAgent(composer);
   };
   const onSubmit = (event: Event): void => {
     const element = eventElement(event.target);
@@ -2602,7 +2609,7 @@ export function installRendererBindingProbe(
       return;
     }
     if (composer && !applyComposerAgent(composer)) {
-      blockEvent(event);
+      if (isComposerSubmissionKey(event)) blockEvent(event);
       return;
     }
     if (!isComposerSubmissionKey(event) || !composer) return;

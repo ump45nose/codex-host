@@ -24,6 +24,12 @@ The Renderer Extension SHALL keep Agent state isolated by logical Composer, SHAL
 - **WHEN** a user types, pastes, composes with an IME, deletes content, inserts an attachment, or adds a line break before submission
 - **THEN** the Composer remains in the draft phase and the user can still select Codex or Pi
 
+#### Scenario: Active Host policy is being rebound
+
+- **WHEN** a verified Codex Composer has focus while its Host routing policy is temporarily unavailable
+- **THEN** ordinary text, number, deletion, paste, and IME input remain editable
+- **AND** submission remains blocked until the final Agent route is available
+
 #### Scenario: Agent switch invalidates stale prewarm
 
 - **WHEN** a draft Composer selects a different Agent
@@ -665,4 +671,3 @@ The modules that own version-locked Composer Model targeting, request/prewarm ow
 - **WHEN** the production Renderer entry installs codexhost binding
 - **THEN** it SHALL continue using the existing production installation and status interfaces
 - **AND** it SHALL NOT automatically execute or persist the local contract audit
-

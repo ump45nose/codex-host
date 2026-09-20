@@ -256,6 +256,24 @@ describe("Renderer draft prewarm policy", () => {
     ).toEqual(remote);
   });
 
+  it("fails closed when one manager reports conflicting Host identities", () => {
+    const manager = {};
+    expect(
+      selectRendererRequestManager(
+        [
+          { manager, requestClient: {}, hostId: "local", prewarmedThreadManager: {} },
+          {
+            manager,
+            requestClient: {},
+            hostId: "remote-ssh-discovered:mac",
+            prewarmedThreadManager: {},
+          },
+        ],
+        ["remote-ssh-discovered:mac"],
+      ),
+    ).toBeNull();
+  });
+
   it("fails closed when the active Composer exposes conflicting Hosts", () => {
     expect(
       selectRendererRequestManager(
@@ -284,21 +302,236 @@ describe("Renderer draft prewarm policy", () => {
 
   it("recognizes a Fiber hook state that is already the request manager", () => {
     const manager = fiberRequestManagerFixture();
-    expect(requestManagerFromHookState(manager)).toBe(manager);
+    expect(requestManagerFromHookState(manager)).toEqual({ manager, hostId: "local" });
   });
 
   it("unwraps a Desktop 26.908 host/manager/status Fiber hook wrapper", () => {
     const manager = fiberRequestManagerFixture();
-    expect(requestManagerFromHookState({ hostId: "local", manager, status: "ready" })).toBe(
-      manager,
-    );
+    Object.assign(manager, { getHostId: () => "remote-ssh-discovered:mac" });
+    expect(
+      requestManagerFromHookState({
+        hostId: "remote-ssh-discovered:mac",
+        manager,
+        status: "ready",
+      }),
+    ).toEqual({ manager, hostId: "remote-ssh-discovered:mac" });
   });
 
   it("prefers the outer manager when it already matches the request-manager shape", () => {
     const inner = fiberRequestManagerFixture();
     const outer = fiberRequestManagerFixture();
     Object.assign(outer, { manager: inner });
-    expect(requestManagerFromHookState(outer)).toBe(outer);
+    expect(requestManagerFromHookState(outer)).toEqual({ manager: outer, hostId: "local" });
+  });
+
+  it("preserves a wrapper-only Host identity for an unlabeled inner manager", () => {
+    const manager = fiberRequestManagerFixture();
+    Reflect.deleteProperty(manager, "getHostId");
+    expect(
+      requestManagerFromHookState({
+        hostId: "remote-ssh-discovered:mac",
+        manager,
+        status: "ready",
+      }),
+    ).toEqual({ manager, hostId: "remote-ssh-discovered:mac" });
+  });
+
+  it("rejects conflicting wrapper and inner manager Host identities", () => {
+    const manager = fiberRequestManagerFixture();
+    expect(
+      requestManagerFromHookState({
+        hostId: "remote-ssh-discovered:mac",
+        manager,
+        status: "ready",
+      }),
+    ).toBeNull();
+
+    Object.assign(manager.requestClient, { hostId: "remote-ssh-discovered:mac" });
+    expect(requestManagerFromHookState(manager)).toBeNull();
+  });
+
+  it("installs a Remote SSH policy from a wrapper-only Host identity", async () => {
+    const remoteHostId = "remote-ssh-discovered:mac";
+    const manager = fiberRequestManagerFixture();
+    Reflect.deleteProperty(manager, "getHostId");
+    const fiber = {
+      memoizedProps: {
+        executionTargetHostId: remoteHostId,
+        permissionsHostId: remoteHostId,
+      },
+      memoizedState: {
+        memoizedState: { hostId: remoteHostId, manager, status: "ready" },
+        // Desktop may expose the same unlabeled manager again in a neighboring
+        // hook; the wrapper identity must survive either traversal order.
+        next: { memoizedState: manager, next: null },
+      },
+      return: null,
+    };
+    const editor: Record<string, unknown> = {
+      __reactFiber$fixture: fiber,
+      parentElement: null,
+    };
+    const composer = {
+      hidden: false,
+      getAttribute: () => null,
+      parentElement: null,
+      querySelectorAll: () => [editor],
+    };
+    editor.parentElement = composer;
+    const target: Record<string, unknown> = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        const run = new Function("document", "window", `return ${expression}`);
+        return (await run(
+          { documentElement: {}, querySelectorAll: () => [composer] },
+          target,
+        )) as T;
+      },
+    };
+
+    await expect(installRendererDraftPrewarmPolicyDirect(renderer)).resolves.toEqual({
+      state: "ready",
+      reason: "owned-request-bridge",
+    });
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      hostId: string;
+      requestTarget(): object;
+      dispose(): void;
+    };
+    expect(policy.hostId).toBe(remoteHostId);
+    expect(policy.requestTarget()).toBe(manager);
+    policy.dispose();
+  });
+
+  it("ignores a hidden local Composer when the visible Composer belongs to Remote SSH", async () => {
+    const remoteHostId = "remote-ssh-discovered:mac";
+    const localManager = fiberRequestManagerFixture();
+    const remoteManager = fiberRequestManagerFixture();
+    Object.assign(remoteManager, { getHostId: () => remoteHostId });
+    const registry = {
+      addManager: () => undefined,
+      getForHostId: (hostId: string) => (hostId === remoteHostId ? remoteManager : localManager),
+      waitForManagerForHostId: () => undefined,
+    };
+    const localFiber = {
+      memoizedProps: { executionTargetHostId: "local", permissionsHostId: "local" },
+      memoizedState: { memoizedState: localManager, next: null },
+      return: null,
+    };
+    const remoteFiber = {
+      memoizedProps: {
+        executionTargetHostId: remoteHostId,
+        permissionsHostId: remoteHostId,
+      },
+      memoizedState: {
+        memoizedState: localManager,
+        next: { memoizedState: registry, next: null },
+      },
+      return: null,
+    };
+    const localEditor: Record<string, unknown> = {
+      __reactFiber$fixture: localFiber,
+      parentElement: null,
+    };
+    const localComposer = {
+      hidden: true,
+      getAttribute: () => null,
+      parentElement: null,
+      querySelectorAll: () => [localEditor],
+    };
+    localEditor.parentElement = localComposer;
+    const remoteEditor: Record<string, unknown> = {
+      __reactFiber$fixture: remoteFiber,
+      parentElement: null,
+    };
+    const remoteComposer = {
+      hidden: false,
+      getAttribute: () => null,
+      parentElement: null,
+      querySelectorAll: () => [remoteEditor],
+    };
+    remoteEditor.parentElement = remoteComposer;
+    const target: Record<string, unknown> = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        const run = new Function("document", "window", `return ${expression}`);
+        const document = {
+          documentElement: {},
+          querySelectorAll: () => [localComposer, remoteComposer],
+        };
+        return (await run(document, target)) as T;
+      },
+    };
+
+    await expect(installRendererDraftPrewarmPolicyDirect(renderer)).resolves.toEqual({
+      state: "ready",
+      reason: "owned-request-bridge",
+    });
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      hostId: string;
+      requestTarget(): object;
+      dispose(): void;
+    };
+    expect(policy.hostId).toBe(remoteHostId);
+    expect(policy.requestTarget()).toBe(remoteManager);
+    policy.dispose();
+  });
+
+  it("rejects conflicting wrapper identities for the same unlabeled manager", async () => {
+    const remoteHostId = "remote-ssh-discovered:mac";
+    const manager = fiberRequestManagerFixture();
+    Reflect.deleteProperty(manager, "getHostId");
+    const fiber = {
+      memoizedProps: {
+        executionTargetHostId: remoteHostId,
+        permissionsHostId: remoteHostId,
+      },
+      memoizedState: {
+        memoizedState: { hostId: "local", manager, status: "ready" },
+        next: {
+          memoizedState: { hostId: remoteHostId, manager, status: "ready" },
+          next: null,
+        },
+      },
+      return: null,
+    };
+    const editor: Record<string, unknown> = {
+      __reactFiber$fixture: fiber,
+      parentElement: null,
+    };
+    const composer = {
+      hidden: false,
+      getAttribute: () => null,
+      parentElement: null,
+      querySelectorAll: () => [editor],
+    };
+    editor.parentElement = composer;
+    const target: Record<string, unknown> = {};
+    const evaluate = vi.fn(async (expression: string): Promise<unknown> => {
+      if (evaluate.mock.calls.length > 1) {
+        return { state: "ready", reason: "owned-request-bridge" };
+      }
+      const run = new Function("document", "window", `return ${expression}`);
+      return await run({ documentElement: {}, querySelectorAll: () => [composer] }, target);
+    });
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        return (await evaluate(expression)) as T;
+      },
+    };
+
+    await expect(installRendererDraftPrewarmPolicyDirect(renderer)).resolves.toEqual({
+      state: "ready",
+      reason: "owned-request-bridge",
+    });
+
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    await expect(evaluate.mock.results[0]?.value).rejects.toThrow(
+      "Renderer request manager is ambiguous",
+    );
+    expect(target.__codexhostDraftPrewarmPolicyV1).toBeUndefined();
   });
 
   it("returns null for a Host manager registry and an unrelated nested manager", () => {

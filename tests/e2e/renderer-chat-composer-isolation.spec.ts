@@ -8,6 +8,15 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const browserExecutable = process.env.CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH;
 if (browserExecutable) test.use({ launchOptions: { executablePath: browserExecutable } });
 
+test.beforeEach(async ({ page }) => {
+  // Renderer startup reads localStorage, which requires a non-opaque origin in
+  // Chromium. Keep the synthetic Composer fixtures on a stable app-like page.
+  await page.route("http://renderer.test/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
+  );
+  await page.goto("http://renderer.test/");
+});
+
 await build({
   entryPoints: [path.join(repositoryRoot, "packages/shared-contracts/src/index.ts")],
   bundle: true,
@@ -62,6 +71,8 @@ async function dispatchInputIntents(page: Page): Promise<unknown> {
       return { accepted, prevented: event.defaultPrevented };
     };
     return {
+      letter: dispatch(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true })),
+      digit: dispatch(new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true })),
       backspace: dispatch(
         new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }),
       ),
@@ -80,10 +91,40 @@ async function dispatchInputIntents(page: Page): Promise<unknown> {
 }
 
 const unmodifiedInputResults = {
+  letter: { accepted: true, prevented: false },
+  digit: { accepted: true, prevented: false },
   backspace: { accepted: true, prevented: false },
   paste: { accepted: true, prevented: false },
   beforeInput: { accepted: true, prevented: false },
 };
+
+test("a Codex composer keeps draft typing usable while its Host policy rebinds", async ({
+  page,
+}) => {
+  await page.setContent(`
+    <!doctype html>
+    <body>
+      <form data-codex-composer-root>
+        <div data-codex-composer contenteditable="true" role="textbox">draft</div>
+        <button type="submit" aria-label="Send">Send</button>
+      </form>
+    </body>
+  `);
+  await page.addScriptTag({ content: browserBundle });
+  await expect(page.locator("[data-codexhost-agent-control]")).toHaveCount(1);
+
+  expect(await dispatchInputIntents(page)).toEqual(unmodifiedInputResults);
+
+  const enter = await page.locator('[role="textbox"]').evaluate((editor) => {
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    return { accepted: editor.dispatchEvent(event), prevented: event.defaultPrevented };
+  });
+  expect(enter).toEqual({ accepted: false, prevented: true });
+});
 
 test("ordinary Chat composers remain untouched", async ({ page }) => {
   await installChatComposer(page, browserBundle);

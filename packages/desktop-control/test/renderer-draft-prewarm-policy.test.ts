@@ -336,6 +336,21 @@ describe("Renderer draft prewarm policy", () => {
     ).toEqual({ manager, hostId: "remote-ssh-discovered:mac" });
   });
 
+  it("preserves the requested Host identity for an unlabeled registry manager", () => {
+    const manager = fiberRequestManagerFixture();
+    Reflect.deleteProperty(manager, "getHostId");
+    const registry = {
+      addManager: () => undefined,
+      getForHostId: () => manager,
+      waitForManagerForHostId: () => undefined,
+    };
+
+    expect(requestManagerFromHookState(registry, "remote-ssh-discovered:mac")).toEqual({
+      manager,
+      hostId: "remote-ssh-discovered:mac",
+    });
+  });
+
   it("rejects conflicting wrapper and inner manager Host identities", () => {
     const manager = fiberRequestManagerFixture();
     expect(

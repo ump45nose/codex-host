@@ -153,7 +153,7 @@ export function requestManagerFromHookState(
     return null;
   }
   const manager = value.getForHostId.call(value, activeHostId);
-  return matchesRequestManager(manager) ? candidateFromManager(manager) : null;
+  return matchesRequestManager(manager) ? candidateFromManager(manager, activeHostId) : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

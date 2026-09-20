@@ -378,6 +378,19 @@ describe("current Codex Renderer Agent adapter", () => {
       }),
     ],
     [
+      "direct-target host-conflicted",
+      () => ({
+        hostId: "local",
+        requestClient: {
+          hostId: "remote-ssh-discovered:mac",
+          sendRequest: vi.fn(),
+          prewarmThreadStart: vi.fn(),
+          enqueueRequest: vi.fn(),
+        },
+        sendRequest: vi.fn(),
+      }),
+    ],
+    [
       "throwing",
       () => {
         throw new Error("synthetic target failure");

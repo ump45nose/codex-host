@@ -835,7 +835,7 @@ function prewarmTargetHostIdentity(target: PrewarmTarget): {
 } {
   const bridge = target.requestClient ?? target;
   const hostIds = new Set(
-    [target.getHostId?.(), bridge.hostId].filter(
+    [target.hostId, target.getHostId?.(), bridge.hostId].filter(
       (value): value is string => typeof value === "string" && value.length > 0,
     ),
   );

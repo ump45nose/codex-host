@@ -479,6 +479,69 @@ describe("Renderer draft prewarm policy", () => {
     policy.dispose();
   });
 
+  it("installs a local policy for a visible legacy history Composer without a root marker", async () => {
+    const manager = fiberRequestManagerFixture();
+    const remoteManager = fiberRequestManagerFixture();
+    Object.assign(remoteManager, { getHostId: () => "remote-ssh-discovered:mac" });
+    const fiber = {
+      memoizedProps: { executionTargetHostId: "local", permissionsHostId: "local" },
+      memoizedState: { memoizedState: manager, next: null },
+      return: null,
+    };
+    const hiddenRemoteComposer = {
+      hidden: true,
+      getAttribute: () => null,
+      parentElement: null,
+    };
+    const hiddenRemoteEditor = {
+      __reactFiber$fixture: {
+        memoizedProps: {
+          executionTargetHostId: "remote-ssh-discovered:mac",
+          permissionsHostId: "remote-ssh-discovered:mac",
+        },
+        memoizedState: { memoizedState: remoteManager, next: null },
+        return: null,
+      },
+      hidden: false,
+      getAttribute: () => null,
+      parentElement: hiddenRemoteComposer,
+    };
+    const editor: Record<string, unknown> = {
+      __reactFiber$fixture: fiber,
+      hidden: false,
+      getAttribute: () => null,
+      parentElement: null,
+    };
+    const target: Record<string, unknown> = {};
+    const renderer = {
+      async evaluate<T>(expression: string): Promise<T> {
+        const run = new Function("document", "window", `return ${expression}`);
+        const document = {
+          documentElement: {},
+          // Legacy history Composers expose only the editor selector. They do
+          // not carry the root marker introduced by newer Desktop builds.
+          querySelectorAll: (selector: string) =>
+            selector === "[data-codex-composer-root]" ? [] : [hiddenRemoteEditor, editor],
+        };
+        return (await run(document, target)) as T;
+      },
+    };
+
+    await expect(installRendererDraftPrewarmPolicyDirect(renderer)).resolves.toEqual({
+      state: "ready",
+      reason: "owned-request-bridge",
+    });
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      hostId: string;
+      requestTarget(): object;
+      dispose(): void;
+    };
+    expect(policy.hostId).toBe("local");
+    expect(policy.requestTarget()).toBe(manager);
+    policy.dispose();
+  });
+
   it("rejects conflicting wrapper identities for the same unlabeled manager", async () => {
     const remoteHostId = "remote-ssh-discovered:mac";
     const manager = fiberRequestManagerFixture();

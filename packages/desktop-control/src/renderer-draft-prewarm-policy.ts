@@ -181,13 +181,17 @@ const FIND_REQUEST_MANAGER_EXPRESSION = `(() => {
   const composerRoots = [...document.querySelectorAll('[data-codex-composer-root]')].filter(
     isVisible,
   );
-  const editors = composerRoots.flatMap((composer) =>
-    typeof composer.querySelectorAll === 'function'
-      ? [...composer.querySelectorAll(
-          '[data-codex-composer], [contenteditable="true"][role="textbox"]',
-        )].filter(isVisible)
-      : [composer],
-  );
+  const editorSelector = '[data-codex-composer], [contenteditable="true"][role="textbox"]';
+  // Historical local Threads can retain the legacy Composer shape without the
+  // root marker. Prefer verified roots, then fall back only when none exist so
+  // hidden Host-transition trees still cannot contribute conflicting routes.
+  const editors = composerRoots.length > 0
+    ? composerRoots.flatMap((composer) =>
+        typeof composer.querySelectorAll === 'function'
+          ? [...composer.querySelectorAll(editorSelector)].filter(isVisible)
+          : [composer],
+      )
+    : [...document.querySelectorAll(editorSelector)].filter(isVisible);
   if (editors.length === 0) {
     return { candidateCount: 0, editorCount: editors.length, hostId: null, sendRequest: null };
   }

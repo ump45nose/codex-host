@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { installRendererExternalSteering } from "../src/renderer-external-steering.js";
 
-function fixture(owner: "external" | "codex" = "external") {
+function fixture(owner: "external" | "codex" = "external", useRoutedClient = false) {
   const events: string[] = [];
   const requestOptions: Record<string, unknown> = { timeoutMs: 30_000 };
   let queued: Array<{ id: string; pausedReason?: string }> = [];
@@ -13,31 +13,36 @@ function fixture(owner: "external" | "codex" = "external") {
     steeringItems: [],
   };
   const turns = [originalTurn];
-  const rpc = vi.fn(
-    async (method: unknown, params: unknown, options?: unknown): Promise<unknown> => {
-      void options;
-      if (method === "codexhost/thread/ownership/list") {
-        return {
-          threads: [
-            { threadId: "thread", owner, ...(owner === "external" ? { harnessId: "pi" } : {}) },
-          ],
-        };
-      }
-      if (method === "turn/steer") {
-        events.push("cancel old");
-        originalTurn.status = "interrupted";
-        queued = queued.map((message) => ({
-          ...message,
-          pausedReason: message.pausedReason ?? "Interrupted before the steer was accepted.",
-        }));
-        events.push("old completed");
-        return { turnId: "replacement" };
-      }
-      return { method, params };
-    },
-  );
+  const handleRpc = async (
+    method: unknown,
+    params: unknown,
+    options?: unknown,
+  ): Promise<unknown> => {
+    void options;
+    if (method === "codexhost/thread/ownership/list") {
+      return {
+        threads: [
+          { threadId: "thread", owner, ...(owner === "external" ? { harnessId: "pi" } : {}) },
+        ],
+      };
+    }
+    if (method === "turn/steer") {
+      events.push("cancel old");
+      originalTurn.status = "interrupted";
+      queued = queued.map((message) => ({
+        ...message,
+        pausedReason: message.pausedReason ?? "Interrupted before the steer was accepted.",
+      }));
+      events.push("old completed");
+      return { turnId: "replacement" };
+    }
+    return { method, params };
+  };
+  const rpc = vi.fn(handleRpc);
+  const routedRpc = vi.fn(handleRpc);
   const manager = {
     sendRequest: rpc,
+    ...(useRoutedClient ? { requestClient: { sendRequest: routedRpc } } : {}),
     steerTurn: vi
       .fn<(...args: unknown[]) => Promise<{ turnId: string }>>()
       .mockResolvedValue({ turnId: "official" }),
@@ -97,6 +102,7 @@ function fixture(owner: "external" | "codex" = "external") {
   return {
     manager,
     rpc,
+    routedRpc,
     args,
     events,
     turns,
@@ -113,6 +119,24 @@ function fixture(owner: "external" | "codex" = "external") {
 }
 
 describe("external direction changes use normal Desktop start presentation", () => {
+  it("routes ownership and replacement RPCs through the nested Host request client", async () => {
+    const f = fixture("external", true);
+
+    await expect(f.manager.steerTurn(...f.args)).resolves.toEqual({ turnId: "replacement" });
+    expect(f.routedRpc.mock.calls.map(([method]) => method)).toEqual([
+      "codexhost/thread/ownership/list",
+      "turn/steer",
+    ]);
+    expect(f.rpc).not.toHaveBeenCalled();
+    await f.manager.sendRequest("thread/read", { threadId: "native-thread" });
+    expect(f.rpc).toHaveBeenCalledExactlyOnceWith(
+      "thread/read",
+      { threadId: "native-thread" },
+      undefined,
+    );
+    f.dispose();
+  });
+
   it("creates a new input placeholder, replaces through steer RPC, and never creates an old steering Item", async () => {
     const f = fixture();
     // Normal start operations carry their thread identity, as Desktop's start preparation does.

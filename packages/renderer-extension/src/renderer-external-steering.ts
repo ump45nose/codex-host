@@ -7,6 +7,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type RendererMethod = (...args: unknown[]) => unknown;
 interface SteeringManager {
   sendRequest: RendererMethod;
+  requestClient?: { sendRequest?: RendererMethod };
   steerTurn: RendererMethod;
   startTurn: RendererMethod;
   getTurnCoordinator: RendererMethod;
@@ -139,6 +140,20 @@ export function installRendererExternalSteering(target: unknown): (() => void) |
   const manager = target;
   const originalSteer = manager.steerTurn;
   const originalSend = manager.sendRequest;
+  const routedRequestClient =
+    isRecord(manager.requestClient) &&
+    manager.requestClient !== manager &&
+    typeof manager.requestClient.sendRequest === "function"
+      ? manager.requestClient
+      : null;
+  const sendRoutedRequest = (method: string, params: unknown, options?: unknown): unknown => {
+    // The inner request client owns Remote Control routing. The outer manager
+    // remains responsible for native passthrough and Desktop turn presentation.
+    if (routedRequestClient) {
+      return routedRequestClient.sendRequest?.call(routedRequestClient, method, params, options);
+    }
+    return originalSend.call(manager, method, params, options);
+  };
   const routes = new Map<string, { threadId: string; expectedTurnId: string }>();
   const pending = new Map<
     string,
@@ -162,8 +177,7 @@ export function installRendererExternalSteering(target: unknown): (() => void) |
     }
     if (disposed) return Promise.reject(new Error("External steering binding was disposed"));
     return Promise.resolve(
-      originalSend.call(
-        manager,
+      sendRoutedRequest(
         "turn/steer",
         {
           threadId: route.threadId,
@@ -219,7 +233,7 @@ export function installRendererExternalSteering(target: unknown): (() => void) |
       // Official steering must not depend on our additional presentation binding.
     }
     const ownership = threadOwnershipListResultSchema.parse(
-      await originalSend.call(manager, "codexhost/thread/ownership/list", {
+      await sendRoutedRequest("codexhost/thread/ownership/list", {
         threadIds: [threadId],
       }),
     );

@@ -73,6 +73,27 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("uses the routed request client instead of leaking Host RPCs to the native manager", async () => {
+    const nativeSend = vi.fn().mockRejectedValue(new Error("unknown variant"));
+    const routedSend = vi.fn().mockResolvedValue({
+      threads: [{ threadId: "thread-1", owner: "external", harnessId: "pi" }],
+    });
+    const client = createRendererModelClient([
+      { sendRequest: nativeSend, requestClient: { sendRequest: routedSend } },
+    ]);
+    if (!client) throw new Error("Expected a routed model client");
+
+    await expect(
+      client.listThreadOwnership({ threadIds: [hostThreadIdSchema.parse("thread-1")] }),
+    ).resolves.toEqual({
+      threads: [{ threadId: "thread-1", owner: "external", harnessId: "pi" }],
+    });
+    expect(routedSend).toHaveBeenCalledExactlyOnceWith(THREAD_OWNERSHIP_LIST_METHOD, {
+      threadIds: ["thread-1"],
+    });
+    expect(nativeSend).not.toHaveBeenCalled();
+  });
+
   it("validates launch setting requests and responses on the selected request client", async () => {
     const harnessId = harnessIdSchema.parse("workbuddy");
     const result = { path: "D:\\Apps\\WorkBuddy", restartRequired: true };

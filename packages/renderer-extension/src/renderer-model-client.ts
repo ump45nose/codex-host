@@ -257,9 +257,16 @@ export function createRendererModelClient(
   );
   const source = managers[0];
   if (managers.length !== 1 || !source) return null;
+  // The outer Desktop manager sends directly to the stock app-server. When a
+  // routed request client is present, all Host extension RPCs must use it so
+  // Remote Control can bridge codexhost/* methods to the owning Host runtime.
+  const requestSource =
+    source.requestClient && typeof source.requestClient.sendRequest === "function"
+      ? source.requestClient
+      : source;
   const manager = {
     sendRequest: createRendererRequestSender((method, params) =>
-      source.sendRequest(method, params),
+      requestSource.sendRequest?.(method, params),
     ),
   };
 

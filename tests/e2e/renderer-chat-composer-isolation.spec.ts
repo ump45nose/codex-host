@@ -30,7 +30,23 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererBindingProbe } from "./packages/renderer-extension/src/renderer-binding-probe.ts";
-      installRendererBindingProbe({ enabledAgents: ["codex", "pi"], defaultAgent: "pi" });
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "pi"],
+        defaultAgent: "codex",
+      });
+      let policyRebinding = false;
+      let applyCalls = 0;
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        () => {
+          applyCalls += 1;
+          return !policyRebinding;
+        },
+        null,
+      );
+      globalThis.setSyntheticPolicyRebinding = (value) => { policyRebinding = value; };
+      globalThis.readSyntheticApplyCalls = () => applyCalls;
     `,
     resolveDir: repositoryRoot,
     sourcefile: "renderer-chat-composer-isolation-e2e-entry.ts",
@@ -76,12 +92,43 @@ async function dispatchInputIntents(page: Page): Promise<unknown> {
       backspace: dispatch(
         new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }),
       ),
-      paste: dispatch(
-        new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true }),
-      ),
       beforeInput: dispatch(
         new InputEvent("beforeinput", {
-          inputType: "deleteContentBackward",
+          inputType: "insertText",
+          data: "a",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+      paste: dispatch(
+        new ClipboardEvent("paste", {
+          clipboardData: new DataTransfer(),
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+      compositionStart: dispatch(
+        new CompositionEvent("compositionstart", { data: "", bubbles: true, cancelable: true }),
+      ),
+      compositionBeforeInput: dispatch(
+        new InputEvent("beforeinput", {
+          inputType: "insertCompositionText",
+          data: "中",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+      compositionInput: dispatch(
+        new InputEvent("input", {
+          inputType: "insertCompositionText",
+          data: "中",
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+      compositionEnd: dispatch(
+        new CompositionEvent("compositionend", {
+          data: "中",
           bubbles: true,
           cancelable: true,
         }),
@@ -94,8 +141,12 @@ const unmodifiedInputResults = {
   letter: { accepted: true, prevented: false },
   digit: { accepted: true, prevented: false },
   backspace: { accepted: true, prevented: false },
-  paste: { accepted: true, prevented: false },
   beforeInput: { accepted: true, prevented: false },
+  paste: { accepted: true, prevented: false },
+  compositionStart: { accepted: true, prevented: false },
+  compositionBeforeInput: { accepted: true, prevented: false },
+  compositionInput: { accepted: true, prevented: false },
+  compositionEnd: { accepted: true, prevented: false },
 };
 
 test("a Codex composer keeps draft typing usable while its Host policy rebinds", async ({
@@ -105,15 +156,49 @@ test("a Codex composer keeps draft typing usable while its Host policy rebinds",
     <!doctype html>
     <body>
       <form data-codex-composer-root>
+        <div data-above-composer-portal></div>
         <div data-codex-composer contenteditable="true" role="textbox">draft</div>
         <button type="submit" aria-label="Send">Send</button>
       </form>
     </body>
   `);
+  await page.locator("[data-codex-composer-root]").evaluate((composer) => {
+    const draft = { isManuallyChanged: false, modelSettings: null, serviceTier: null };
+    const draftAtom = { get: () => draft };
+    Object.defineProperty(composer, "__reactFiber$rebind", {
+      configurable: true,
+      value: {
+        updateQueue: {
+          memoCache: {
+            data: [
+              [{}, {}, "client-new-thread:rebind", draftAtom, undefined, draftAtom, draftAtom],
+            ],
+          },
+        },
+        return: null,
+      },
+    });
+  });
   await page.addScriptTag({ content: browserBundle });
   await expect(page.locator("[data-codexhost-agent-control]")).toHaveCount(1);
 
+  const callsBeforeRebind = await page.evaluate(() => {
+    const read = Reflect.get(globalThis, "readSyntheticApplyCalls");
+    if (typeof read !== "function") throw new Error("Synthetic apply counter is unavailable");
+    const toggle = Reflect.get(globalThis, "setSyntheticPolicyRebinding");
+    if (typeof toggle !== "function") throw new Error("Synthetic rebind toggle is unavailable");
+    toggle(true);
+    return read();
+  });
   expect(await dispatchInputIntents(page)).toEqual(unmodifiedInputResults);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const read = Reflect.get(globalThis, "readSyntheticApplyCalls");
+        return typeof read === "function" ? read() : -1;
+      }),
+    )
+    .toBeGreaterThan(callsBeforeRebind);
 
   const enter = await page.locator('[role="textbox"]').evaluate((editor) => {
     const event = new KeyboardEvent("keydown", {

@@ -140,17 +140,18 @@ export function installRendererExternalSteering(target: unknown): (() => void) |
   const manager = target;
   const originalSteer = manager.steerTurn;
   const originalSend = manager.sendRequest;
-  const routedRequestClient =
-    isRecord(manager.requestClient) &&
-    manager.requestClient !== manager &&
-    typeof manager.requestClient.sendRequest === "function"
-      ? manager.requestClient
-      : null;
   const sendRoutedRequest = (method: string, params: unknown, options?: unknown): unknown => {
     // The inner request client owns Remote Control routing. The outer manager
     // remains responsible for native passthrough and Desktop turn presentation.
-    if (routedRequestClient) {
-      return routedRequestClient.sendRequest?.call(routedRequestClient, method, params, options);
+    // Resolve it for every request because Desktop replaces this bridge in
+    // place while retaining the outer manager during Host reconnects.
+    const routedRequestClient = manager.requestClient;
+    if (
+      isRecord(routedRequestClient) &&
+      routedRequestClient !== manager &&
+      typeof routedRequestClient.sendRequest === "function"
+    ) {
+      return routedRequestClient.sendRequest.call(routedRequestClient, method, params, options);
     }
     return originalSend.call(manager, method, params, options);
   };

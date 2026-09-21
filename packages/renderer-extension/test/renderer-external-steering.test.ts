@@ -121,12 +121,15 @@ function fixture(owner: "external" | "codex" = "external", useRoutedClient = fal
 describe("external direction changes use normal Desktop start presentation", () => {
   it("routes ownership and replacement RPCs through the nested Host request client", async () => {
     const f = fixture("external", true);
+    const replacementRpc = vi.fn(f.routedRpc.getMockImplementation());
+    Object.assign(f.manager, { requestClient: { sendRequest: replacementRpc } });
 
     await expect(f.manager.steerTurn(...f.args)).resolves.toEqual({ turnId: "replacement" });
-    expect(f.routedRpc.mock.calls.map(([method]) => method)).toEqual([
+    expect(replacementRpc.mock.calls.map(([method]) => method)).toEqual([
       "codexhost/thread/ownership/list",
       "turn/steer",
     ]);
+    expect(f.routedRpc).not.toHaveBeenCalled();
     expect(f.rpc).not.toHaveBeenCalled();
     await f.manager.sendRequest("thread/read", { threadId: "native-thread" });
     expect(f.rpc).toHaveBeenCalledExactlyOnceWith(

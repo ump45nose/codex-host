@@ -699,7 +699,9 @@ describe("current Codex Renderer Agent adapter", () => {
           const reconnected = adapter.modelControl?.clientForHost?.("local");
           expect(reconnected).toBeTruthy();
           expect(reconnected).not.toBe(localClient);
-          const routedRequestClient = requestTarget.requestClient;
+          const routedRequestClient = (
+            requestTarget as typeof requestTarget & { requestClient?: typeof requestTarget }
+          ).requestClient;
           if (!routedRequestClient) throw new Error("Expected a routed request client");
           routedRequestClient.sendRequest = vi
             .fn()

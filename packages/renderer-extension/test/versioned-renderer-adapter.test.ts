@@ -3,6 +3,7 @@ import {
   harnessModelRefSchema,
   harnessPermissionModeIdSchema,
   harnessThinkingOptionIdSchema,
+  hostThreadIdSchema,
 } from "@codexhost/shared-contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -609,7 +610,7 @@ describe("current Codex Renderer Agent adapter", () => {
 
   it.each(["local", "remote-ssh-discovered:mac"])(
     "installs for %s and only sends resource settings to local",
-    (hostId) => {
+    async (hostId) => {
       const requestTarget = {
         hostId,
         sendRequest: vi.fn(),
@@ -698,8 +699,36 @@ describe("current Codex Renderer Agent adapter", () => {
           const reconnected = adapter.modelControl?.clientForHost?.("local");
           expect(reconnected).toBeTruthy();
           expect(reconnected).not.toBe(localClient);
+          const routedRequestClient = requestTarget.requestClient;
+          if (!routedRequestClient) throw new Error("Expected a routed request client");
+          routedRequestClient.sendRequest = vi
+            .fn()
+            .mockRejectedValue(
+              Object.assign(
+                new Error("Invalid request: unknown variant `codexhost/thread/usage/inspect`"),
+                { code: -32600 },
+              ),
+            );
+          const unavailable = adapter.modelControl?.clientForHost?.("local");
+          expect(unavailable).toBeTruthy();
+          expect(unavailable).not.toBe(reconnected);
+          const threadId = hostThreadIdSchema.parse("thread-rebound");
+          await expect(unavailable?.inspectThreadUsage({ threadId })).rejects.toThrow(
+            "unsupported",
+          );
+          routedRequestClient.sendRequest = vi.fn().mockResolvedValue({
+            threadId,
+            usage: null,
+          });
+          const rebound = adapter.modelControl?.clientForHost?.("local");
+          expect(rebound).toBeTruthy();
+          expect(rebound).not.toBe(unavailable);
+          await expect(rebound?.inspectThreadUsage({ threadId })).resolves.toEqual({
+            threadId,
+            usage: null,
+          });
           fakeWindow.__codexhostDraftPrewarmPolicyV1 = { ...policy };
-          expect(adapter.modelControl?.clientForHost?.("local")).not.toBe(reconnected);
+          expect(adapter.modelControl?.clientForHost?.("local")).not.toBe(rebound);
         } else {
           expect(requestTarget.sendRequest).not.toHaveBeenCalled();
         }

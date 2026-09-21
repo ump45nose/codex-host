@@ -1064,7 +1064,8 @@ export function installCurrentRendererAdapter(): {
     {
       client: RendererModelClient;
       policy: RendererDraftPrewarmPolicy | null;
-      requestClient: PrewarmTarget["requestClient"];
+      requestSource: PrewarmTarget;
+      sendRequest: PrewarmTarget["sendRequest"];
     }
   >();
   const turnControlCleanups = new Set<() => void>();
@@ -1074,13 +1075,20 @@ export function installCurrentRendererAdapter(): {
   ): RendererModelClient | null => {
     const target = targets[0];
     if (targets.length !== 1 || !target) return null;
+    const requestSource =
+      target.requestClient && typeof target.requestClient.sendRequest === "function"
+        ? target.requestClient
+        : target;
+    const sendRequest = requestSource.sendRequest;
     const cached = clientsByTarget.get(target);
     // A policy-less auxiliary lookup must not replace the active route's client.
-    // Explicit policy changes and request-client replacement still invalidate it.
+    // Explicit policy, request-source, and in-place bridge replacements still
+    // invalidate it so unsupported-method observations cannot cross reconnects.
     if (
       cached &&
       (policy === null || cached.policy === policy) &&
-      cached.requestClient === target.requestClient
+      cached.requestSource === requestSource &&
+      cached.sendRequest === sendRequest
     )
       return cached.client;
     const client = createRendererModelClient([target]);
@@ -1093,7 +1101,7 @@ export function installCurrentRendererAdapter(): {
         const steeringCleanup = installRendererExternalSteering(target);
         if (steeringCleanup) turnControlCleanups.add(steeringCleanup);
       }
-      clientsByTarget.set(target, { client, policy, requestClient: target.requestClient });
+      clientsByTarget.set(target, { client, policy, requestSource, sendRequest });
     }
     return client;
   };

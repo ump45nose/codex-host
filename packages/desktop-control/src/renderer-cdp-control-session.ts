@@ -165,10 +165,14 @@ async function evaluateSource(renderer: RendererCdpClient, source: string): Prom
   });
   if (!isRecord(response)) throw new Error("Renderer source evaluation returned an invalid result");
   if (isRecord(response.exceptionDetails)) {
+    const exception = response.exceptionDetails.exception;
+    const description = isRecord(exception) ? exception.description : undefined;
     const text =
-      typeof response.exceptionDetails.text === "string"
-        ? response.exceptionDetails.text
-        : "Renderer source evaluation failed";
+      typeof description === "string" && description.length > 0
+        ? description
+        : typeof response.exceptionDetails.text === "string"
+          ? response.exceptionDetails.text
+          : "Renderer source evaluation failed";
     throw new Error(text);
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CdpClient,
@@ -64,6 +64,26 @@ class FakeSocket {
 }
 
 describe("CDP client", () => {
+  it("preserves a native evaluation exception instead of only Uncaught", async () => {
+    const socket = new FakeSocket();
+    const client = await CdpClient.connect("ws://127.0.0.1:9222/devtools/page/page-1", {
+      socketFactory: () => socket,
+    });
+    vi.spyOn(client, "command").mockResolvedValueOnce({
+      exceptionDetails: {
+        text: "Uncaught",
+        exception: { description: "TypeError: Renderer binding unavailable" },
+      },
+    });
+    try {
+      await expect(client.evaluate("test")).rejects.toThrow(
+        "TypeError: Renderer binding unavailable",
+      );
+    } finally {
+      client.close();
+    }
+  });
+
   it("validates and returns loopback page targets", async () => {
     const fetchImpl: CdpFetch = async (url) => ({
       ok: true,

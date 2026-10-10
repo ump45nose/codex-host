@@ -3889,6 +3889,11 @@ export class AppServerHost {
             thread.record.nativeSessionRef.nativeSessionId !== event.state.nativeRef.nativeSessionId
           ) {
             throw new Error("External Session changed Native identity");
+          } else if (
+            JSON.stringify(thread.record.nativeSessionRef) !== JSON.stringify(event.state.nativeRef)
+          ) {
+            // Same native identity: persist updated adapter-owned locator metadata.
+            thread.record = await this.#repository.commitNative(thread.id, event.state.nativeRef);
           }
         }
         thread.stateObserver.update(event.state);

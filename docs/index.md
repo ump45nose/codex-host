@@ -63,6 +63,12 @@
 | --- | --- |
 | [`harnesses/hermes/hermes-capabilities.md`](harnesses/hermes/hermes-capabilities.md) | Hermes gateway 提问、Thinking、精确派生、协作发现及旧 ACP 的原生能力边界；维护 Hermes Adapter 时阅读。 |
 
+### GitHub Copilot CLI
+
+| 文档 | 内容与阅读时机 |
+| --- | --- |
+| [`harnesses/copilot/copilot-cli-experimental.md`](harnesses/copilot/copilot-cli-experimental.md) | Copilot ACP 接入、原生历史边界、上下文档位、按模型思考选项和取消恢复；维护 Copilot Adapter 时阅读。 |
+
 ### OpenCode 与 Pi
 
 | 文档 | 内容与阅读时机 |

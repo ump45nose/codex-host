@@ -158,6 +158,7 @@ describe("production Desktop Controller", () => {
         "qoder",
         "qoder-cn",
         "kimi-code",
+        "github-copilot-cli",
       ],
       timeoutMs: 90_000,
     });
@@ -177,7 +178,12 @@ describe("production Desktop Controller", () => {
     expect(attach).toEqual(expect.any(Function));
   });
 
-  it("retries a transient Renderer evaluation failure during cold startup", async () => {
+  it.each([
+    "Execution context was destroyed during Renderer reload",
+    "CDP WebSocket connection failed",
+    "CDP WebSocket closed",
+    "CDP client is closed",
+  ])("retries transient cold startup failure: %s", async (message) => {
     const abort = new AbortController();
     abort.abort();
     const close = vi.fn();
@@ -193,7 +199,7 @@ describe("production Desktop Controller", () => {
       .fn<DesktopControllerDependencies["install"]>()
       .mockRejectedValueOnce(
         new Error("Renderer installation failed", {
-          cause: new Error("Execution context was destroyed during Renderer reload"),
+          cause: new Error(message),
         }),
       )
       .mockRejectedValueOnce(new Error("Promise was collected"))

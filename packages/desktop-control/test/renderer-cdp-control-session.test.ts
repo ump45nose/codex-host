@@ -46,6 +46,35 @@ function rendererClient(binding = readyBinding()) {
 }
 
 describe("Renderer CDP Control Session", () => {
+  it("reports the actual injection exception and closes the failed client", async () => {
+    const client = rendererClient();
+    client.command.mockImplementation(async (method) =>
+      method === "Runtime.evaluate"
+        ? {
+            result: { type: "undefined" },
+            exceptionDetails: {
+              text: "Uncaught",
+              exception: { description: "ReferenceError: binding is missing" },
+            },
+          }
+        : {},
+    );
+    await expect(
+      createRendererCdpControlSession({
+        rendererCdpEndpoint: "http://127.0.0.1:43123",
+        rendererSource: "production renderer",
+        pollIntervalMs: 1,
+        timeoutMs: 100,
+        operations: {
+          listTargets: async () => [target("page-1")],
+          connect: async () => client,
+          installDraftPrewarmPolicy: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow("ReferenceError: binding is missing");
+    expect(client.close).toHaveBeenCalledOnce();
+  });
+
   it("selects only the exact primary app surface and preserves an owned target", () => {
     const first = target("page-1");
     const owned = target("page-2");

@@ -1,0 +1,135 @@
+import {
+  harnessModelCatalogSchema,
+  harnessModelRefSchema,
+  harnessPermissionModeCatalogSchema,
+  harnessPermissionModeIdSchema,
+  harnessThinkingOptionIdSchema,
+} from "@codexhost/shared-contracts";
+import type {
+  HarnessModelCatalog,
+  HarnessSessionCapabilities,
+  HarnessSessionState,
+} from "@codexhost/harness-adapter";
+
+const object = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+const options = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value) ? value.map(object) : [];
+
+export const COPILOT_CAPABILITIES: HarnessSessionCapabilities = {
+  configuration: {
+    selectModel: true,
+    selectThinkingOption: true,
+    selectPermissionMode: true,
+    permissionModeScope: "live",
+  },
+  history: { fork: false, forkAcrossCwd: false, rollbackLastTurn: false },
+};
+
+export const COPILOT_PERMISSION_MODES = harnessPermissionModeCatalogSchema.parse({
+  defaultModeId: "supervised",
+  modes: [
+    { id: "supervised", label: "Supervised", description: "Ask before using restricted tools" },
+    {
+      id: "allow-all",
+      label: "Allow all",
+      description: "Copilot automatically approves tool, path and URL requests",
+      dangerous: true,
+    },
+  ],
+});
+
+export type CopilotContextTier = "default" | "long_context";
+
+export function copilotModelRef(id: string, context: CopilotContextTier = "default") {
+  return harnessModelRefSchema.parse({
+    id: `copilot.${Buffer.from(id).toString("base64url")}${context === "long_context" ? "~long_context" : ""}`,
+  });
+}
+export function copilotNativeModel(ref: string): string {
+  if (!ref.startsWith("copilot.")) throw new Error("Invalid Copilot Model Ref");
+  const context = copilotNativeContext(ref);
+  const encoded = context === "long_context" ? ref.slice(8, -13) : ref.slice(8);
+  const value = Buffer.from(encoded, "base64url").toString("utf8");
+  if (!value || copilotModelRef(value, context).id !== ref)
+    throw new Error("Invalid Copilot Model Ref");
+  return value;
+}
+
+export function copilotNativeContext(ref: string): CopilotContextTier {
+  return ref.endsWith("~long_context") ? "long_context" : "default";
+}
+
+export function copilotConfiguration(
+  opened: Record<string, unknown>,
+  context: CopilotContextTier = "default",
+): {
+  catalog: HarnessModelCatalog;
+  state: HarnessSessionState;
+  capabilities: HarnessSessionCapabilities;
+} {
+  const entries = options(opened.configOptions);
+  const model = entries.find((entry) => entry.id === "model");
+  if (model?.type !== "select") throw new Error("Copilot ACP did not report a Model catalog");
+  const models = new Map<string, { ref: ReturnType<typeof copilotModelRef>; label: string }>();
+  for (const entry of options(model.options)) {
+    const choices = Array.isArray(entry.options) ? options(entry.options) : [entry];
+    for (const choice of choices) {
+      const id = text(choice.value),
+        label = text(choice.name);
+      if (id && label && !models.has(id)) models.set(id, { ref: copilotModelRef(id), label });
+    }
+  }
+  const currentId = text(model.currentValue);
+  const current = models.get(currentId);
+  if (!current) throw new Error("Copilot ACP did not report a selectable current Model");
+  const thought = entries.find(
+    (entry) => entry.id === "reasoning_effort" && entry.type === "select",
+  );
+  const thinkingOptions = options(thought?.options).flatMap((entry) => {
+    const value = harnessThinkingOptionIdSchema.safeParse(entry.value);
+    return value.success && text(entry.name) ? [{ id: value.data, label: text(entry.name) }] : [];
+  });
+  const currentThought = thinkingOptions.find(({ id }) => id === thought?.currentValue);
+  const mode = entries.find((entry) => entry.id === "allow_all" && entry.type === "select");
+  const selectableMode =
+    options(mode?.options).some((entry) => entry.value === "on") &&
+    options(mode?.options).some((entry) => entry.value === "off");
+  const effectivePermissionModeId =
+    selectableMode && (mode?.currentValue === "on" || mode?.currentValue === "off")
+      ? harnessPermissionModeIdSchema.parse(mode.currentValue === "on" ? "allow-all" : "supervised")
+      : undefined;
+  const catalog = harnessModelCatalogSchema.parse({
+    models: [...models.entries()].flatMap(([id, row]) =>
+      (["default", "long_context"] as const).map((tier) => ({
+        ref: copilotModelRef(id, tier),
+        label: `${row.label} (${tier === "default" ? "default context" : "long context"})`,
+        supportedThinkingOptionIds: id === currentId ? thinkingOptions.map(({ id }) => id) : [],
+      })),
+    ),
+    defaultModel: copilotModelRef(currentId, context),
+    thinkingOptions,
+    ...(currentThought ? { defaultThinkingOptionId: currentThought.id } : {}),
+  });
+  return {
+    catalog,
+    state: {
+      effectiveModel: copilotModelRef(currentId, context),
+      resolvedModelLabel: `${current.label} (${context === "default" ? "default context" : "long context"})`,
+      availableThinkingOptions: thinkingOptions,
+      ...(currentThought ? { effectiveThinkingOptionId: currentThought.id } : {}),
+      ...(effectivePermissionModeId ? { effectivePermissionModeId } : {}),
+    },
+    capabilities: {
+      ...COPILOT_CAPABILITIES,
+      configuration: {
+        ...COPILOT_CAPABILITIES.configuration,
+        selectThinkingOption: thinkingOptions.length > 0,
+        selectPermissionMode: Boolean(effectivePermissionModeId),
+      },
+    },
+  };
+}

@@ -21,6 +21,7 @@ export interface CdpFetchResponse {
 export type CdpFetch = (url: string) => Promise<CdpFetchResponse>;
 
 interface CdpSocketEvent {
+  error?: unknown;
   data?: unknown;
 }
 
@@ -237,9 +238,10 @@ export class CdpClient {
         cleanup();
         resolve();
       };
-      const onError = (): void => {
+      const onError = (event: CdpSocketEvent): void => {
         cleanup();
-        reject(new Error("CDP WebSocket connection failed"));
+        socket.close();
+        reject(new Error("CDP WebSocket connection failed", { cause: event.error }));
       };
       const cleanup = (): void => {
         clearTimeout(timeout);
@@ -304,10 +306,14 @@ export class CdpClient {
     });
     if (!isRecord(response)) throw new Error("Runtime.evaluate returned an invalid result");
     if (isRecord(response.exceptionDetails)) {
+      const exception = response.exceptionDetails.exception;
+      const description = isRecord(exception) ? exception.description : undefined;
       const text =
-        typeof response.exceptionDetails.text === "string"
-          ? response.exceptionDetails.text
-          : "Renderer evaluation failed";
+        typeof description === "string" && description.length > 0
+          ? description
+          : typeof response.exceptionDetails.text === "string"
+            ? response.exceptionDetails.text
+            : "Renderer evaluation failed";
       throw new Error(text);
     }
     if (!isRecord(response.result) || !("value" in response.result)) {

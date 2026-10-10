@@ -29,6 +29,7 @@ export const RENDERER_AGENT_LABELS: Record<RendererAgent, string> = {
   qoder: "Qoder",
   "qoder-cn": "Qoder CN",
   "kimi-code": "Kimi Code",
+  "github-copilot-cli": "GitHub Copilot CLI",
 };
 
 const PI_PATHS = [
@@ -89,6 +90,13 @@ export function createRendererAgentIcon(
     return image;
   }
   if (agent === "pi") return createSvgIcon(PI_PATHS, "currentColor", size, ownerDocument);
+  if (agent === "github-copilot-cli") {
+    const mark = ownerDocument.createElement("span");
+    mark.textContent = "GH";
+    mark.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:4px;background:#24292f;color:white;font:bold ${Math.max(8, Math.round(size * 0.44))}px sans-serif;flex:none`;
+    mark.setAttribute("aria-hidden", "true");
+    return mark;
+  }
   if (agent === "claude-code") {
     return createSvgIcon([{ d: CLAUDE_PATH }], "#d97757", size, ownerDocument);
   }

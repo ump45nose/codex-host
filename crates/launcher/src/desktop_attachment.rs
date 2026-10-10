@@ -184,7 +184,9 @@ fn send_controlled_attachment_with_timeout(
         "ready" => Ok(true),
         "busy" => Ok(false),
         "rejected" => Err("Desktop Controller rejected the attachment nonce".into()),
-        "failed" => Err("Desktop Controller could not restore the running Desktop".into()),
+        // Renderer replacement can fail transiently during a Desktop reload.
+        // Preserve the owner and retry within the existing bounded deadline.
+        "failed" => Ok(false),
         // An empty or malformed status can come from a Controller that is still
         // restoring the Desktop. Treat it as transient rather than abandoning
         // the healthy Launcher that still owns the runtime guard.
@@ -281,6 +283,24 @@ mod tests {
             )
             .expect("timed-out Controller")
         );
+        server.join().expect("attachment server");
+    }
+    #[test]
+    fn controlled_attachment_retries_failed_renderer_recovery() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("attachment listener");
+        let descriptor = descriptor(listener.local_addr().expect("attachment address").port());
+        let server = thread::spawn(move || {
+            for response in ["failed", "ready"] {
+                let (mut stream, _) = listener.accept().expect("attachment connection");
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().expect("clone stream"))
+                    .read_line(&mut request)
+                    .expect("attachment request");
+                writeln!(stream, "{response}").expect("attachment response");
+            }
+        });
+        assert!(!try_activate_controlled_instance(&descriptor).expect("recovering Controller"));
+        assert!(try_activate_controlled_instance(&descriptor).expect("restored Controller"));
         server.join().expect("attachment server");
     }
 }

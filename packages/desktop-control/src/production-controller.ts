@@ -11,6 +11,12 @@ import {
   type RendererCdpControlSession,
 } from "./renderer-cdp-control-session.js";
 
+import {
+  createControllerStatusPublisher,
+  createRendererStatusReporter,
+  type DesktopControllerStatusDocument,
+} from "./controller-status.js";
+
 export interface DesktopControllerOptions {
   rendererCdpEndpoint: string;
   rendererPath: string;
@@ -40,6 +46,7 @@ export interface DesktopControllerDependencies {
   sleep(milliseconds: number): Promise<void>;
   now?(): number;
   monitorIntervalMs: number;
+  publishStatus?(document: DesktopControllerStatusDocument): void;
 }
 
 const PRODUCTION_INSTALL_TIMEOUT_MS = 90_000;
@@ -87,6 +94,7 @@ const defaultDependencies: DesktopControllerDependencies = {
   },
   sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   monitorIntervalMs: 500,
+  publishStatus: createControllerStatusPublisher(),
 };
 
 function rendererCdpEndpoint(value: string): string {
@@ -188,7 +196,10 @@ function isTransientRendererInstallError(error: unknown): boolean {
     const message = current instanceof Error ? current.message : String(current);
     if (
       message.includes("Execution context was destroyed") ||
-      message.includes("Promise was collected")
+      message.includes("Promise was collected") ||
+      message.includes("CDP WebSocket connection failed") ||
+      message.includes("CDP WebSocket closed") ||
+      message.includes("CDP client is closed")
     ) {
       return true;
     }
@@ -225,15 +236,23 @@ export async function runDesktopController(
   let session: RendererCdpControlSession | undefined;
   let nextRecoveryAt = 0;
   let recoveryDelayMs = RECOVERY_RETRY_INITIAL_MS;
-  const recordRecoveryFailure = (): void => {
+  const status = createRendererStatusReporter(
+    (document) => dependencies.publishStatus?.(document),
+    now,
+  );
+  const recordRecoveryFailure = (error: unknown): void => {
     nextRecoveryAt = now() + recoveryDelayMs;
     recoveryDelayMs = Math.min(recoveryDelayMs * 2, RECOVERY_RETRY_MAX_MS);
+    status.failed(error);
+    startupTrace("Renderer recovery failed", error);
   };
   const recordRecoverySuccess = (): void => {
     nextRecoveryAt = 0;
     recoveryDelayMs = RECOVERY_RETRY_INITIAL_MS;
+    status.installed();
   };
   const createSession = async (): Promise<RendererCdpControlSession> => {
+    status.installing();
     startupTrace("reading Renderer bundle");
     const rendererSource = await dependencies.readRenderer(options.rendererPath);
     if (rendererSource.trim().length === 0) throw new Error("production Renderer Bundle is empty");
@@ -259,6 +278,7 @@ export async function runDesktopController(
           "qoder",
           "qoder-cn",
           "kimi-code",
+          "github-copilot-cli",
         ],
         timeoutMs: PRODUCTION_INSTALL_TIMEOUT_MS,
       },
@@ -274,7 +294,7 @@ export async function runDesktopController(
   } catch (error) {
     startupTrace("initial Renderer Session unavailable", error);
     session = undefined;
-    recordRecoveryFailure();
+    recordRecoveryFailure(error);
   }
 
   let operation = Promise.resolve<unknown>(undefined);
@@ -302,7 +322,7 @@ export async function runDesktopController(
       return current;
     } catch (error) {
       resetSession();
-      recordRecoveryFailure();
+      recordRecoveryFailure(error);
       throw error;
     }
   };

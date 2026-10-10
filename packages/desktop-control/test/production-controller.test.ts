@@ -158,6 +158,7 @@ describe("production Desktop Controller", () => {
         "qoder",
         "qoder-cn",
         "kimi-code",
+        "github-copilot-cli",
       ],
       timeoutMs: 90_000,
     });

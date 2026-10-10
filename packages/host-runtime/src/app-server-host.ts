@@ -386,6 +386,7 @@ export function officialEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEn
     "CODEXHOST_PI_COMMAND",
     "CODEXHOST_ENABLE_CLAUDE_CODE",
     "CODEXHOST_CLAUDE_COMMAND",
+    "CODEXHOST_COPILOT_COMMAND",
     "CODEXHOST_OPENCODE_COMMAND",
     "CODEXHOST_STOCK_CODEX_PATH",
     "CODEXHOST_LAUNCHER_PID",
@@ -3012,6 +3013,40 @@ export class AppServerHost {
       });
       if (!projected.effectiveModel) {
         throw new Error("Harness Session did not report an effective Model");
+      }
+      // Copilot's live native selection must also be reflected in its saved
+      // transport route for restoration. Preserve other Harnesses' existing
+      // request-scoped Model semantics (notably Claude Code).
+      if (thread.harnessId === "github-copilot-cli") {
+        // A Model change may remove the Thinking option entirely. Never carry
+        // stale options from the previous Model into the persisted route.
+        const transportModelId = encodeExternalTransportSelection(thread.harnessId, {
+          model: projected.effectiveModel,
+          ...(projected.effectiveThinkingOptionId
+            ? { thinkingOptionId: projected.effectiveThinkingOptionId }
+            : {}),
+          ...(projected.effectivePermissionModeId
+            ? { permissionModeId: projected.effectivePermissionModeId }
+            : {}),
+        });
+        thread.record = await this.#repository.setTransportModelId(
+          thread.record.hostThreadId,
+          transportModelId,
+        );
+        thread.transportModelId = transportModelId;
+        thread.requestedModel = projected.effectiveModel;
+        if (projected.effectiveThinkingOptionId)
+          thread.requestedThinkingOptionId = projected.effectiveThinkingOptionId;
+        else delete thread.requestedThinkingOptionId;
+        if (projected.effectivePermissionModeId)
+          thread.requestedPermissionModeId = projected.effectivePermissionModeId;
+        else delete thread.requestedPermissionModeId;
+        thread.thread = externalThreadValue({
+          record: thread.record,
+          turns: thread.turns,
+          sessionId: thread.sessionId,
+          running: thread.running,
+        });
       }
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(projected) }));
     } catch (error) {

@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "github-copilot-cli",
+  "name": "GitHub Copilot CLI",
+  "version": "0.0.0",
+  "adapterApiVersion": 1,
+  "entry": "./dist/plugin.js",
+  "links": {
+    "documentation": "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server",
+    "installation": "https://docs.github.com/en/copilot/get-started/cli-quickstart"
+  }
+}

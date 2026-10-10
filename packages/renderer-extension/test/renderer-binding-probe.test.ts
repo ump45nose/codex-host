@@ -37,6 +37,7 @@ import {
   isComposerInputIntent,
   isComposerSubmissionKey,
   isComposerSubmitButton,
+  isComposerStopButton,
   isComposerVoiceButton,
   creditsPlacementAnchor,
   isNativeContextUsageControlCandidate,
@@ -592,6 +593,35 @@ describe("Renderer Composer DOM behavior", () => {
       expect(control.sendButton).toBe(stale);
     });
 
+    it("does not adopt a Stop button after an unlabelled fallback", () => {
+      const stale = { ...button(false), type: "button" } as HTMLButtonElement;
+      const stop = {
+        type: "button",
+        isConnected: true,
+        hasAttribute: () => false,
+        getAttribute: (name: string) => (name === "aria-label" ? "Stop" : null),
+        parentElement: null,
+      } as unknown as HTMLButtonElement;
+      const { control } = fakeControl(stale, [stop]);
+
+      expect(refreshSendButton(control)).toBeNull();
+      expect(control.sendButton).toBe(stale);
+    });
+
+    it("does not treat a relabelled connected submit button as Send", () => {
+      const reused = {
+        type: "submit",
+        isConnected: true,
+        hasAttribute: () => false,
+        getAttribute: (name: string) => (name === "aria-label" ? "Stop" : null),
+        parentElement: null,
+      } as unknown as HTMLButtonElement;
+      const { control } = fakeControl(reused, [reused]);
+
+      expect(isComposerSubmitButton(reused)).toBe(false);
+      expect(refreshSendButton(control)).toBeNull();
+    });
+
     it("never moves owned controls into the detached trailing cluster", () => {
       const stale = button(false);
       const { control, detachedParent } = fakeControl(stale, []);
@@ -812,6 +842,12 @@ describe("Renderer Composer DOM behavior", () => {
     expect(isComposerSubmitButton(button("Attach files"))).toBe(false);
     expect(isComposerSubmitButton(button("Send"))).toBe(true);
     expect(isComposerSubmitButton(button("", "submit"))).toBe(true);
+    expect(isComposerStopButton(button("Stop", "submit"))).toBe(true);
+    expect(isComposerSubmitButton(button("Stop", "submit"))).toBe(false);
+    expect(isComposerStopButton(button("停止", "button"))).toBe(true);
+    expect(isComposerStopButton(button("停止生成", "submit"))).toBe(true);
+    expect(isComposerSubmitButton(button("停止生成", "submit"))).toBe(false);
+    expect(isComposerStopButton(button("Stop recording", "button"))).toBe(true);
   });
 
   it("recognizes a dictation control without treating attach or send as voice", () => {

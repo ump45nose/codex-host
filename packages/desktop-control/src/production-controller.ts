@@ -274,6 +274,7 @@ export async function runDesktopController(
           "qoder",
           "qoder-cn",
           "kimi-code",
+          "github-copilot-cli",
         ],
         timeoutMs: PRODUCTION_INSTALL_TIMEOUT_MS,
       },

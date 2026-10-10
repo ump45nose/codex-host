@@ -126,7 +126,17 @@ function isOwnedRendererControl(element: Element): boolean {
   );
 }
 
+export function isComposerStopButton(button: HTMLButtonElement): boolean {
+  const description = buttonText(button);
+  return (
+    /(^|[\s_-])(stop|cancel)([\s_-]|$)/iu.test(description) || /(停止|中止|取消)/u.test(description)
+  );
+}
+
 export function isComposerSubmitButton(button: HTMLButtonElement): boolean {
+  // Desktop may reuse the submit node for Stop or replace it with a submit-type
+  // Stop button. A native Stop click must never enter our submission guard.
+  if (isComposerStopButton(button)) return false;
   if (button.type === "submit") return true;
   return /(^|\s)(send|submit|发送|提交)(\s|$)/u.test(buttonText(button));
 }
@@ -490,7 +500,8 @@ function lastNativeButtonWithin(composer: Element): HTMLButtonElement | null {
   const buttons = [...composer.querySelectorAll<HTMLButtonElement>("button")];
   for (let index = buttons.length - 1; index >= 0; index -= 1) {
     const button = buttons[index];
-    if (button && !isInsideOwnedRendererControl(button, composer)) return button;
+    if (button && !isInsideOwnedRendererControl(button, composer) && !isComposerStopButton(button))
+      return button;
   }
   return null;
 }
@@ -511,7 +522,8 @@ function isInsideOwnedRendererControl(element: Element, composer: Element): bool
  */
 export function refreshSendButton(control: ComposerAgentControl): HTMLButtonElement | null {
   const current = control.sendButton;
-  if (current?.isConnected && control.composer.contains(current)) return current;
+  if (current?.isConnected && control.composer.contains(current) && !isComposerStopButton(current))
+    return current;
   // Only a Composer that was mounted through the unlabelled fallback keeps
   // using it; otherwise a Stop/Attach button would be mistaken for send.
   const replacement =

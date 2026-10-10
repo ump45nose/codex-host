@@ -173,6 +173,12 @@ const guides: Readonly<Record<ExternalRendererAgent, InstallationGuide>> = {
     before: ["On Windows, install Git for Windows first.", "Windows 请先安装 Git for Windows。"],
     after: start("kimi"),
   },
+  "github-copilot-cli": {
+    url: "https://docs.github.com/en/copilot/get-started/cli-quickstart",
+    commands: npm("@github/copilot"),
+    before: ["Requires Node.js 22 or later.", "需要 Node.js 22 或更高版本。"],
+    after: start("copilot"),
+  },
 };
 
 export function harnessInstallationGuide(

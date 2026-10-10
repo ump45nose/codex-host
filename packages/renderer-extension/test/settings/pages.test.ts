@@ -732,6 +732,7 @@ describe("Renderer Connections page", () => {
     ["codebuddy", "@tencent-ai/codebuddy-code"],
     ["workbuddy", "应用内置 CLI"],
     ["cursor-cli", "https://cursor.com/install"],
+    ["github-copilot-cli", "npm install -g @github/copilot"],
     ["hermes", "https://hermes-agent.nousresearch.com/install.sh"],
     ["qoder", "https://qoder.com/install"],
     ["qoder-cn", "https://static.qoder.com.cn/qoder-cli-cn/install.sh"],
@@ -787,7 +788,9 @@ describe("Renderer Connections page", () => {
     expect(blocks.length).toBe(
       agent === "workbuddy"
         ? 0
-        : ["deepseek-harness", "opencode", "grok", "codebuddy"].includes(agent)
+        : ["deepseek-harness", "opencode", "grok", "codebuddy", "github-copilot-cli"].includes(
+              agent,
+            )
           ? 1
           : 2,
     );

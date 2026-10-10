@@ -36,6 +36,7 @@ import {
   eventElement,
   isComposerInputIntent,
   isComposerSubmissionKey,
+  isComposerStopButton,
   mountComposerAgentControl,
   reconcileComposerNativeControls,
   renderComposerAgentControl,
@@ -117,6 +118,7 @@ const externalHarnessIds = {
   qoder: harnessIdSchema.parse("qoder"),
   "qoder-cn": harnessIdSchema.parse("qoder-cn"),
   "kimi-code": harnessIdSchema.parse("kimi-code"),
+  "github-copilot-cli": harnessIdSchema.parse("github-copilot-cli"),
 } as const;
 
 const externalAgents: readonly ExternalRendererAgent[] = [
@@ -135,6 +137,7 @@ const externalAgents: readonly ExternalRendererAgent[] = [
   "qoder",
   "qoder-cn",
   "kimi-code",
+  "github-copilot-cli",
 ];
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Partial<Record<ExternalRendererAgent, CodexhostError | undefined>>;
@@ -542,10 +545,10 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
       ...(permissionModeId ? { permissionModeId } : {}),
     };
   }
-  if (inspection.harnessId === "kimi-code") {
+  if (inspection.harnessId === "kimi-code" || inspection.harnessId === "github-copilot-cli") {
     const route = decodeHarnessPluginRoute(inspection.transportModelId);
     if (!route || route.harnessId !== inspection.harnessId) {
-      throw new Error("Kimi Code Thread reported an incompatible transport Model");
+      throw new Error("Plugin Thread reported an incompatible transport Model");
     }
     const model = inspection.effectiveModel ?? route.model;
     const thinkingOptionId =
@@ -806,6 +809,7 @@ export function installRendererBindingProbe(
       qoder: undefined,
       "qoder-cn": undefined,
       "kimi-code": undefined,
+      "github-copilot-cli": undefined,
     },
     webUi: Object.fromEntries(
       externalAgents.map((agent) => [agent, false]),
@@ -2431,7 +2435,10 @@ export function installRendererBindingProbe(
       return;
     }
     const allButtons = [...composer.querySelectorAll<HTMLButtonElement>("button")];
-    const sendButton = sendButtonWithin(composer) ?? allButtons.at(-1) ?? null;
+    const sendButton =
+      sendButtonWithin(composer) ??
+      allButtons.reverse().find((button) => !isComposerStopButton(button)) ??
+      null;
     if (!sendButton) return;
     const modelTarget = findComposerModelTarget(composer);
     const hostId = activeModelHostId();
@@ -2725,7 +2732,7 @@ export function installRendererBindingProbe(
   const onClick = (event: MouseEvent): void => {
     const element = eventElement(event.target);
     const button = element?.closest<HTMLButtonElement>("button");
-    if (!button) return;
+    if (!button || isComposerStopButton(button)) return;
     const candidate = composerForElement(button);
     const composer = candidate && isMountedComposer(candidate) ? candidate : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;

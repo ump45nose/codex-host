@@ -10,6 +10,7 @@ import {
   encodeClaudeTransportModel,
   encodeGrokTransportModel,
   encodePiTransportModel,
+  encodeExternalTransportSelection,
   type ExternalHarnessId,
   type JsonObject,
 } from "@codexhost/protocol-core";
@@ -67,6 +68,67 @@ describe("AppServerHost HarnessAdapter projection", () => {
     });
     expect(claude.sessions[0]?.state.effectiveModel).toEqual(model);
     expect(pi.sessions).toHaveLength(0);
+    await stopFixture(fixture);
+  });
+
+  it("persists Copilot plugin Model changes with native Thinking and Permission state", async () => {
+    const copilot = new FakeHarnessAdapter(
+      harnessIdSchema.parse("github-copilot-cli"),
+      undefined,
+      false,
+      false,
+      null,
+      harnessPermissionModeCatalogSchema.parse({
+        defaultModeId: "supervised",
+        modes: [
+          { id: "supervised", label: "Supervised" },
+          { id: "allow-all", label: "Allow all", dangerous: true },
+        ],
+      }),
+    );
+    const fixture = createFixture({
+      externalAdapters: new Map<ExternalHarnessId, FakeHarnessAdapter>([
+        ["github-copilot-cli", copilot],
+      ]),
+    });
+    const first = copilot.catalog.defaultModel;
+    const second = copilot.catalog.models[1]?.ref;
+    if (!first || !second) throw Error("Fake Model catalog has no second Model");
+    const threadId = await startExternalThread(
+      fixture,
+      encodeExternalTransportSelection("github-copilot-cli", {
+        model: first,
+        ...(copilot.catalog.defaultThinkingOptionId
+          ? { thinkingOptionId: copilot.catalog.defaultThinkingOptionId }
+          : {}),
+        permissionModeId: harnessPermissionModeIdSchema.parse("supervised"),
+      }),
+    );
+    writeRequest(fixture.desktopInput, {
+      id: 71,
+      method: "codexhost/thread/model/select",
+      params: { threadId, model: second },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 71)),
+    ).resolves.toMatchObject({
+      result: { effectiveModel: second },
+    });
+    const selected = copilot.sessions[0]?.state;
+    expect(selected?.effectiveModel).toEqual(second);
+    await expect(
+      fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId)),
+    ).resolves.toMatchObject({
+      transportModelId: encodeExternalTransportSelection("github-copilot-cli", {
+        model: second,
+        ...(selected?.effectiveThinkingOptionId
+          ? { thinkingOptionId: selected.effectiveThinkingOptionId }
+          : {}),
+        ...(selected?.effectivePermissionModeId
+          ? { permissionModeId: selected.effectivePermissionModeId }
+          : {}),
+      }),
+    });
     await stopFixture(fixture);
   });
 

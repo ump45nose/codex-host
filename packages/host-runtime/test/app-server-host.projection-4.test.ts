@@ -12,6 +12,7 @@ import {
   type JsonObject,
 } from "@codexhost/protocol-core";
 import { harnessIdSchema, hostThreadIdSchema } from "@codexhost/shared-contracts";
+import { officialEnvironment } from "../src/app-server-host.js";
 
 import {
   method,
@@ -1435,6 +1436,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
         CODEXHOST_DATA_DIR: "/synthetic/codexhost-data",
         CODEXHOST_ENABLE_CLAUDE_CODE: "1",
         CODEXHOST_CLAUDE_COMMAND: "/synthetic/claude",
+        CODEXHOST_COPILOT_COMMAND: "/synthetic/copilot",
         CODEXHOST_PI_COMMAND: "/synthetic/pi",
       },
     });
@@ -1447,6 +1449,9 @@ describe("AppServerHost HarnessAdapter projection", () => {
           env: expect.objectContaining({ VISIBLE_TO_OFFICIAL: "yes" }),
         }),
       );
+      expect(
+        officialEnvironment({ CODEXHOST_COPILOT_COMMAND: "/synthetic/copilot" }),
+      ).not.toHaveProperty("CODEXHOST_COPILOT_COMMAND");
     });
     await stopFixture(fixture);
   });

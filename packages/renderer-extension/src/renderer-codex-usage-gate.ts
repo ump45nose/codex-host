@@ -457,7 +457,15 @@ export function createRendererCodexUsageGate(composer: Element): RendererCodexUs
   // The usage banner only describes the Codex path; hide it while bypassed.
   const apply = (): RendererCodexUsageGateStatus => {
     const status = applyGate();
-    if (status === "bypassed" && owner) banner.hide(owner.owner);
+    // Local preference: hide the usage banner for every Harness, including
+    // Codex. The Codex submit gate itself stays native.
+    const bannerOwner =
+      status === "bypassed" && owner
+        ? owner.owner
+        : composer.isConnected
+          ? findSubmitScope(composer, projections)?.owner
+          : null;
+    if (bannerOwner) banner.hide(bannerOwner);
     else banner.restore();
     return status;
   };

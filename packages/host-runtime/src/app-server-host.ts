@@ -150,6 +150,11 @@ import {
   type HostTurnId,
 } from "@codexhost/shared-contracts";
 import { executeExternalThreadFork } from "./external-thread-fork.js";
+import {
+  appendExternalThreadInjectedText,
+  combineExternalThreadInjectedText,
+  decodeExternalThreadInjectedText,
+} from "./external-thread-inject.js";
 import { settleExternalOutputFailure } from "./external-output-failure.js";
 import { isSessionImportRequest, SessionImportRequests } from "./session-import-requests.js";
 import {
@@ -481,6 +486,7 @@ const EXPLICIT_EXTERNAL_THREAD_METHODS = new Set([
   "thread/archive",
   "thread/delete",
   "thread/fork",
+  "thread/inject_items",
   "thread/items/list",
   "thread/metadata/update",
   "thread/name/set",
@@ -791,6 +797,7 @@ export class AppServerHost {
           }
         },
         canRelease: (thread) =>
+          thread.pendingInjectedText.length === 0 &&
           !this.#hasRunningSubagents(thread.id) &&
           !thread.session.hasBackgroundWork?.() &&
           !this.#externalSteering.hasPending(thread.id) &&
@@ -1941,6 +1948,21 @@ export class AppServerHost {
           resolution.historyFresh,
         );
         return;
+      }
+    }
+    if (request.method === "thread/inject_items") {
+      const params = routingParams(request);
+      if (typeof params.threadId === "string") {
+        const resolution = await this.#resolveExternalThread(params.threadId);
+        if (await this.#writeResolutionError(request, resolution)) return;
+        if (resolution.kind === "external") {
+          this.#dispatchDesktopReply(
+            request,
+            () => this.#injectExternalThreadItems(request, resolution.thread, params),
+            resolution.thread.id,
+          );
+          return;
+        }
       }
     }
     if (request.method === "turn/start") {
@@ -4164,6 +4186,34 @@ export class AppServerHost {
     return this.#externalRuntime.persistTerminalIdentity(thread, event);
   }
 
+  async #injectExternalThreadItems(
+    request: JsonRpcRequest,
+    thread: ExternalThread,
+    params: JsonObject,
+  ): Promise<void> {
+    if (thread.record.subagent) {
+      await this.#writer.json(
+        rpcError(request, -32076, "External Subagent Thread does not support thread/inject_items"),
+      );
+      return;
+    }
+    if (thread.running || thread.activeTurnId) {
+      await this.#writer.json(
+        rpcError(request, -32072, "External Thread already has an active Turn"),
+      );
+      return;
+    }
+    let texts: string[];
+    try {
+      texts = decodeExternalThreadInjectedText(params);
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+      return;
+    }
+    appendExternalThreadInjectedText(thread.pendingInjectedText, texts);
+    await this.#writer.json(rpcEnvelope(request, { result: {} }));
+  }
+
   async #forkExternalThreadFromRenderer(request: JsonRpcRequest): Promise<void> {
     const parsed = externalThreadForkParamsSchema.safeParse(request.params);
     if (!parsed.success) {
@@ -4569,6 +4619,7 @@ export class AppServerHost {
     if (this.#externalThreadBusy(thread)) {
       throw new Error("External Thread already has an active Turn");
     }
+    const turnText = combineExternalThreadInjectedText(thread.pendingInjectedText, text);
     const turnId = hostTurnIdSchema.parse(requestedTurnId);
     const projection: ProjectedTurn = {
       projector: new CodexTurnProjector({
@@ -4576,7 +4627,7 @@ export class AppServerHost {
         turnId,
         cwd: thread.cwd,
         startedAtMs: Date.now(),
-        initialInput: [{ type: "text", text }],
+        initialInput: [{ type: "text", text: turnText }],
       }),
     };
     thread.running = true;
@@ -4590,7 +4641,7 @@ export class AppServerHost {
     const result = await thread.session.execute({
       type: "turn.start",
       turnId,
-      input: [{ type: "text", text }],
+      input: [{ type: "text", text: rewriteDelegationMentionText(turnText) }],
     });
     if (!result.ok) {
       thread.running = false;
@@ -4600,6 +4651,7 @@ export class AppServerHost {
       this.#signalActiveWorkChanged();
       throw new Error(result.error.message);
     }
+    thread.pendingInjectedText.length = 0;
   }
 
   async #startExternalTurn(request: JsonRpcRequest, thread: ExternalThread): Promise<void> {
@@ -4781,6 +4833,7 @@ export class AppServerHost {
     }
     const turnId = hostTurnIdSchema.parse(randomUUID());
     const startedAtMs = Date.now();
+    const turnText = combineExternalThreadInjectedText(thread.pendingInjectedText, text);
     const projection: ProjectedTurn = {
       projector: new CodexTurnProjector({
         threadId: thread.id,
@@ -4789,7 +4842,7 @@ export class AppServerHost {
         startedAtMs,
         ...(this.#options.externalOnly
           ? {
-              initialInput: [{ type: "text" as const, text }],
+              initialInput: [{ type: "text" as const, text: turnText }],
               ...(clientUserMessageId ? { clientUserMessageId } : {}),
             }
           : {}),
@@ -4810,9 +4863,10 @@ export class AppServerHost {
       const result = await thread.session.execute({
         type: "turn.start",
         turnId,
-        input: [{ type: "text", text: rewriteDelegationMentionText(text) }],
+        input: [{ type: "text", text: rewriteDelegationMentionText(turnText) }],
       });
       if (!result.ok) throw new ExternalSteerError(-32073, result.error.message);
+      thread.pendingInjectedText.length = 0;
       return { turnId, turn: projection.projector.pendingTurn(), gate };
     } catch (error) {
       restoreExecutionHost();

@@ -1,4 +1,5 @@
 import { readFile, realpath } from "node:fs/promises";
+import { DESKTOP_ENTRYPOINT_NOTICE, claudeDesktopEntrypointEnabled } from "./entrypoint.js";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -102,6 +103,10 @@ export function createClaudeInstallation(environment: NodeJS.ProcessEnv, command
         latestVersion,
         updateAvailable: newerInstallationVersion(currentVersion, latestVersion),
         canUpdate,
+        // The policy notice below takes its place when updates are also blocked.
+        ...(claudeDesktopEntrypointEnabled(environment)
+          ? { notice: DESKTOP_ENTRYPOINT_NOTICE }
+          : {}),
         ...(!canUpdate
           ? {
               messageCode: blocked ? "claude-policy-restricted" : "original-installer",

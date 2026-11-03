@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { claudeCodeEntrypoint } from "./entrypoint.js";
 import {
   query,
   type CanUseTool,
@@ -59,9 +60,6 @@ import {
 } from "./transport.js";
 
 const CLIENT_APP = "codexhost-claude-code-adapter/0.0.0";
-// Claude Code hides generic SDK entrypoints from its native Session picker. Keep persisted
-// CodexHost Sessions discoverable without misidentifying their transport as interactive CLI.
-const SESSION_ENTRYPOINT = "codexhost-sdk";
 const APPROVAL_TITLE_MAX_LENGTH = 120;
 const APPROVAL_DESCRIPTION_MAX_LENGTH = 500;
 const DEFAULT_ABORT_TIMEOUT_MS = 2_000;
@@ -590,7 +588,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
         forwardSubagentText: true,
         env: withNodeRuntimeOnPath({
           ...this.#environment,
-          CLAUDE_CODE_ENTRYPOINT: SESSION_ENTRYPOINT,
+          CLAUDE_CODE_ENTRYPOINT: claudeCodeEntrypoint(this.#environment),
           CLAUDE_AGENT_SDK_CLIENT_APP: CLIENT_APP,
         }),
         spawnClaudeCodeProcess: (options) => this.#spawn(options),

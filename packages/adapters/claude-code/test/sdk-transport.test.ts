@@ -1087,6 +1087,22 @@ describe("ClaudeSdkTransport process environment", () => {
     await value.transport.close();
   });
 
+  it("reports the Claude Desktop entrypoint only when that exact opt-in is set", async () => {
+    const desktop = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {
+      CODEXHOST_CLAUDE_ENTRYPOINT: "claude-desktop",
+    });
+    await desktop.transport.start();
+    expect(options(desktop).env?.CLAUDE_CODE_ENTRYPOINT).toBe("claude-desktop");
+    await desktop.transport.close();
+
+    const other = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {
+      CODEXHOST_CLAUDE_ENTRYPOINT: "cli",
+    });
+    await other.transport.start();
+    expect(options(other).env?.CLAUDE_CODE_ENTRYPOINT).toBe("codexhost-sdk");
+    await other.transport.close();
+  });
+
   it("adds the Host Node runtime to the Claude process PATH", async () => {
     const value = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",

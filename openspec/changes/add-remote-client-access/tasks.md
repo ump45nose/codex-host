@@ -9,12 +9,12 @@
 
 ## 1. 范围
 
-- [ ] 1.1 客户端权限范围与网络范围、`client set`、旧客户端迁移。验证：每个 MCP 工具与 CLI 命令在 `read`/`dispatch` 下的允许矩阵；网络范围拒绝与未知令牌响应一致；收窄范围后连接关闭。
+- [x] 1.1 客户端权限范围与网络范围、`client set`、旧客户端迁移。验证：每个 MCP 工具与 CLI 命令在 `read`/`dispatch` 下的允许矩阵；网络范围拒绝与未知令牌响应一致；收窄范围后连接关闭。
 
 ## 2. 监听
 
-- [ ] 2.1 tailnet 入口：地址发现、绑定、地址变化后重绑、不可用状态。验证：从另一台 tailnet 设备调用 MCP；局域网地址不可达；停止 Tailscale 时本机监听不受影响。
-- [ ] 2.2 公网入口：独立 loopback 端口、Funnel 路径映射的添加、核对与移除。验证：开关前后用户已有的 serve/funnel 配置不变；公网请求无法以 `local` 身份执行；Funnel 未授权时给出 Tailscale 的原因。
+- [x] 2.1 tailnet 入口：地址发现、绑定、地址变化后重绑、不可用状态。验证：从另一台 tailnet 设备调用 MCP；局域网地址不可达；停止 Tailscale 时本机监听不受影响。
+- [x] 2.2 公网入口：独立 loopback 端口、Funnel 路径映射的添加、核对与移除。验证：开关前后用户已有的 serve/funnel 配置不变；公网请求无法以 `local` 身份执行；Funnel 未授权时给出 Tailscale 的原因。
 
 ## 3. OAuth
 
@@ -22,8 +22,15 @@
 
 ## 4. webhook
 
-- [ ] 4.1 adapter 接口、投递状态持久化与退避重试，`client webhook set|clear`。验证：模拟目标的 2xx/4xx/5xx/超时分类；重启后继续推送未确认事件；24 小时后标记失败且不阻塞后续事件。
-- [ ] 4.2 依据 0.2 的结论实现 Grok Bot adapter。验证：真实 Grok Bot 收到推送并被唤醒，随后通过 MCP 读到对应 Thread 的结果。
+- [x] 4.1 adapter 接口、投递状态持久化与退避重试，`client webhook set|clear`。验证：模拟目标的 2xx/4xx/5xx/超时分类；重启后继续推送未确认事件；24 小时后标记失败且不阻塞后续事件。
+- [x] 4.2 依据 0.2 的结论实现 Grok Bot adapter。验证：真实 Grok Bot 收到推送并被唤醒，随后通过 MCP 读到对应 Thread 的结果。
+
+## 实施记录（2026-11-04）
+
+- 1.1、2.1、2.2、4.1、4.2 已实现并有单元测试；开关通过 `codexhost client access` 设置，状态写入状态文件并由该命令显示。
+- 2.1、2.2 的真实 tailnet 与 Funnel 验证、4.2 的真实 Grok Bot 推送，在 Mac 上验收。
+- 3.1（OAuth 与 `client pair`）尚未实现：Grok Bot 已可用静态 Bearer 接入，OAuth 留给只支持 OAuth 的 connector。
+- 5.1 的控制台页面尚未实现，暂由 `client access` 与 `client webhook` 的输出代替。
 
 ## 5. 控制台、文档与端到端验收
 

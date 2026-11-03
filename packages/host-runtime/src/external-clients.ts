@@ -5,13 +5,35 @@ import path from "node:path";
 
 import { DelegationControlError } from "./delegation-types.js";
 
+/** `read` observes; `dispatch` may also start, steer, cancel and watch work. */
+export type ClientScope = "read" | "dispatch";
+/** Which listener a request arrived on. */
+export type ClientNetwork = "local" | "tailnet" | "public";
+
+export const CLIENT_SCOPES: readonly ClientScope[] = ["read", "dispatch"];
+export const CLIENT_NETWORKS: readonly ClientNetwork[] = ["local", "tailnet", "public"];
+
+export interface ClientAccess {
+  scope: ClientScope;
+  networks: ClientNetwork[];
+}
+
+/** Clients registered before scopes existed keep what they could do then. */
+const DEFAULT_ACCESS: ClientAccess = { scope: "dispatch", networks: ["local"] };
+
 /** A named process outside the Host that may call the delegation API with its own token. */
-export interface ExternalClient {
+export interface ExternalClient extends ClientAccess {
   name: string;
   createdAt: string;
 }
 
-interface StoredClient extends ExternalClient {
+export interface AuthenticatedClient extends ClientAccess {
+  name: string;
+}
+
+interface StoredClient extends Partial<ClientAccess> {
+  name: string;
+  createdAt: string;
   salt: string;
   /** sha256(salt + token), hex. Tokens are 32 random bytes, so a fast hash is sufficient. */
   tokenHash: string;
@@ -59,7 +81,11 @@ function parseClientsFile(text: string): ClientsFile {
       !CLIENT_NAME.test(client.name) ||
       typeof client.createdAt !== "string" ||
       typeof client.salt !== "string" ||
-      typeof client.tokenHash !== "string"
+      typeof client.tokenHash !== "string" ||
+      (client.scope !== undefined && !CLIENT_SCOPES.includes(client.scope)) ||
+      (client.networks !== undefined &&
+        (!Array.isArray(client.networks) ||
+          client.networks.some((network) => !CLIENT_NETWORKS.includes(network))))
     )
       throw new Error("unrecognized external client registry entry");
   }
@@ -81,6 +107,7 @@ export class ExternalClientRegistry {
 
   async add(
     name: string,
+    access: Partial<ClientAccess> = {},
     now: Date = new Date(),
   ): Promise<{ client: ExternalClient; token: string }> {
     if (!CLIENT_NAME.test(name))
@@ -96,15 +123,30 @@ export class ExternalClientRegistry {
     const client: StoredClient = {
       name,
       createdAt: now.toISOString(),
+      ...normalizeAccess({ ...DEFAULT_ACCESS, ...access }),
       salt,
       tokenHash: hashToken(salt, token),
     };
     await this.#write([...clients, client]);
-    return { client: { name, createdAt: client.createdAt }, token };
+    return { client: publicClient(client), token };
   }
 
   async list(): Promise<ExternalClient[]> {
-    return (await this.#read()).map(({ name, createdAt }) => ({ name, createdAt }));
+    return (await this.#read()).map(publicClient);
+  }
+
+  /** Changes take effect on the next request; streams on networks no longer allowed are closed. */
+  async setAccess(name: string, access: Partial<ClientAccess>): Promise<ExternalClient> {
+    const clients = await this.#read();
+    const current = clients.find((client) => client.name === name);
+    if (!current)
+      throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
+    const updated: StoredClient = {
+      ...current,
+      ...normalizeAccess({ ...accessOf(current), ...access }),
+    };
+    await this.#write(clients.map((client) => (client.name === name ? updated : client)));
+    return publicClient(updated);
   }
 
   async remove(name: string): Promise<void> {
@@ -115,18 +157,19 @@ export class ExternalClientRegistry {
   }
 
   /** The client the token belongs to, or undefined. Every entry is compared, so timing reveals nothing. */
-  async authenticate(token: string | undefined): Promise<string | undefined> {
+  async authenticate(token: string | undefined): Promise<AuthenticatedClient | undefined> {
     if (!token?.startsWith(TOKEN_PREFIX)) return undefined;
-    let match: string | undefined;
+    let match: StoredClient | undefined;
     for (const client of await this.#current()) {
-      if (sameHash(hashToken(client.salt, token), client.tokenHash)) match = client.name;
+      if (sameHash(hashToken(client.salt, token), client.tokenHash)) match = client;
     }
-    return match;
+    return match ? { name: match.name, ...accessOf(match) } : undefined;
   }
 
-  /** Whether a client is still registered; used to end connections of removed clients. */
-  async has(name: string): Promise<boolean> {
-    return (await this.#current()).some((client) => client.name === name);
+  /** Whether a client is still registered (and allowed on the network); ends streams otherwise. */
+  async has(name: string, network?: ClientNetwork): Promise<boolean> {
+    const client = (await this.#current()).find((candidate) => candidate.name === name);
+    return !!client && (network === undefined || accessOf(client).networks.includes(network));
   }
 
   async #current(): Promise<StoredClient[]> {
@@ -165,6 +208,29 @@ export class ExternalClientRegistry {
     }
     this.#cache = undefined;
   }
+}
+
+function accessOf(client: StoredClient): ClientAccess {
+  return {
+    scope: client.scope ?? DEFAULT_ACCESS.scope,
+    networks: client.networks ?? [...DEFAULT_ACCESS.networks],
+  };
+}
+
+function publicClient(client: StoredClient): ExternalClient {
+  return { name: client.name, createdAt: client.createdAt, ...accessOf(client) };
+}
+
+function normalizeAccess(access: ClientAccess): ClientAccess {
+  if (!CLIENT_SCOPES.includes(access.scope))
+    throw new DelegationControlError("INVALID_ARGUMENT", "--scope must be read or dispatch");
+  const networks = [...new Set(access.networks)];
+  if (networks.length === 0 || networks.some((network) => !CLIENT_NETWORKS.includes(network)))
+    throw new DelegationControlError(
+      "INVALID_ARGUMENT",
+      "--network must list one or more of local, tailnet, public",
+    );
+  return { scope: access.scope, networks };
 }
 
 export function bearerToken(header: string | undefined): string | undefined {

@@ -1,13 +1,39 @@
 import { DelegationControlError } from "./delegation-types.js";
-import { ExternalClientRegistry, defaultExternalClientsPath } from "./external-clients.js";
+import {
+  ExternalClientRegistry,
+  defaultExternalClientsPath,
+  type ClientAccess,
+  type ClientNetwork,
+  type ClientScope,
+} from "./external-clients.js";
 
-/** `codexhost client add|list|remove`: edits the local registry; no Runtime is needed. */
+/** `--scope` and `--network` as given; the registry validates the values. */
+function accessOptions(options: {
+  scope?: string | undefined;
+  network?: string | undefined;
+}): Partial<ClientAccess> {
+  return {
+    ...(options.scope ? { scope: options.scope as ClientScope } : {}),
+    ...(options.network
+      ? {
+          networks: options.network
+            .split(",")
+            .map((network) => network.trim())
+            .filter(Boolean) as ClientNetwork[],
+        }
+      : {}),
+  };
+}
+
+/** `codexhost client add|list|set|remove`: edits the local registry; no Runtime is needed. */
 export async function runClientCommand(
   command: string | undefined,
   positionals: readonly string[],
   environment: NodeJS.ProcessEnv,
+  options: { scope?: string | undefined; network?: string | undefined } = {},
 ): Promise<unknown> {
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
+  const access = accessOptions(options);
   if (command === "list") {
     if (positionals.length > 0)
       throw new DelegationControlError(
@@ -16,7 +42,7 @@ export async function runClientCommand(
       );
     return { clients: await clients.list() };
   }
-  if (command === "add" || command === "remove") {
+  if (command === "add" || command === "remove" || command === "set") {
     const name = positionals.length === 1 ? positionals[0] : undefined;
     if (!name)
       throw new DelegationControlError(
@@ -27,7 +53,15 @@ export async function runClientCommand(
       await clients.remove(name);
       return { name, removed: true };
     }
-    const { client, token } = await clients.add(name);
+    if (command === "set") {
+      if (Object.keys(access).length === 0)
+        throw new DelegationControlError(
+          "INVALID_ARGUMENT",
+          "client set requires --scope or --network",
+        );
+      return clients.setAccess(name, access);
+    }
+    const { client, token } = await clients.add(name, access);
     return {
       ...client,
       token,

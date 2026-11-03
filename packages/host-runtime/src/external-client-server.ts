@@ -9,6 +9,8 @@ import { DelegationControlError, EXTERNAL_CLIENT_PORT_ENV } from "./delegation-t
 import {
   bearerToken,
   codexhostDataDirectory,
+  type ClientNetwork,
+  type ClientScope,
   type ExternalClientRegistry,
 } from "./external-clients.js";
 
@@ -17,6 +19,8 @@ export const DEFAULT_EXTERNAL_CLIENT_PORT = 4398;
 /** The authenticated caller of one external request. */
 export interface ExternalClientCall {
   client: string;
+  scope: ClientScope;
+  network: ClientNetwork;
   request: IncomingMessage;
   response: ServerResponse;
 }
@@ -95,10 +99,17 @@ function unauthorized(response: ServerResponse): void {
   });
 }
 
+function errorStatus(error: unknown): number {
+  if (!(error instanceof DelegationControlError)) return 500;
+  return error.code === "FORBIDDEN" ? 403 : 400;
+}
+
 /**
- * Loopback listener for registered external clients on a fixed port. Requests
- * authenticate with a client token; the Host's internal token is never accepted
- * here. Returns undefined when the port is taken, so Desktop keeps working
+ * Listener for registered external clients. Requests authenticate with a
+ * client token; the Host's internal token is never accepted here. The network
+ * a request belongs to is the listener it arrived on, never anything the
+ * request says, and a client not allowed on it is refused like an unknown
+ * token. Returns undefined when the port is taken, so Desktop keeps working
  * without the listener.
  */
 export async function startExternalClientServer(input: {
@@ -106,18 +117,24 @@ export async function startExternalClientServer(input: {
   clients: ExternalClientRegistry;
   route: ExternalClientRouter;
   streams?: Record<string, ExternalClientStreamHandler>;
-  descriptorPath: string;
+  /** Only the local listener publishes a descriptor. */
+  descriptorPath?: string;
+  network?: ClientNetwork;
+  /** Address to bind; loopback unless this is the tailnet listener. */
+  host?: string;
   diagnose?: (message: string) => void;
 }): Promise<ExternalClientServer | undefined> {
+  const network = input.network ?? "local";
+  const host = input.host ?? "127.0.0.1";
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const client = await input.clients.authenticate(bearerToken(request.headers.authorization));
-      if (!client) {
+      if (!client?.networks.includes(network)) {
         unauthorized(response);
         return;
       }
-      const call = { client, request, response };
+      const call = { client: client.name, scope: client.scope, network, request, response };
       const stream = input.streams?.[url.pathname];
       if (stream) {
         await stream(call, url);
@@ -136,13 +153,13 @@ export async function startExternalClientServer(input: {
         response.destroy();
         return;
       }
-      writeJson(response, error instanceof DelegationControlError ? 400 : 500, errorBody(error));
+      writeJson(response, errorStatus(error), errorBody(error));
     });
   });
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(input.port, "127.0.0.1", () => {
+      server.listen(input.port, host, () => {
         server.off("error", reject);
         resolve();
       });
@@ -150,11 +167,13 @@ export async function startExternalClientServer(input: {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
     input.diagnose?.(
-      `external client listener is off: port ${input.port} is in use; set ${EXTERNAL_CLIENT_PORT_ENV} to another port or "off"`,
+      `external client ${network} listener is off: ${host}:${input.port} is in use; set ${EXTERNAL_CLIENT_PORT_ENV} to another port or "off"`,
     );
     return undefined;
   }
-  const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const endpoint = `http://${host.includes(":") ? `[${host}]` : host}:${(server.address() as AddressInfo).port}`;
+  const descriptorPath = input.descriptorPath;
+  if (!descriptorPath) return { endpoint, close: () => closeServer(server) };
   const descriptor: ExternalClientDescriptor = {
     schemaVersion: 1,
     endpoint,
@@ -162,7 +181,7 @@ export async function startExternalClientServer(input: {
     startedAt: new Date().toISOString(),
   };
   try {
-    await writePrivateJson(input.descriptorPath, descriptor);
+    await writePrivateJson(descriptorPath, descriptor);
   } catch (error) {
     await closeServer(server);
     throw error;
@@ -172,8 +191,8 @@ export async function startExternalClientServer(input: {
     close: async () => {
       await closeServer(server);
       // Another Runtime may have taken over the port and written its own descriptor since.
-      const current = await readExternalClientDescriptor(input.descriptorPath);
-      if (current?.pid === process.pid) await rm(input.descriptorPath, { force: true });
+      const current = await readExternalClientDescriptor(descriptorPath);
+      if (current?.pid === process.pid) await rm(descriptorPath, { force: true });
     },
   };
 }

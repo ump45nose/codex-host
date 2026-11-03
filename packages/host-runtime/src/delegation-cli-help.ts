@@ -6,7 +6,7 @@ Register an external client: a process the Host did not start, such as a script,
 The client sets CODEXHOST_CLIENT_TOKEN (or CODEXHOST_CLIENT_TOKEN_FILE) and then uses the same delegate, thread and harness commands, or the MCP endpoint, against the external client listener (127.0.0.1:4398 unless CODEXHOST_EXTERNAL_CLIENT_PORT says otherwise).
 Names use lowercase letters, digits and hyphens.
 --scope read allows reading, listing, waiting and events only; dispatch (default) also allows delegate start, thread send, cancel and watch.
---network lists where the client may connect from: local (127.0.0.1, default), tailnet (this machine's Tailscale address), public (the Tailscale Funnel URL).`,
+--network lists where the client may connect from: local (127.0.0.1, default), tailnet (this machine's Tailscale address), public (the Tailscale Funnel URL). Turn the tailnet and public listeners on with codexhost client access.`,
   "client set": `codexhost client set <name> [--scope read|dispatch] [--network local,tailnet,public]
 Change a client's scope or networks. Takes effect on its next request; event streams on networks it may no longer use are closed.`,
   events: `codexhost events [--after <id>] [--limit <n>] [--follow true|false]
@@ -14,6 +14,9 @@ For external clients: read the client's event log. Without --after, every retain
 Without --follow, prints {events, cursor} once; pass cursor back as --after. With --follow true, prints one JSON line per event until interrupted.
 Events are kept for 7 days (CODEXHOST_CLIENT_EVENT_RETENTION_DAYS). CURSOR_EXPIRED means older events were removed: reconcile with thread list --client <name>.
 The listener also serves GET /v1/events as server-sent events (resume with Last-Event-ID) and POST /v1/events/poll for long-polling.`,
+  "client access": `codexhost client access [--tailnet on|off] [--public on|off]
+Show or change whether codexhost also listens on this machine's Tailscale address (tailnet, same port as local) and through Tailscale Funnel (public HTTPS at https://<machine>.<tailnet>.ts.net/codexhost, MCP at .../codexhost/mcp). Both are off by default; only clients whose --network includes them can use them.
+Requires Tailscale to be installed and logged in; public also needs MagicDNS, HTTPS certificates and Funnel allowed for this machine. codexhost only adds and removes its own /codexhost Funnel path. A running codexhost applies changes within 30 seconds; status shows what it is actually serving and why something is unavailable.`,
   "client list": `codexhost client list
 List registered external clients with their registration time, scope and networks. Tokens are never shown.`,
   "client remove": `codexhost client remove <name>
@@ -90,7 +93,7 @@ export const DELEGATION_HELP = `usage:
   codexhost thread watch <thread>
   codexhost thread watches
   codexhost thread list
-  codexhost client add|list|set|remove
+  codexhost client add|list|set|remove|access
   codexhost events
 
 Use <command> --help for its options. Use harness list to discover targets.

@@ -1,5 +1,11 @@
 import { DelegationControlError } from "./delegation-types.js";
 import {
+  externalAccessPaths,
+  readAccessSettings,
+  readAccessStatus,
+  writeAccessSettings,
+} from "./external-client-access.js";
+import {
   ExternalClientRegistry,
   defaultExternalClientsPath,
   type ClientAccess,
@@ -30,8 +36,14 @@ export async function runClientCommand(
   command: string | undefined,
   positionals: readonly string[],
   environment: NodeJS.ProcessEnv,
-  options: { scope?: string | undefined; network?: string | undefined } = {},
+  options: {
+    scope?: string | undefined;
+    network?: string | undefined;
+    tailnet?: string | undefined;
+    public?: string | undefined;
+  } = {},
 ): Promise<unknown> {
+  if (command === "access") return runAccessCommand(positionals, environment, options);
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
   const access = accessOptions(options);
   if (command === "list") {
@@ -72,4 +84,39 @@ export async function runClientCommand(
     "INVALID_ARGUMENT",
     "Unknown client command. Run 'codexhost client --help'.",
   );
+}
+
+function onOff(value: string | undefined, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "on" || value === "off") return value === "on";
+  throw new DelegationControlError("INVALID_ARGUMENT", `${name} must be on or off`);
+}
+
+/** `codexhost client access [--tailnet on|off] [--public on|off]`: shows or changes the switches. */
+async function runAccessCommand(
+  positionals: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  options: { tailnet?: string | undefined; public?: string | undefined },
+): Promise<unknown> {
+  if (positionals.length > 0)
+    throw new DelegationControlError(
+      "INVALID_ARGUMENT",
+      "client access accepts no positional arguments",
+    );
+  const paths = externalAccessPaths(environment);
+  const settings = await readAccessSettings(paths.settings);
+  const tailnet = onOff(options.tailnet, "--tailnet");
+  const publicAccess = onOff(options.public, "--public");
+  const changed = tailnet !== undefined || publicAccess !== undefined;
+  if (changed)
+    await writeAccessSettings(paths.settings, {
+      tailnet: tailnet ?? settings.tailnet,
+      public: publicAccess ?? settings.public,
+    });
+  return {
+    settings: await readAccessSettings(paths.settings),
+    // Written by the running Runtime; it applies changes within 30 s.
+    status: (await readAccessStatus(paths.status)) ?? null,
+    ...(changed ? { note: "A running codexhost applies this within 30 seconds." } : {}),
+  };
 }

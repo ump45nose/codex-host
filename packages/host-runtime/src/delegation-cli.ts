@@ -240,12 +240,14 @@ export async function runDelegationCli(input: {
       }
     }
     if (group === "client") {
-      rejectUnknown(parsed, ["--scope", "--network"]);
+      rejectUnknown(parsed, ["--scope", "--network", "--tailnet", "--public"]);
       writeJson(
         output,
         await runClientCommand(command, parsed.positionals, environment, {
           ...(value(parsed, "--scope") ? { scope: value(parsed, "--scope") } : {}),
           ...(value(parsed, "--network") ? { network: value(parsed, "--network") } : {}),
+          ...(value(parsed, "--tailnet") ? { tailnet: value(parsed, "--tailnet") } : {}),
+          ...(value(parsed, "--public") ? { public: value(parsed, "--public") } : {}),
         }),
       );
       return 0;

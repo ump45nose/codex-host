@@ -28,6 +28,9 @@ import { ClientEventLog, eventRetentionDays } from "./external-client-events.js"
 import { externalClientMcp } from "./external-client-mcp.js";
 import { externalClientEventStream, externalClientRouter } from "./external-client-routes.js";
 import { FileThreadRefsStore } from "./thread-refs.js";
+import { ExternalAccessSupervisor, externalAccessPaths } from "./external-client-access.js";
+import { createTailscaleControl } from "./tailscale.js";
+import type { ClientNetwork } from "./external-clients.js";
 import {
   externalClientDescriptorPath,
   externalClientPort,
@@ -242,17 +245,41 @@ async function startExternalClients(
   if (port === undefined) return undefined;
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
   const route = externalClientRouter({ api: registry, watchApi: registry, events });
-  return startExternalClientServer({
-    port,
-    clients,
-    route,
-    streams: {
-      "/v1/events": externalClientEventStream(events, clients),
-      "/mcp": externalClientMcp(route),
-    },
-    descriptorPath: externalClientDescriptorPath(environment),
-    diagnose: (message) => process.stderr.write(`codexhost external clients: ${message}\n`),
+  const diagnose = (message: string) =>
+    process.stderr.write(`codexhost external clients: ${message}\n`);
+  const start = (options: { network: ClientNetwork; host: string; port: number }) =>
+    startExternalClientServer({
+      ...options,
+      clients,
+      route,
+      streams: {
+        "/v1/events": externalClientEventStream(events, clients),
+        "/mcp": externalClientMcp(route),
+      },
+      ...(options.network === "local"
+        ? { descriptorPath: externalClientDescriptorPath(environment) }
+        : {}),
+      diagnose,
+    });
+  const local = await start({ network: "local", host: "127.0.0.1", port });
+  if (!local) return undefined;
+  const paths = externalAccessPaths(environment);
+  const access = new ExternalAccessSupervisor({
+    settingsPath: paths.settings,
+    statusPath: paths.status,
+    tailscale: createTailscaleControl(environment),
+    start,
+    port: Number(new URL(local.endpoint).port),
+    diagnose,
   });
+  void access.start();
+  return {
+    endpoint: local.endpoint,
+    close: async () => {
+      await access.close();
+      await local.close();
+    },
+  };
 }
 
 /**

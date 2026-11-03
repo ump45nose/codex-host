@@ -17,6 +17,11 @@ The listener also serves GET /v1/events as server-sent events (resume with Last-
   "client access": `codexhost client access [--tailnet on|off] [--public on|off]
 Show or change whether codexhost also listens on this machine's Tailscale address (tailnet, same port as local) and through Tailscale Funnel (public HTTPS at https://<machine>.<tailnet>.ts.net/codexhost, MCP at .../codexhost/mcp). Both are off by default; only clients whose --network includes them can use them.
 Requires Tailscale to be installed and logged in; public also needs MagicDNS, HTTPS certificates and Funnel allowed for this machine. codexhost only adds and removes its own /codexhost Funnel path. A running codexhost applies changes within 30 seconds; status shows what it is actually serving and why something is unavailable.`,
+  "client webhook": `codexhost client webhook <name> [--adapter grok-bot --url <url> [--key-file <path>] | --clear true]
+Push the client's events to a bot as they happen, through a vendor adapter, so the bot is woken instead of polling. Without options, shows the webhook and its delivery state.
+The key comes from --key-file or CODEXHOST_WEBHOOK_KEY, never from the command line, and is never shown. A new webhook starts after the latest event; it does not replay history.
+grok-bot: the Grok Bot (Cursor Automations) webhook trigger URL and its key. Each request carries Idempotency-Key <client>:<event id> and a body under 4 KB with no Thread content; read results with thread read.
+Failures retry with backoff (5 s up to 15 min) for 24 hours; 400, 401 and 403 stop at once as configuration errors. The event log is unaffected either way.`,
   "client list": `codexhost client list
 List registered external clients with their registration time, scope and networks. Tokens are never shown.`,
   "client remove": `codexhost client remove <name>
@@ -93,7 +98,7 @@ export const DELEGATION_HELP = `usage:
   codexhost thread watch <thread>
   codexhost thread watches
   codexhost thread list
-  codexhost client add|list|set|remove|access
+  codexhost client add|list|set|remove|access|webhook
   codexhost events
 
 Use <command> --help for its options. Use harness list to discover targets.

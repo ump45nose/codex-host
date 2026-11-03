@@ -240,7 +240,22 @@ export async function runDelegationCli(input: {
       }
     }
     if (group === "client") {
-      rejectUnknown(parsed, ["--scope", "--network", "--tailnet", "--public"]);
+      rejectUnknown(parsed, [
+        "--scope",
+        "--network",
+        "--tailnet",
+        "--public",
+        "--adapter",
+        "--url",
+        "--key-file",
+        "--clear",
+      ]);
+      const clear = value(parsed, "--clear");
+      if (clear !== undefined && clear !== "true")
+        throw new DelegationControlError(
+          "INVALID_ARGUMENT",
+          "--clear takes no value other than true",
+        );
       writeJson(
         output,
         await runClientCommand(command, parsed.positionals, environment, {
@@ -248,6 +263,10 @@ export async function runDelegationCli(input: {
           ...(value(parsed, "--network") ? { network: value(parsed, "--network") } : {}),
           ...(value(parsed, "--tailnet") ? { tailnet: value(parsed, "--tailnet") } : {}),
           ...(value(parsed, "--public") ? { public: value(parsed, "--public") } : {}),
+          ...(value(parsed, "--adapter") ? { adapter: value(parsed, "--adapter") } : {}),
+          ...(value(parsed, "--url") ? { url: value(parsed, "--url") } : {}),
+          ...(value(parsed, "--key-file") ? { keyFile: value(parsed, "--key-file") } : {}),
+          ...(clear ? { clear: true } : {}),
         }),
       );
       return 0;

@@ -30,6 +30,8 @@ import { externalClientEventStream, externalClientRouter } from "./external-clie
 import { FileThreadRefsStore } from "./thread-refs.js";
 import { ExternalAccessSupervisor, externalAccessPaths } from "./external-client-access.js";
 import { createTailscaleControl } from "./tailscale.js";
+import { WebhookDispatcher, WebhookStore } from "./external-client-webhooks.js";
+import { webhookDirectory } from "./external-client-cli.js";
 import type { ClientNetwork } from "./external-clients.js";
 import {
   externalClientDescriptorPath,
@@ -273,9 +275,16 @@ async function startExternalClients(
     diagnose,
   });
   void access.start();
+  const webhooks = new WebhookDispatcher({
+    store: new WebhookStore(webhookDirectory(environment)),
+    events,
+    diagnose,
+  });
+  webhooks.start();
   return {
     endpoint: local.endpoint,
     close: async () => {
+      await webhooks.close();
       await access.close();
       await local.close();
     },

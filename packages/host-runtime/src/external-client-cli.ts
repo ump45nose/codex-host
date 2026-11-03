@@ -1,4 +1,9 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { DelegationControlError } from "./delegation-types.js";
+import { ClientEventLog, eventRetentionDays } from "./external-client-events.js";
+import { WebhookStore } from "./external-client-webhooks.js";
 import {
   externalAccessPaths,
   readAccessSettings,
@@ -7,6 +12,7 @@ import {
 } from "./external-client-access.js";
 import {
   ExternalClientRegistry,
+  codexhostDataDirectory,
   defaultExternalClientsPath,
   type ClientAccess,
   type ClientNetwork,
@@ -41,9 +47,14 @@ export async function runClientCommand(
     network?: string | undefined;
     tailnet?: string | undefined;
     public?: string | undefined;
+    adapter?: string | undefined;
+    url?: string | undefined;
+    keyFile?: string | undefined;
+    clear?: boolean | undefined;
   } = {},
 ): Promise<unknown> {
   if (command === "access") return runAccessCommand(positionals, environment, options);
+  if (command === "webhook") return runWebhookCommand(positionals, environment, options);
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
   const access = accessOptions(options);
   if (command === "list") {
@@ -118,5 +129,64 @@ async function runAccessCommand(
     // Written by the running Runtime; it applies changes within 30 s.
     status: (await readAccessStatus(paths.status)) ?? null,
     ...(changed ? { note: "A running codexhost applies this within 30 seconds." } : {}),
+  };
+}
+
+export const WEBHOOK_KEY_ENV = "CODEXHOST_WEBHOOK_KEY";
+
+export function webhookDirectory(environment: NodeJS.ProcessEnv): string {
+  return path.join(codexhostDataDirectory(environment), "client-webhooks");
+}
+
+/**
+ * `codexhost client webhook <name> [--adapter <id> --url <url> [--key-file <path>] | --clear]`.
+ * The key comes from a file or CODEXHOST_WEBHOOK_KEY, never from the command line.
+ */
+async function runWebhookCommand(
+  positionals: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  options: {
+    adapter?: string | undefined;
+    url?: string | undefined;
+    keyFile?: string | undefined;
+    clear?: boolean | undefined;
+  },
+): Promise<unknown> {
+  const name = positionals.length === 1 ? positionals[0] : undefined;
+  if (!name)
+    throw new DelegationControlError("INVALID_ARGUMENT", "client webhook requires one client name");
+  if (!(await new ExternalClientRegistry(defaultExternalClientsPath(environment)).has(name)))
+    throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
+  const store = new WebhookStore(webhookDirectory(environment));
+  if (options.clear) {
+    await store.clear(name);
+    return { name, webhook: null };
+  }
+  if (options.adapter || options.url) {
+    if (!options.adapter || !options.url)
+      throw new DelegationControlError(
+        "INVALID_ARGUMENT",
+        "--adapter and --url are required together",
+      );
+    const key = options.keyFile
+      ? (await readFile(options.keyFile, "utf8")).trim()
+      : (environment[WEBHOOK_KEY_ENV]?.trim() ?? "");
+    const events = new ClientEventLog({
+      directory: path.join(codexhostDataDirectory(environment), "client-events"),
+      retentionDays: eventRetentionDays(environment),
+    });
+    await store.set(
+      name,
+      { adapter: options.adapter, url: options.url, key },
+      await events.lastEventId(name),
+    );
+  }
+  const config = await store.config(name);
+  return {
+    name,
+    webhook: config
+      ? { adapter: config.adapter, url: config.url, keyConfigured: Boolean(config.key) }
+      : null,
+    ...(config ? { state: await store.state(name) } : {}),
   };
 }

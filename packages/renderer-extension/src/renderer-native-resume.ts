@@ -8,6 +8,8 @@ export function installRendererNativeResume(
   target: RendererHostRoute["manager"],
   isCurrent: () => boolean,
 ): (() => void) | null {
+  // A main-process RPC route reaches only Host requests, never Desktop's conversation store.
+  if ("kind" in target) return null;
   const original = target.resumeThread;
   const updateConversationState = target.updateConversationState;
   if (!original || !updateConversationState) return null;

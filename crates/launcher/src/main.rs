@@ -1419,9 +1419,7 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
         Some("open-loopback-url") => Err("open-loopback-url accepts no arguments".into()),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
         Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events")
-        | Some("preview") => {
-            run_delegation_cli(arguments)
-        }
+        | Some("preview") => run_delegation_cli(arguments),
         _ => {
             usage();
             Err("invalid launcher arguments".into())

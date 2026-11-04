@@ -1,0 +1,341 @@
+name: Follow upstream release
+
+# Builds Vincent's fork on every new upstream release tag:
+#   upstream vX.Y.Z + vincent/branches.txt -> vincent/release(-vX.Y.Z) -> Release vX.Y.Z-vincent.N
+# Nothing is pushed or published unless the merge, typecheck, tests and every build succeed.
+# Scheduled runs only fire from the default branch, which is vincent/release on this fork.
+# Upstream's own workflows (CI, Release packages, Repository maintenance) are disabled in
+# this fork's Actions settings; their files still merge from upstream unchanged.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build (default: newest stable upstream tag)"
+        required: false
+        type: string
+      force:
+        description: "Build a new vincent.N even if this tag already has a fork release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vincent-follow-upstream
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: vincent/release
+  FORK_REPOSITORY: ${{ github.repository }}
+
+jobs:
+  merge:
+    name: Merge upstream and test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - name: Checkout ${{ env.RELEASE_BRANCH }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_FORCE: ${{ inputs.force && '--force' || '' }}
+        run: scripts/vincent-ci.sh plan "$INPUT_TAG" $INPUT_FORCE | tee -a "$GITHUB_OUTPUT"
+
+      - name: Merge
+        id: merge
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          CONFLICT_REPORT: ${{ runner.temp }}/conflicts.md
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          git fetch --quiet origin '+refs/heads/*:refs/remotes/origin/*'
+          scripts/vincent-ci.sh merge "$TAG"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git bundle create "$RUNNER_TEMP/merged.bundle" HEAD
+
+      - name: Upload conflict report
+        if: failure() && steps.merge.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conflicts
+          path: ${{ runner.temp }}/conflicts.md
+          if-no-files-found: ignore
+
+      - name: Upload merged commits
+        if: steps.plan.outputs.skip != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: merged-bundle
+          path: ${{ runner.temp }}/merged.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Setup Node.js
+        if: steps.plan.outputs.skip != 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Setup npm
+        if: steps.plan.outputs.skip != 'true'
+        run: npm install --global npm@11.8.0
+
+      - name: Install dependencies
+        if: steps.plan.outputs.skip != 'true'
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        if: steps.plan.outputs.skip != 'true'
+        run: npm run build:typescript && npm run typecheck
+
+      - name: Test TypeScript (known flake tolerated)
+        if: steps.plan.outputs.skip != 'true'
+        run: npm run build:renderer && scripts/vincent-ci.sh test
+
+      - name: Test updater
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          RUSTUP_TOOLCHAIN: 1.97.1
+        run: cargo test --locked -p codexhost-updater
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: merge
+    if: needs.merge.outputs.skip != 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+      VERSION: ${{ needs.merge.outputs.version }}
+      SHA: ${{ needs.merge.outputs.sha }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-15
+            rustTarget: aarch64-apple-darwin
+          - target: macos-x64
+            runner: macos-15-intel
+            rustTarget: x86_64-apple-darwin
+          - target: linux-x64
+            runner: ubuntu-22.04
+            rustTarget: x86_64-unknown-linux-gnu
+    steps:
+      - name: Checkout ${{ env.RELEASE_BRANCH }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download merged commits
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: merged-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Checkout merged commit
+        run: |
+          git fetch --quiet "$RUNNER_TEMP/bundle/merged.bundle" HEAD
+          git checkout --quiet --detach "$SHA"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Setup npm
+        run: npm install --global npm@11.8.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.rustTarget }}
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build macOS npm package
+        if: runner.os == 'macOS'
+        run: npm run release:npm -- --target ${{ matrix.target }} --version "$VERSION" --pack
+
+      - name: Setup cargo-zigbuild
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zigbuild"
+          "$RUNNER_TEMP/zigbuild/bin/python" -m pip install --disable-pip-version-check \
+            --require-hashes --only-binary :all: -r scripts/release/linux-zigbuild-requirements.txt
+          echo "$RUNNER_TEMP/zigbuild/bin" >> "$GITHUB_PATH"
+
+      - name: Build and smoke-test Linux npm package
+        if: runner.os == 'Linux'
+        run: |
+          npm run build:typescript
+          node scripts/release/smoke-npm-package.mjs --target ${{ matrix.target }} --version "$VERSION"
+
+      - name: Build npm meta package
+        if: runner.os == 'Linux'
+        run: >
+          npm run release:npm:meta -- --version "$VERSION" --pack
+          --platform-base-url "https://github.com/${FORK_REPOSITORY}/releases/download/v${VERSION}"
+          --platform-targets macos-arm64,macos-x64,linux-x64
+
+      - name: Upload packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: |
+            build/npm/${{ env.VERSION }}/${{ matrix.target }}/codexhost-cli-*-${{ matrix.target }}.tgz
+            build/npm/${{ env.VERSION }}/meta/codexhost-cli-${{ env.VERSION }}.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Push branches and publish release
+    needs: [merge, build]
+    if: needs.merge.outputs.skip != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.merge.outputs.tag }}
+      VERSION: ${{ needs.merge.outputs.version }}
+      SHA: ${{ needs.merge.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # GITHUB_TOKEN cannot push commits that change .github/workflows. When an upstream
+      # release edits its workflows, add a repository secret VINCENT_PUSH_TOKEN (contents +
+      # workflows write on this fork) or push vincent/release-<tag> from a Mac and rerun.
+      - name: Checkout ${{ env.RELEASE_BRANCH }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.RELEASE_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.VINCENT_PUSH_TOKEN || github.token }}
+
+      - name: Download merged commits and packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Assemble release assets
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          find "$RUNNER_TEMP/artifacts" -name 'codexhost-cli-*.tgz' -exec cp {} "$RUNNER_TEMP/release/" \;
+          cd "$RUNNER_TEMP/release"
+          for target in macos-arm64 macos-x64 linux-x64; do
+            test -f "codexhost-cli-$VERSION-$target.tgz" || { echo "missing $target package" >&2; exit 1; }
+          done
+          test -f "codexhost-cli-$VERSION.tgz"
+          # Stable name for releases/latest/download/codexhost-cli.tgz.
+          cp "codexhost-cli-$VERSION.tgz" codexhost-cli.tgz
+          sha256sum *.tgz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Push vincent/release and vincent/release-${{ env.TAG }} (no force)
+        run: |
+          git fetch --quiet "$RUNNER_TEMP/artifacts/merged-bundle/merged.bundle" HEAD
+          git cat-file -e "$SHA^{commit}"
+          # Plain pushes only: a non-fast-forward rejection means someone pushed meanwhile.
+          git push origin "$SHA:refs/heads/$RELEASE_BRANCH"
+          git push origin "$SHA:refs/heads/vincent/release-$TAG"
+
+      - name: Publish GitHub Release v${{ env.VERSION }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          Vincent's CodexHost build of upstream [$TAG](https://github.com/BytePioneer-AI/codex-host/releases/tag/$TAG)
+          plus the branches in \`vincent/branches.txt\` (commit $SHA, branch \`vincent/release-$TAG\`).
+
+          Install or update (macOS arm64/x64, Linux x64):
+
+          \`\`\`bash
+          npm install -g https://github.com/${FORK_REPOSITORY}/releases/download/v$VERSION/codexhost-cli-$VERSION.tgz
+          \`\`\`
+
+          Installed fork builds check this repository's latest release for updates
+          (override with \`CODEXHOST_UPDATE_REPOSITORY=owner/repo\`).
+          NOTES
+          gh release create "v$VERSION" "$RUNNER_TEMP"/release/* \
+            --repo "$FORK_REPOSITORY" --target "$SHA" \
+            --title "CodexHost $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          echo "Published https://github.com/$FORK_REPOSITORY/releases/tag/v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+  report-failure:
+    name: Open issue on failure
+    needs: [merge, build, publish]
+    if: failure()
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download conflict report
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: conflicts
+          path: ${{ runner.temp }}
+
+      - name: Open or update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.merge.outputs.tag }}
+          MERGE: ${{ needs.merge.result }}
+          BUILD: ${{ needs.build.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Follow upstream failed for ${TAG:-the latest upstream tag}"
+          {
+            echo "Run: $RUN_URL"
+            echo
+            echo "- merge + tests: $MERGE"
+            echo "- builds: $BUILD"
+            echo "- push + release: $PUBLISH"
+            echo
+            if [[ "$PUBLISH" == "failure" ]]; then
+              echo "The push or release step failed; check the run (a partial push or release may need cleanup)."
+            else
+              echo "Nothing was pushed or published for this tag."
+            fi
+            echo
+            if [[ -s "$RUNNER_TEMP/conflicts.md" ]]; then
+              cat "$RUNNER_TEMP/conflicts.md"
+              echo
+              echo "Resolve with \`scripts/vincent-release.sh build --tag $TAG\`, push \`vincent/release-$TAG\`, then rerun this workflow."
+            fi
+          } > "$RUNNER_TEMP/body.md"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi

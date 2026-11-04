@@ -253,8 +253,10 @@ deploy_local() {
   installed="$(node -p "require('$app/codexhost-distribution.json').version" 2>/dev/null ||
     node -p "require('$app/../package.json').version" 2>/dev/null || echo unknown)"
   want="${TAG#v}"
-  if [[ "$installed" != "$want" ]] && ! $ALLOW_MISMATCH; then
-    die "installed CodexHost is $installed but artifacts are for $want. Run 'npm install -g @codexhost/cli@$want' first (native launcher/shim must match), or pass --allow-version-mismatch"
+  # A fork release build (X.Y.Z-vincent.N from the GitHub Release) has the same native
+  # launcher/shim as upstream X.Y.Z, so it is a valid base for X.Y.Z artifacts too.
+  if [[ "$installed" != "$want" && ! "$installed" =~ ^${want//./\\.}-vincent\.[0-9]+$ ]] && ! $ALLOW_MISMATCH; then
+    die "installed CodexHost is $installed but artifacts are for $want. Install the fork release first: 'npm install -g https://github.com/ump45nose/codex-host/releases/latest/download/codexhost-cli.tgz' (or 'npm install -g @codexhost/cli@$want'), or pass --allow-version-mismatch"
   fi
   [[ -w "$app" ]] || read -r -a run <<<"$CH_SUDO"
   ts="$(date +%Y%m%d-%H%M%S)"; backup="$HOME/.codexhost-backups/vincent-$TAG-$ts"

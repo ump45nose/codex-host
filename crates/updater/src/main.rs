@@ -2,6 +2,7 @@
 
 mod install;
 mod prepare_install;
+mod release_channel;
 mod remote;
 mod request;
 mod ssh;

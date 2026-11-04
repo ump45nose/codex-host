@@ -74,6 +74,40 @@ describe("console updates", () => {
     });
   });
 
+  it("offers a fork channel build to npm installs only when its tarballs are attached", async () => {
+    const { target, environment } = await npmLayout();
+    const version = "1.0.0-vincent.1";
+    const base = `https://github.com/ump45nose/codex-host/releases/download/v${version}`;
+    const tarball = (name: string) => ({
+      name,
+      size: 1024,
+      digest: null,
+      downloadUrl: `${base}/${name}`,
+    });
+    const channelRelease = {
+      version,
+      releaseNotes: null,
+      releaseNotesUrl: `https://github.com/ump45nose/codex-host/releases/tag/v${version}`,
+      assets: [tarball(`codexhost-cli-${version}.tgz`)],
+    };
+    const check = (assets: ReturnType<typeof tarball>[]) =>
+      createConsoleUpdates({
+        onHandedOff: vi.fn(),
+        environment,
+        stateDirectory: path.join(root, "state"),
+        fetchLatest: async () => ({ ...channelRelease, assets }),
+      }).check(target);
+    await expect(check(channelRelease.assets)).resolves.toMatchObject({
+      currentVersion: "1.0.0",
+      latestVersion: version,
+      updateAvailable: true,
+      installationAvailable: false,
+    });
+    await expect(
+      check([...channelRelease.assets, tarball(`codexhost-cli-${version}-linux-x64.tgz`)]),
+    ).resolves.toMatchObject({ updateAvailable: true, installationAvailable: true });
+  });
+
   it.each(["failed", "succeeded", "prepared"])(
     "does not display historical %s state",
     async (phase) => {

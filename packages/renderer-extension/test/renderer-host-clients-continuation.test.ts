@@ -102,7 +102,8 @@ function fixture(inheritedResume = false) {
   return {
     clients,
     client,
-    manager: route.manager,
+    // The fixture is a Desktop request manager, not a main-process RPC route.
+    manager: route.manager as Exclude<RendererHostRoute["manager"], { kind: "main-process-rpc" }>,
     managerPrototype,
     resumeThread,
     sendRequest,

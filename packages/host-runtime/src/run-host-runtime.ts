@@ -5,6 +5,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { createLocalPageOpener } from "@codexhost/desktop-control";
 import { UPDATE_RUNTIME_ENV } from "@codexhost/update-manager";
 
 import { AppServerHost, officialEnvironment } from "./app-server-host.js";
@@ -34,6 +35,8 @@ import {
   startExternalClientServer,
   type ExternalClientServer,
 } from "./external-client-server.js";
+import { createLauncherUrlOpener } from "./launcher-url-opener.js";
+import { LocalPreviewManager } from "./local-preview.js";
 import { installDelegationSkills } from "./delegation-skill.js";
 import { HarnessUserInstructionsStore } from "./harness-user-instructions.js";
 import type { DelegationControlRegistration } from "./delegation-types.js";
@@ -165,6 +168,8 @@ async function prepareDelegationRuntime(input: {
   hostRuntimePath?: string;
   /** Only the local Runtime serves external clients; a managed remote Host does not. */
   externalClients?: boolean;
+  /** Only the local Runtime can show pages in Codex Desktop. */
+  preview?: LocalPreviewManager;
   createHost(
     environment: NodeJS.ProcessEnv,
     onDelegationApi: (api: DelegationControlRegistration) => (() => void) | undefined,
@@ -192,7 +197,12 @@ async function prepareDelegationRuntime(input: {
     clientEvents: events,
   });
   const token = randomBytes(32).toString("hex");
-  const server = await startDelegationControlServer({ token, api: registry, watchApi: registry });
+  const server = await startDelegationControlServer({
+    token,
+    api: registry,
+    watchApi: registry,
+    ...(input.preview ? { preview: input.preview } : {}),
+  });
   const externalServer = input.externalClients
     ? await startExternalClients(input.environment, registry, events).then(
         (started) => {
@@ -233,6 +243,7 @@ async function prepareDelegationRuntime(input: {
   } finally {
     registry.close();
     await externalServer?.close();
+    await input.preview?.closeAll();
     await server.close();
   }
 }
@@ -341,10 +352,18 @@ export async function runHostRuntime(input: {
       ...(hostRuntimePath ? { hostRuntimePath } : {}),
     });
     const environment = remoteControlPlan?.environment ?? input.environment;
+    const pageOpener = createLocalPageOpener(environment);
+    const browserOpener = createLauncherUrlOpener(environment);
+    const preview = new LocalPreviewManager({
+      ...(pageOpener ? { page: pageOpener } : {}),
+      ...(browserOpener ? { browser: browserOpener } : {}),
+    });
+    const onThreadArchived = (threadId: string) => void preview.closeThread(threadId);
     return prepareDelegationRuntime({
       environment,
       ...(hostRuntimePath ? { hostRuntimePath } : {}),
       externalClients: true,
+      preview,
       createHost: async (delegationEnvironment, onDelegationApi, registry) => {
         const official = await prepareLocalCodex({
           stockCodexPath,
@@ -378,6 +397,7 @@ export async function runHostRuntime(input: {
               ...shared,
               ...installedHarnessPluginOptions(delegationEnvironment, false, input.hostRuntimeUrl),
               onDelegationApi,
+              onThreadArchived,
               ...(updateCoordinator ? { updateCoordinator } : {}),
               ...(consoleOpener ? { consoleOpener } : {}),
             });
@@ -412,6 +432,7 @@ export async function runHostRuntime(input: {
             arguments: input.arguments,
             // Every Remote Control client shares this backend and Mapping Store.
             onDelegationApi: (api) => registry.register(api, { harnessCatalog: true }),
+            onThreadArchived,
           });
           listener = createRemoteAppServerWebSocketListener({
             socketPath: remoteControlPlan.pipePath,
@@ -427,6 +448,7 @@ export async function runHostRuntime(input: {
                 desktopOutput,
                 diagnosticOutput,
                 onDelegationApi: (api) => registry.register(api),
+                onThreadArchived,
               }),
           });
           await listener.listen();

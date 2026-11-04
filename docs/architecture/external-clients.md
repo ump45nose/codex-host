@@ -66,10 +66,12 @@
 
 - 每个客户端有权限范围 `read`（读取、列举、等待、watch 列表、事件）或 `dispatch`（另含委派、发送、取消、注册 watch），以及允许的网络 `local`、`tailnet`、`public`。没有这两个字段的旧登记视为 `dispatch` + `local`。`client add|set --scope --network` 修改，下一次请求生效。
 - 请求的网络由它到达的监听决定，不看请求内容。不允许的网络返回与未知令牌相同的 `UNAUTHORIZED`；`read` 客户端调用派发路由返回 `FORBIDDEN`（HTTP 403，MCP 中为工具错误）。事件流在心跳时检查网络，收窄后关闭。
+- 客户端通过校验的请求会记录最近访问网络与时间（`lastAccess`，按 5 秒节流写入 `external-clients.json`），供 `client list` 与控制台展示。
 
 ## tailnet 与公网
 
-- `client access --tailnet on|off --public on|off` 写入 `<数据目录>/external-client-access.json`，两者默认关闭。运行中的 Runtime 每 30 秒按它和 Tailscale 状态调整监听，并把实际状态写入 `external-client-access-status.json`，`client access` 会一起显示。
+- `client access --tailnet on|off --public on|off` 或控制台外部客户端页面写入 `<数据目录>/external-client-access.json`，两者默认关闭。运行中的 Runtime 每 30 秒按它和 Tailscale 状态调整监听，并把实际状态写入 `external-client-access-status.json`，`client access` 与控制台外部客户端页面会一起显示。
+- 控制台外部客户端页面（`/api/external-clients`、`/api/external-clients/access`）直接读写数据目录中的状态与登记文件，展示本机、tailnet、公网监听状态与 Funnel MCP URL、开关、已登记客户端的权限/网络范围、最近访问及 webhook 投递状态，不返回任何令牌或密钥，且在 Desktop 未运行时同样可用。
 - tailnet：在本机 Tailscale IPv4 地址上使用与本机监听相同的端口；地址变化时重新绑定，Tailscale 不可用时报告原因。
 - 公网：一个独立的 loopback 端口，只由 Tailscale Funnel 的 `/codexhost` 路径转发过来，因此公网请求不可能被当作本机请求。Funnel 会剥离前缀，后端收到 `/mcp`、`/v1/...`。公网 MCP 地址是 `https://<机器>.<tailnet>.ts.net/codexhost/mcp`。codexhost 只添加和删除自己的路径，路径已指向非 loopback 目标时报告不可用而不替换；关闭公网后，或新 Runtime 发现上次留下的映射时删除它。
 - Tailscale 通过其 CLI 操作（macOS 上也查找 `Tailscale.app` 内的 CLI，可用 `CODEXHOST_TAILSCALE` 指定）；两个开关都关闭时 Runtime 不调用它。

@@ -21,10 +21,16 @@ export interface ClientAccess {
 /** Clients registered before scopes existed keep what they could do then. */
 const DEFAULT_ACCESS: ClientAccess = { scope: "dispatch", networks: ["local"] };
 
+export interface ClientLastAccess {
+  network: ClientNetwork;
+  at: string;
+}
+
 /** A named process outside the Host that may call the delegation API with its own token. */
 export interface ExternalClient extends ClientAccess {
   name: string;
   createdAt: string;
+  lastAccess?: ClientLastAccess;
 }
 
 export interface AuthenticatedClient extends ClientAccess {
@@ -37,6 +43,7 @@ interface StoredClient extends Partial<ClientAccess> {
   salt: string;
   /** sha256(salt + token), hex. Tokens are 32 random bytes, so a fast hash is sufficient. */
   tokenHash: string;
+  lastAccess?: ClientLastAccess;
 }
 
 interface ClientsFile {
@@ -71,6 +78,18 @@ function sameHash(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const LAST_ACCESS_THROTTLE_MS = 5_000;
+
+function isValidLastAccess(value: unknown): value is ClientLastAccess {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Partial<ClientLastAccess>;
+  return (
+    typeof candidate.network === "string" &&
+    CLIENT_NETWORKS.includes(candidate.network) &&
+    typeof candidate.at === "string"
+  );
+}
+
 function parseClientsFile(text: string): ClientsFile {
   const value = JSON.parse(text) as Partial<ClientsFile> | null;
   if (value?.formatVersion !== 1 || !Array.isArray(value.clients))
@@ -85,7 +104,8 @@ function parseClientsFile(text: string): ClientsFile {
       (client.scope !== undefined && !CLIENT_SCOPES.includes(client.scope)) ||
       (client.networks !== undefined &&
         (!Array.isArray(client.networks) ||
-          client.networks.some((network) => !CLIENT_NETWORKS.includes(network))))
+          client.networks.some((network) => !CLIENT_NETWORKS.includes(network)))) ||
+      (client.lastAccess !== undefined && !isValidLastAccess(client.lastAccess))
     )
       throw new Error("unrecognized external client registry entry");
   }
@@ -100,6 +120,7 @@ function parseClientsFile(text: string): ClientsFile {
 export class ExternalClientRegistry {
   readonly #filePath: string;
   #cache: { mtimeMs: number; size: number; clients: StoredClient[] } | undefined;
+  readonly #lastRecorded = new Map<string, { network: ClientNetwork; atMs: number }>();
 
   constructor(filePath: string) {
     this.#filePath = filePath;
@@ -172,6 +193,22 @@ export class ExternalClientRegistry {
     return !!client && (network === undefined || accessOf(client).networks.includes(network));
   }
 
+  /** Records when and on which listener a client last made an allowed request. */
+  async recordAccess(name: string, network: ClientNetwork, now: Date = new Date()): Promise<void> {
+    const previous = this.#lastRecorded.get(name);
+    if (previous?.network === network && now.getTime() - previous.atMs < LAST_ACCESS_THROTTLE_MS) {
+      return;
+    }
+    const clients = await this.#read();
+    const current = clients.find((client) => client.name === name);
+    if (!current) return;
+    this.#lastRecorded.set(name, { network, atMs: now.getTime() });
+    const lastAccess: ClientLastAccess = { network, at: now.toISOString() };
+    await this.#write(
+      clients.map((client) => (client.name === name ? { ...client, lastAccess } : client)),
+    );
+  }
+
   async #current(): Promise<StoredClient[]> {
     let info: { mtimeMs: number; size: number };
     try {
@@ -218,7 +255,12 @@ function accessOf(client: StoredClient): ClientAccess {
 }
 
 function publicClient(client: StoredClient): ExternalClient {
-  return { name: client.name, createdAt: client.createdAt, ...accessOf(client) };
+  return {
+    name: client.name,
+    createdAt: client.createdAt,
+    ...accessOf(client),
+    ...(client.lastAccess ? { lastAccess: client.lastAccess } : {}),
+  };
 }
 
 function normalizeAccess(access: ClientAccess): ClientAccess {

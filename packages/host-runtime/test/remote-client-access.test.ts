@@ -138,6 +138,14 @@ describe("client scopes and networks", () => {
 
     await registry.setAccess("bot", { networks: ["local", "tailnet"] });
     expect((await post("/v1/harness/list")).status).toBe(200);
+    await expect(registry.list()).resolves.toMatchObject([
+      {
+        name: "bot",
+        scope: "read",
+        networks: ["local", "tailnet"],
+        lastAccess: { network: "tailnet", at: expect.any(String) },
+      },
+    ]);
     const forbidden = await post("/v1/delegate/start");
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ error: { code: "FORBIDDEN" } });

@@ -134,6 +134,7 @@ export async function startExternalClientServer(input: {
         unauthorized(response);
         return;
       }
+      await input.clients.recordAccess(client.name, network).catch(() => undefined);
       const call = { client: client.name, scope: client.scope, network, request, response };
       const stream = input.streams?.[url.pathname];
       if (stream) {

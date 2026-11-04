@@ -27,12 +27,11 @@
 
 ## 实施记录（2026-11-04）
 
-- 1.1、2.1、2.2、4.1、4.2 已实现并有单元测试；开关通过 `codexhost client access` 设置，状态写入状态文件并由该命令显示。
+- 1.1、2.1、2.2、4.1、4.2、5.1 已实现并有单元测试；开关可通过 `codexhost client access` 或控制台外部客户端页设置，状态写入状态文件并由两者显示。
 - 2.1、2.2 的真实 tailnet 与 Funnel 验证、4.2 的真实 Grok Bot 推送，在 Mac 上验收。
 - 3.1（OAuth 与 `client pair`）尚未实现：Grok Bot 已可用静态 Bearer 接入，OAuth 留给只支持 OAuth 的 connector。
-- 5.1 的控制台页面尚未实现，暂由 `client access` 与 `client webhook` 的输出代替。
 
 ## 5. 控制台、文档与端到端验收
 
-- [ ] 5.1 控制台显示各入口状态、公网 URL、客户端范围、最近访问和 webhook 投递状态，并提供开关。验证：控制台测试与真实界面截图。
+- [x] 5.1 控制台显示各入口状态、公网 URL、客户端范围、最近访问和 webhook 投递状态，并提供开关。验证：控制台测试与真实界面截图。
 - [ ] 5.2 文档：tailnet、公网、OAuth 配对与 Grok Bot 接入步骤。端到端验收：在手机上向 Grok Bot 下达一个小任务，它经公网 MCP 派发到本机 Codex Thread；Thread 完成后 webhook 唤醒 bot，bot 读取结果并回复。记录平台与版本。

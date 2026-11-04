@@ -1,0 +1,15 @@
+# Feature branches merged onto each upstream release by scripts/vincent-release.sh.
+# Format: <fork branch>   # upstream PR / note
+# Order matters: later branches are merged after earlier ones. Lines starting with '#' are ignored.
+# Drop a line once upstream has merged that PR (the script also skips branches already contained in the base).
+fix/renderer-inspector-script-cache          # local: bound V8 inspector script cache (memory leak); no PR yet
+fix/antigravity-recovered-native-error       # PR #737
+fix/antigravity-thinking-projection          # PR #739
+feat/external-cli-codex-user-instructions    # PR #741
+feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
+feat/external-client-access                  # PR #727 (contains PR #726 persist watches)
+feat/local-design-preview                    # PR #728 (contains PR #725 openspec docs)
+fix/remote-ssh-share-local-data              # PR #584
+fix/cursor-side-chat-edit                    # PR #576
+fix/independent-native-provider-quota        # PR #470
+fix/macos-nested-codex-cli                   # PR #396

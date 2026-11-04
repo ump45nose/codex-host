@@ -11,6 +11,10 @@ import {
   writeAccessSettings,
 } from "./external-client-access.js";
 import {
+  ExternalClientOAuthStore,
+  defaultExternalClientOAuthPath,
+} from "./external-client-oauth.js";
+import {
   ExternalClientRegistry,
   codexhostDataDirectory,
   defaultExternalClientsPath,
@@ -65,16 +69,34 @@ export async function runClientCommand(
       );
     return { clients: await clients.list() };
   }
-  if (command === "add" || command === "remove" || command === "set") {
+  if (command === "add" || command === "remove" || command === "set" || command === "pair") {
     const name = positionals.length === 1 ? positionals[0] : undefined;
     if (!name)
       throw new DelegationControlError(
         "INVALID_ARGUMENT",
         `client ${command} requires one client name`,
       );
+    const oauth = new ExternalClientOAuthStore(defaultExternalClientOAuthPath(environment));
     if (command === "remove") {
       await clients.remove(name);
+      await oauth.revokeClient(name);
       return { name, removed: true };
+    }
+    if (command === "pair") {
+      const existing = (await clients.list()).find((client) => client.name === name);
+      if (!existing)
+        throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
+      const pairing = await oauth.createPairingCode(name);
+      return {
+        name: pairing.client,
+        code: pairing.code,
+        expiresAt: pairing.expiresAt,
+        note: existing.networks.includes("public")
+          ? "Enter this one-time pairing code on the public OAuth authorization page within 10 minutes."
+          : "Enter this one-time pairing code on the public OAuth authorization page within 10 minutes. Note: allow 'public' network for this client with 'codexhost client set " +
+            name +
+            " --network local,public' before using the public MCP endpoint.",
+      };
     }
     if (command === "set") {
       if (Object.keys(access).length === 0)

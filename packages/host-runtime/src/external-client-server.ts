@@ -7,6 +7,12 @@ import path from "node:path";
 import { errorBody, jsonBody, writeJson } from "./delegation-control-server.js";
 import { DelegationControlError, EXTERNAL_CLIENT_PORT_ENV } from "./delegation-types.js";
 import {
+  handlePublicOAuthRoute,
+  resolvePublicBaseUrl,
+  stripPublicPrefix,
+  type ExternalClientOAuthStore,
+} from "./external-client-oauth.js";
+import {
   bearerToken,
   codexhostDataDirectory,
   type ClientNetwork,
@@ -92,7 +98,10 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function unauthorized(response: ServerResponse): void {
+function unauthorized(response: ServerResponse, resourceMetadataUrl?: string): void {
+  if (resourceMetadataUrl) {
+    response.setHeader("www-authenticate", `Bearer resource_metadata="${resourceMetadataUrl}"`);
+  }
   // The same answer for a missing, unknown, or revoked token, so it reveals no client names.
   writeJson(response, 401, {
     error: { code: "UNAUTHORIZED", message: "Client token is missing or invalid" },
@@ -122,21 +131,46 @@ export async function startExternalClientServer(input: {
   network?: ClientNetwork;
   /** Address to bind; loopback unless this is the tailnet listener. */
   host?: string;
+  /** OAuth 2.1 store enabled only on the public listener. */
+  oauth?: ExternalClientOAuthStore;
+  /** Public base URL (e.g. https://<machine>.<tailnet>.ts.net/codexhost) for OAuth metadata. */
+  publicBaseUrl?: () => string | undefined;
   diagnose?: (message: string) => void;
 }): Promise<ExternalClientServer | undefined> {
   const network = input.network ?? "local";
   const host = input.host ?? "127.0.0.1";
+  const oauth = network === "public" ? input.oauth : undefined;
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const client = await input.clients.authenticate(bearerToken(request.headers.authorization));
+      if (
+        oauth &&
+        (await handlePublicOAuthRoute({
+          request,
+          response,
+          url,
+          oauth,
+          clients: input.clients,
+          ...(input.publicBaseUrl ? { publicBaseUrl: input.publicBaseUrl } : {}),
+        }))
+      ) {
+        return;
+      }
+      const pathname = network === "public" ? stripPublicPrefix(url.pathname) : url.pathname;
+      const token = bearerToken(request.headers.authorization);
+      const client =
+        (await input.clients.authenticate(token)) ??
+        (oauth ? await oauth.authenticateAccessToken(token, input.clients) : undefined);
       if (!client?.networks.includes(network)) {
-        unauthorized(response);
+        const resourceMetadataUrl = oauth
+          ? `${resolvePublicBaseUrl(request, input.publicBaseUrl)}/.well-known/oauth-protected-resource`
+          : undefined;
+        unauthorized(response, resourceMetadataUrl);
         return;
       }
       await input.clients.recordAccess(client.name, network).catch(() => undefined);
       const call = { client: client.name, scope: client.scope, network, request, response };
-      const stream = input.streams?.[url.pathname];
+      const stream = input.streams?.[pathname];
       if (stream) {
         await stream(call, url);
         return;
@@ -148,7 +182,7 @@ export async function startExternalClientServer(input: {
         return;
       }
       const body = await jsonBody(request);
-      writeJson(response, 200, await input.route(call, url.pathname, body));
+      writeJson(response, 200, await input.route(call, pathname, body));
     })().catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();

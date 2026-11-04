@@ -9,6 +9,9 @@ Names use lowercase letters, digits and hyphens.
 --network lists where the client may connect from: local (127.0.0.1, default), tailnet (this machine's Tailscale address), public (the Tailscale Funnel URL). Turn the tailnet and public listeners on with codexhost client access.`,
   "client set": `codexhost client set <name> [--scope read|dispatch] [--network local,tailnet,public]
 Change a client's scope or networks. Takes effect on its next request; event streams on networks it may no longer use are closed.`,
+  "client pair": `codexhost client pair <name>
+Generate a one-time pairing code (valid for 10 minutes) for authorizing a hosted MCP connector over OAuth 2.1 + PKCE on the public listener.
+The code can be used once and is invalidated after 5 failed attempts. Issued access and refresh tokens are bound to the client and revoked when the client is removed.`,
   events: `codexhost events [--after <id>] [--limit <n>] [--follow true|false]
 For external clients: read the client's event log. Without --after, every retained event is returned, oldest first; keep the cursor to read only new ones. An event reports that a Thread the client watches stopped (outcome, Thread, Turn, Harness, deep link, references); it never carries Thread content, so read the Thread for results.
 Without --follow, prints {events, cursor} once; pass cursor back as --after. With --follow true, prints one JSON line per event until interrupted.
@@ -98,7 +101,7 @@ export const DELEGATION_HELP = `usage:
   codexhost thread watch <thread>
   codexhost thread watches
   codexhost thread list
-  codexhost client add|list|set|remove|access|webhook
+  codexhost client add|list|set|pair|remove|access|webhook
   codexhost events
 
 Use <command> --help for its options. Use harness list to discover targets.

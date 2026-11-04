@@ -80,6 +80,7 @@ type StartListener = (options: {
   network: ClientNetwork;
   host: string;
   port: number;
+  publicBaseUrl?: () => string | undefined;
 }) => Promise<ExternalClientServer | undefined>;
 
 /**
@@ -97,6 +98,7 @@ export class ExternalAccessSupervisor {
   readonly #diagnose: (message: string) => void;
   #tailnet: { server: ExternalClientServer; address: string } | undefined;
   #public: ExternalClientServer | undefined;
+  #publicBaseUrl: string | undefined;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #running: Promise<void> = Promise.resolve();
   #closed = false;
@@ -203,11 +205,19 @@ export class ExternalAccessSupervisor {
       }
       await this.#public?.close();
       this.#public = undefined;
+      this.#publicBaseUrl = undefined;
       return { state: "off" };
     }
     if (!tailscale?.running || !tailscale.dnsName)
       return { state: "unavailable", reason: tailscale?.reason ?? "Tailscale has no DNS name" };
-    this.#public ??= await this.#start({ network: "public", host: "127.0.0.1", port: 0 });
+    const base = `https://${tailscale.dnsName}${FUNNEL_PATH}`;
+    this.#publicBaseUrl = base;
+    this.#public ??= await this.#start({
+      network: "public",
+      host: "127.0.0.1",
+      port: 0,
+      publicBaseUrl: () => this.#publicBaseUrl,
+    });
     if (!this.#public) return { state: "unavailable", reason: "The public listener did not start" };
     const target = this.#public.endpoint;
     try {
@@ -228,7 +238,6 @@ export class ExternalAccessSupervisor {
         reason: error instanceof Error ? error.message : String(error),
       };
     }
-    const base = `https://${tailscale.dnsName}${FUNNEL_PATH}`;
     return { state: "on", endpoint: base, mcpUrl: `${base}/mcp` };
   }
 

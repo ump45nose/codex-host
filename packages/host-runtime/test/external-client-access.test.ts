@@ -162,10 +162,10 @@ describe("external access supervisor", () => {
       network: "tailnet",
     });
 
-    tailscale.address = "127.0.0.2";
+    tailscale.address = "::1";
     await supervisor?.reconcile();
     const second = (await readAccessStatus(statusPath()))?.tailnet;
-    expect(second?.endpoint).toMatch(/^http:\/\/127\.0\.0\.2:/u);
+    expect(second?.endpoint).toMatch(/^http:\/\/\[::1\]:/u);
     await expect(call(first?.endpoint ?? "")).rejects.toThrow();
 
     tailscale.address = undefined;

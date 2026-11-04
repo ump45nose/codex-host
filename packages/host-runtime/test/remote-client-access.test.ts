@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDelegationCli } from "../src/delegation-cli.js";
 import type { DelegationControlApi } from "../src/delegation-types.js";
+import {
+  ExternalClientOAuthStore,
+  PAIRING_CODE_TTL_MS,
+  defaultExternalClientOAuthPath,
+} from "../src/external-client-oauth.js";
 import { externalClientRouter } from "../src/external-client-routes.js";
 import {
   startExternalClientServer,
@@ -149,5 +155,232 @@ describe("client scopes and networks", () => {
     const forbidden = await post("/v1/delegate/start");
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ error: { code: "FORBIDDEN" } });
+  });
+
+  it("pairs over OAuth 2.1 + PKCE on the public listener, enforces pairing code limits, and revokes tokens on client removal", async () => {
+    const environment = { CODEXHOST_DATA_DIR: directory };
+    const run = async (arguments_: string[]) => {
+      const output = new PassThrough();
+      const diagnosticOutput = new PassThrough();
+      const code = await runDelegationCli({
+        arguments: arguments_,
+        environment,
+        output,
+        diagnosticOutput,
+      });
+      return { code, body: JSON.parse(String((code === 0 ? output : diagnosticOutput).read())) };
+    };
+
+    const registry = new ExternalClientRegistry(file);
+    await registry.add("secret-bot", { scope: "read", networks: ["local", "public"] });
+    await registry.add("other-hidden-client", { scope: "dispatch", networks: ["local"] });
+
+    let clockMs = Date.parse("2026-11-04T10:00:00Z");
+    const oauth = new ExternalClientOAuthStore(
+      defaultExternalClientOAuthPath(environment),
+      () => new Date(clockMs),
+    );
+    const server = await startExternalClientServer({
+      port: 0,
+      clients: registry,
+      oauth,
+      network: "public",
+      route: externalClientRouter({
+        api: { listHarnesses: async () => ({ harnesses: [{ id: "codex" }] }) } as never,
+      }),
+    });
+    if (!server) throw new Error("public listener did not start");
+    servers.push(server);
+
+    // 1. Unauthenticated request advertises protected resource metadata
+    const unauth = await fetch(new URL("/v1/harness/list", server.endpoint), {
+      method: "POST",
+      body: "{}",
+    });
+    expect(unauth.status).toBe(401);
+    expect(unauth.headers.get("www-authenticate")).toContain(
+      `${server.endpoint}/.well-known/oauth-protected-resource`,
+    );
+
+    // 2. Discovery metadata & dynamic client registration
+    const prm = (await (
+      await fetch(new URL("/.well-known/oauth-protected-resource", server.endpoint))
+    ).json()) as { resource: string; authorization_servers: string[] };
+    expect(prm).toMatchObject({
+      resource: `${server.endpoint}/mcp`,
+      authorization_servers: [server.endpoint],
+    });
+    const asm = (await (
+      await fetch(new URL("/.well-known/oauth-authorization-server", server.endpoint))
+    ).json()) as {
+      authorization_endpoint: string;
+      token_endpoint: string;
+      registration_endpoint: string;
+    };
+    expect(asm).toMatchObject({
+      authorization_endpoint: `${server.endpoint}/oauth/authorize`,
+      token_endpoint: `${server.endpoint}/oauth/token`,
+      registration_endpoint: `${server.endpoint}/oauth/register`,
+    });
+
+    const redirectUri = "http://127.0.0.1:6274/oauth/callback";
+    const regResponse = await fetch(new URL("/oauth/register", server.endpoint), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ redirect_uris: [redirectUri], client_name: "MCP Inspector" }),
+    });
+    expect(regResponse.status).toBe(201);
+    const registeredClient = (await regResponse.json()) as { client_id: string };
+    expect(registeredClient.client_id).toMatch(/^dyn_/u);
+
+    // 3. Authorization page does not leak any client names, threads, or workspaces
+    const verifier = "verifier-secret-value-for-pkce-s256-check-123456";
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const authUrl = new URL("/oauth/authorize", server.endpoint);
+    authUrl.searchParams.set("client_id", registeredClient.client_id);
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("state", "xyz-state");
+    authUrl.searchParams.set("code_challenge", challenge);
+    authUrl.searchParams.set("code_challenge_method", "S256");
+
+    const pageRes = await fetch(authUrl);
+    expect(pageRes.status).toBe(200);
+    const pageHtml = await pageRes.text();
+    expect(pageHtml).toContain("pairing_code");
+    expect(pageHtml).not.toContain("secret-bot");
+    expect(pageHtml).not.toContain("other-hidden-client");
+
+    // 4. Pairing code expires after 10 minutes
+    const expiredPair = await oauth.createPairingCode("secret-bot", new Date(clockMs));
+    clockMs += PAIRING_CODE_TTL_MS + 1_000;
+    const submitPairing = (pairingCode: string) =>
+      fetch(new URL("/oauth/authorize", server.endpoint), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        redirect: "manual",
+        body: new URLSearchParams({
+          client_id: registeredClient.client_id,
+          redirect_uri: redirectUri,
+          response_type: "code",
+          state: "xyz-state",
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          pairing_code: pairingCode,
+        }),
+      });
+    expect((await submitPairing(expiredPair.code)).status).toBe(400);
+
+    // 5. 5 consecutive failed attempts invalidate the active pairing code
+    const LockoutPair = await oauth.createPairingCode("secret-bot", new Date(clockMs));
+    for (let index = 0; index < 5; index += 1) {
+      expect((await submitPairing(`chp_wrong_${index}`)).status).toBe(400);
+    }
+    expect((await submitPairing(LockoutPair.code)).status).toBe(400);
+
+    // 6. CLI `codexhost client pair` generates a valid code; single-use + PKCE exchange
+    const cliPaired = await run(["client", "pair", "secret-bot"]);
+    expect(cliPaired.code).toBe(0);
+    const validPairingCode = (cliPaired.body as { code: string }).code;
+    // Align test clock with real clock since CLI used current time
+    clockMs = Date.now();
+
+    const authorized = await submitPairing(validPairingCode);
+    expect(authorized.status).toBe(303);
+    const location = new URL(authorized.headers.get("location") ?? "");
+    expect(location.searchParams.get("state")).toBe("xyz-state");
+    const authCode = location.searchParams.get("code") ?? "";
+    expect(authCode).toMatch(/^choc_/u);
+
+    // Reusing the same pairing code fails immediately
+    expect((await submitPairing(validPairingCode)).status).toBe(400);
+
+    // Exchange authorization code with PKCE verifier
+    const tokenRes = await fetch(new URL("/oauth/token", server.endpoint), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: authCode,
+        code_verifier: verifier,
+        client_id: registeredClient.client_id,
+        redirect_uri: redirectUri,
+      }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokens = (await tokenRes.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+      scope: string;
+    };
+    expect(tokens.expires_in).toBe(3600);
+    expect(tokens.scope).toBe("read");
+
+    // Reusing the authorization code fails
+    const replayCode = await fetch(new URL("/oauth/token", server.endpoint), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: authCode,
+        code_verifier: verifier,
+        client_id: registeredClient.client_id,
+        redirect_uri: redirectUri,
+      }),
+    });
+    expect(replayCode.status).toBe(400);
+
+    // 7. Call public endpoint with OAuth access token (inherits client 'read' scope)
+    const allowedCall = await fetch(new URL("/v1/harness/list", server.endpoint), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      body: "{}",
+    });
+    expect(allowedCall.status).toBe(200);
+    expect(await allowedCall.json()).toEqual({ harnesses: [{ id: "codex" }] });
+
+    const forbiddenDispatch = await fetch(new URL("/v1/delegate/start", server.endpoint), {
+      method: "POST",
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      body: "{}",
+    });
+    expect(forbiddenDispatch.status).toBe(403);
+
+    // 8. Refresh token rotation
+    const refreshRes = await fetch(new URL("/oauth/token", server.endpoint), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokens.refresh_token,
+        client_id: registeredClient.client_id,
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const rotated = (await refreshRes.json()) as {
+      access_token: string;
+      refresh_token: string;
+    };
+
+    // 9. Revoking the client immediately invalidates both access and refresh tokens
+    expect((await run(["client", "remove", "secret-bot"])).code).toBe(0);
+    const afterRevoke = await fetch(new URL("/v1/harness/list", server.endpoint), {
+      method: "POST",
+      headers: { authorization: `Bearer ${rotated.access_token}` },
+      body: "{}",
+    });
+    expect(afterRevoke.status).toBe(401);
+
+    const refreshAfterRevoke = await fetch(new URL("/oauth/token", server.endpoint), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: rotated.refresh_token,
+        client_id: registeredClient.client_id,
+      }),
+    });
+    expect(refreshAfterRevoke.status).toBe(400);
   });
 });

@@ -75,7 +75,10 @@
 - tailnet：在本机 Tailscale IPv4 地址上使用与本机监听相同的端口；地址变化时重新绑定，Tailscale 不可用时报告原因。
 - 公网：一个独立的 loopback 端口，只由 Tailscale Funnel 的 `/codexhost` 路径转发过来，因此公网请求不可能被当作本机请求。Funnel 会剥离前缀，后端收到 `/mcp`、`/v1/...`。公网 MCP 地址是 `https://<机器>.<tailnet>.ts.net/codexhost/mcp`。codexhost 只添加和删除自己的路径，路径已指向非 loopback 目标时报告不可用而不替换；关闭公网后，或新 Runtime 发现上次留下的映射时删除它。
 - Tailscale 通过其 CLI 操作（macOS 上也查找 `Tailscale.app` 内的 CLI，可用 `CODEXHOST_TAILSCALE` 指定）；两个开关都关闭时 Runtime 不调用它。
-- OAuth 尚未实现：托管 connector 目前用静态 `Authorization: Bearer <token>` 接入（Grok Bot 支持）。
+- 公网入口同时支持静态 `Authorization: Bearer <token>`（Grok Bot 等支持静态 header 的 connector）和基于一次性配对码的 OAuth 2.1 + PKCE（供只支持 OAuth 的托管 MCP connector 使用）：
+  - 未认证请求返回 `401` 与 `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource"`，并在公网入口提供 `/.well-known/oauth-protected-resource`、`/.well-known/oauth-authorization-server`、`/oauth/register`（动态客户端注册）、`/oauth/authorize`、`/oauth/token`。
+  - 用户在本机运行 `codexhost client pair <name>` 生成 10 分钟有效、仅可使用一次的配对码（保存在 `<数据目录>/external-client-oauth.json`，仅存加盐 SHA-256 摘要）；授权页只包含配对码输入框，不显示任何客户端、Thread 或工作目录列表；连续 5 次配对失败会使当前配对码立即失效。
+  - 授权成功后签发的访问令牌（1 小时）与刷新令牌（30 天，轮换制）均以哈希保存并绑定到对应客户端，继承其权限范围；执行 `codexhost client remove <name>` 会立即使该客户端的全部访问令牌与刷新令牌失效。
 
 ## webhook 推送
 

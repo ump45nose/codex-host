@@ -29,6 +29,10 @@ import { externalClientMcp } from "./external-client-mcp.js";
 import { externalClientEventStream, externalClientRouter } from "./external-client-routes.js";
 import { FileThreadRefsStore } from "./thread-refs.js";
 import { ExternalAccessSupervisor, externalAccessPaths } from "./external-client-access.js";
+import {
+  ExternalClientOAuthStore,
+  defaultExternalClientOAuthPath,
+} from "./external-client-oauth.js";
 import { createTailscaleControl } from "./tailscale.js";
 import { WebhookDispatcher, WebhookStore } from "./external-client-webhooks.js";
 import { webhookDirectory } from "./external-client-cli.js";
@@ -246,13 +250,20 @@ async function startExternalClients(
   const port = externalClientPort(environment);
   if (port === undefined) return undefined;
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
+  const oauth = new ExternalClientOAuthStore(defaultExternalClientOAuthPath(environment));
   const route = externalClientRouter({ api: registry, watchApi: registry, events });
   const diagnose = (message: string) =>
     process.stderr.write(`codexhost external clients: ${message}\n`);
-  const start = (options: { network: ClientNetwork; host: string; port: number }) =>
+  const start = (options: {
+    network: ClientNetwork;
+    host: string;
+    port: number;
+    publicBaseUrl?: () => string | undefined;
+  }) =>
     startExternalClientServer({
       ...options,
       clients,
+      ...(options.network === "public" ? { oauth } : {}),
       route,
       streams: {
         "/v1/events": externalClientEventStream(events, clients),

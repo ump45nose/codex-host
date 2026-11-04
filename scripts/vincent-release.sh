@@ -3,7 +3,8 @@
 # over an existing npm install without restarting anything.
 #
 #   scripts/vincent-release.sh status
-#   scripts/vincent-release.sh build  [--tag vX.Y.Z] [--skip-conflicts] [--no-test] [--rust]
+#   scripts/vincent-release.sh build  [--tag vX.Y.Z] [--fresh] [--skip-conflicts] [--no-test] [--rust]
+#        (starts from the previous vincent/release-vX.Y.Z so past conflict fixes carry over; --fresh starts from the tag)
 #   scripts/vincent-release.sh push   [--tag vX.Y.Z]
 #   scripts/vincent-release.sh auto   [--skip-conflicts]      # build+push only when a new upstream tag exists
 #   scripts/vincent-release.sh deploy local [--tag vX.Y.Z] [--artifacts DIR] [--dry-run] [--allow-version-mismatch]
@@ -63,15 +64,31 @@ latest_tag() { # newest stable vX.Y.Z tag reachable from upstream main
   g tag --merged "$up/main" --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1
 }
 
+previous_release() { # newest vincent/release-vX.Y.Z (local or fork) older than $1
+  local target="$1" fork v best=""
+  fork="$(fork_remote)"
+  while read -r v; do
+    [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$v" != "$target" ]] || continue
+    [[ "$(printf '%s\n%s\n' "$v" "$target" | sort -V | head -1)" == "$v" ]] || continue
+    best="$v"
+  done < <({ g for-each-ref --format='%(refname:short)' 'refs/heads/vincent/release-v*'
+             g for-each-ref --format='%(refname:short)' "refs/remotes/$fork/vincent/release-v*" | sed "s#^$fork/##"; } |
+           sed 's#^vincent/release-##' | sort -uV)
+  [[ -n "$best" ]] || return 0
+  if g rev-parse -q --verify "refs/heads/vincent/release-$best" >/dev/null; then echo "vincent/release-$best"
+  else echo "$fork/vincent/release-$best"; fi
+}
+
 manifest_branches() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*//' "$MANIFEST"; }
 
 parse_common() {
-  TAG=""; SKIP_CONFLICTS=false; NO_TEST=false; RUST=false; DRY_RUN=false; ARTIFACTS=""; ALLOW_MISMATCH=false
+  TAG=""; FRESH=false; SKIP_CONFLICTS=false; NO_TEST=false; RUST=false; DRY_RUN=false; ARTIFACTS=""; ALLOW_MISMATCH=false
   REST=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --tag) TAG="$2"; shift ;;
       --skip-conflicts) SKIP_CONFLICTS=true ;;
+      --fresh) FRESH=true ;;
       --no-test) NO_TEST=true ;;
       --rust) RUST=true ;;
       --dry-run) DRY_RUN=true ;;
@@ -110,8 +127,19 @@ cmd_build() {
     [[ -d "$wt" ]] || g worktree add --quiet "$wt" "$branch"
   else
     [[ ! -e "$wt" ]] || die "$wt exists but $branch does not; remove the stale worktree first"
-    g worktree add --quiet -b "$branch" "$wt" "$TAG"
-    local gw=(git -C "$wt" -c "user.name=$AUTHOR_NAME" -c "user.email=$AUTHOR_EMAIL")
+    # Start from the previous release branch when there is one, so earlier conflict
+    # resolutions carry forward; otherwise start fresh from the tag (--fresh forces that).
+    local previous=""
+    $FRESH || previous="$(previous_release "$TAG")"
+    local gw=(git -C "$wt" -c "user.name=$AUTHOR_NAME" -c "user.email=$AUTHOR_EMAIL" -c rerere.enabled=true)
+    if [[ -n "$previous" ]]; then
+      log "starting from $previous and merging $TAG"
+      g worktree add --quiet -b "$branch" "$wt" "$previous"
+      "${gw[@]}" merge --no-ff --no-edit -q -m "Merge upstream $TAG into $branch" "$TAG" ||
+        die "conflict merging upstream $TAG onto $previous in $wt — resolve, commit with '-s', then rerun build"
+    else
+      g worktree add --quiet -b "$branch" "$wt" "$TAG"
+    fi
     for b in $(manifest_branches); do
       local ref="$fork/$b"
       if ! git -C "$wt" rev-parse -q --verify "$ref^{commit}" >/dev/null; then log "skip $b: not on fork"; skipped+=("$b(missing)"); continue; fi

@@ -70,6 +70,15 @@ import {
   type RendererCodexUsageGateStatus,
 } from "./renderer-codex-usage-gate.js";
 import {
+  createRendererNativeProviderUsageBanner,
+  type RendererNativeProviderUsageBanner,
+} from "./renderer-native-provider-usage-banner.js";
+import {
+  createRendererNativeInferenceRoute,
+  type RendererNativeInferenceRoute,
+} from "./renderer-native-inference-route.js";
+import { createRendererNativeProviderControl } from "./renderer-native-provider-control.js";
+import {
   decodeAntigravityTransportModelId,
   decodeClaudeTransportModelId,
   decodeDeepSeekHarnessTransportModelId,
@@ -605,6 +614,7 @@ interface MountedComposer {
   composerId: string;
   control: ComposerAgentControl;
   codexUsageGate: RendererCodexUsageGate;
+  codexUsageBanner: RendererNativeProviderUsageBanner;
   modelTarget: readonly unknown[] | null;
   modelView: ExternalModelControlView;
   permissionModeView: ExternalPermissionModeControlView;
@@ -617,6 +627,8 @@ interface MountedComposer {
   usageRequestGeneration: number;
   draftUsageClient: RendererModelClient | null;
   commandRequestGeneration: number;
+  nativeInferenceRoute: RendererNativeInferenceRoute;
+  nativeProviderControl: ReturnType<typeof createRendererNativeProviderControl>;
 }
 
 interface MountedCatalogRequest {
@@ -1047,6 +1059,7 @@ export function installRendererBindingProbe(
     mounted: MountedComposer,
     status: RendererCodexUsageGateStatus,
   ): void => {
+    mounted.codexUsageBanner.update(status === "bypassed");
     const title =
       status === "unsupported"
         ? rendererHarnessMessages(settingsLifecycle.locale).codexUsageGateUnavailable
@@ -1075,6 +1088,20 @@ export function installRendererBindingProbe(
       : "installing";
   };
 
+  /**
+   * Workspace of each Host's current draft, published by the draft prewarm
+   * (the only place Desktop names it). A draft asks the Host for that
+   * workspace's live commands and skills.
+   */
+  const draftWorkspaces = new Map<string, string>();
+  {
+    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
+    if (typeof published === "object" && published !== null) {
+      for (const [hostId, cwd] of Object.entries(published)) {
+        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
+      }
+    }
+  }
   const renderMounted = (mounted: MountedComposer): void => {
     if (!isMountedComposer(mounted.composer)) return;
     const hostId = mounted.hostId;
@@ -1093,7 +1120,9 @@ export function installRendererBindingProbe(
       mounted.control,
       controller.get(mounted.composer),
       composerAdapterState(mounted),
-      controller.isSwitching(mounted.composer) || mounted.ownershipStatus === "loading",
+      controller.isSwitching(mounted.composer) ||
+        mounted.ownershipStatus === "loading" ||
+        mounted.nativeProviderControl.blocked,
       composerAvailability(mounted),
       mounted.modelView,
       mounted.permissionModeView,
@@ -1103,7 +1132,32 @@ export function installRendererBindingProbe(
       currentCodexAccount ?? null,
       mounted.ownershipStatus === "error",
     );
-    showCodexUsageGateStatus(mounted, mounted.codexUsageGate.update(externalSubmissionReady));
+    const nativeTargetResolved =
+      mounted.modelTarget?.[0] === "default" || mounted.modelTarget?.[0] === "conversation";
+    const nativeEligible =
+      nativeTargetResolved &&
+      controller.get(mounted.composer).agent === "codex" &&
+      mounted.ownershipStatus !== "loading" &&
+      mounted.ownershipStatus !== "error" &&
+      !controller.isSwitching(mounted.composer);
+    const nativeThreadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+    const draftHostId = nativeThreadId ? null : activeModelHostId(mounted.composer);
+    const nativeSubmissionReady = mounted.nativeInferenceRoute.update(
+      composerClient(mounted),
+      nativeThreadId,
+      nativeEligible && !mounted.nativeProviderControl.blocked,
+      draftHostId ? (draftWorkspaces.get(draftHostId) ?? null) : null,
+    );
+    showCodexUsageGateStatus(
+      mounted,
+      mounted.codexUsageGate.update(externalSubmissionReady || nativeSubmissionReady),
+    );
+    mounted.nativeProviderControl.update(
+      composerClient(mounted),
+      threadIdFromComposerModelTarget(mounted.modelTarget),
+      nativeEligible,
+      settingsLifecycle.locale,
+    );
     if (mounted.control.usage) {
       mounted.control.usage.onOpen = () => {
         void refreshThreadUsage(
@@ -1115,20 +1169,6 @@ export function installRendererBindingProbe(
   };
 
   let delegationMention: RendererDelegationMentionControl | null = null;
-  /**
-   * Workspace of each Host's current draft, published by the draft prewarm
-   * (the only place Desktop names it). A draft asks the Host for that
-   * workspace's live commands and skills.
-   */
-  const draftWorkspaces = new Map<string, string>();
-  {
-    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
-    if (typeof published === "object" && published !== null) {
-      for (const [hostId, cwd] of Object.entries(published)) {
-        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
-      }
-    }
-  }
   /**
    * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
    * clearing first, so an open menu never flickers empty.
@@ -2906,6 +2946,18 @@ export function installRendererBindingProbe(
       composerId: state.composerId,
       control,
       codexUsageGate: createRendererCodexUsageGate(composer),
+      codexUsageBanner: createRendererNativeProviderUsageBanner(composer),
+      nativeInferenceRoute: createRendererNativeInferenceRoute(() => {
+        if (!disposed && mountedByComposer.get(composer) === mounted && composer.isConnected) {
+          renderMounted(mounted);
+        }
+      }),
+      nativeProviderControl: createRendererNativeProviderControl(composer, () => {
+        if (!disposed && mountedByComposer.get(composer) === mounted && composer.isConnected) {
+          mounted.nativeInferenceRoute.update(null, null, false);
+          renderMounted(mounted);
+        }
+      }),
       modelTarget,
       modelView: inherited?.modelView ?? { status: "idle" },
       permissionModeView: inherited?.permissionModeView ?? { status: "idle" },
@@ -3000,6 +3052,9 @@ export function installRendererBindingProbe(
           usageRefreshTimers.delete(composer);
         }
         mounted.codexUsageGate.dispose();
+        mounted.codexUsageBanner.dispose();
+        mounted.nativeProviderControl.dispose();
+        mounted.nativeInferenceRoute.dispose();
         disposeComposerAgentControl(mounted.control);
         ownershipRecovery.delete(mounted);
         modelRecovery.delete(mounted);
@@ -3133,7 +3188,11 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (!mounted) return null;
     const current = controller.get(composer);
-    if (controller.isSwitching(composer) || isOwnershipSubmissionBlocked(mounted.ownershipStatus)) {
+    if (
+      controller.isSwitching(composer) ||
+      isOwnershipSubmissionBlocked(mounted.ownershipStatus) ||
+      mounted.nativeProviderControl.blocked
+    ) {
       return false;
     }
     if (!isExternalConfigurationReady(mounted)) return false;
@@ -3319,6 +3378,12 @@ export function installRendererBindingProbe(
         controller.get(mounted.composer).agent !== "codex"
       ) {
         void refreshCommands(mounted, { keepCurrent: true });
+      } else if (
+        !threadIdFromComposerModelTarget(mounted.modelTarget) &&
+        activeModelHostId(mounted.composer) === hostId
+      ) {
+        // A Codex draft re-checks its inference route against the new workspace.
+        renderMounted(mounted);
       }
     }
   };
@@ -3561,6 +3626,9 @@ export function installRendererBindingProbe(
         mounted.usageRequestGeneration += 1;
         usageRefreshAttempts.delete(mounted.composer);
         mounted.codexUsageGate.dispose();
+        mounted.codexUsageBanner.dispose();
+        mounted.nativeProviderControl.dispose();
+        mounted.nativeInferenceRoute.dispose();
         disposeComposerAgentControl(mounted.control);
       }
       mountedByComposer.clear();

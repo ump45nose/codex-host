@@ -43,6 +43,7 @@ import {
   createNpmMetaReadme,
   createNpmMetaPackageManifest,
   expectedNpmMetaPackagePaths,
+  npmMetaOptionalDependencies,
   validateNpmMetaPackage,
 } from "../../scripts/release/prepare-npm-meta.mjs";
 import { hostReleaseTargetId, releaseTarget } from "../../scripts/release/targets.mjs";
@@ -549,6 +550,30 @@ describe("npm package release", () => {
     expect(manifest.optionalDependencies).toEqual(
       Object.fromEntries(Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((name) => [name, "0.1.0"])),
     );
+  });
+
+  it("points fork meta packages at the platform tarballs of their GitHub Release", () => {
+    const version = "0.17.2-vincent.1";
+    const base = `https://github.com/ump45nose/codex-host/releases/download/v${version}`;
+    const manifest = createNpmMetaPackageManifest({
+      version,
+      platformBaseUrl: base,
+      platformTargets: ["macos-arm64", "macos-x64", "linux-x64"],
+    });
+    expect(manifest.optionalDependencies).toEqual({
+      "@codexhost/cli-darwin-arm64": `${base}/codexhost-cli-${version}-macos-arm64.tgz`,
+      "@codexhost/cli-darwin-x64": `${base}/codexhost-cli-${version}-macos-x64.tgz`,
+      "@codexhost/cli-linux-x64": `${base}/codexhost-cli-${version}-linux-x64.tgz`,
+    });
+    expect(
+      Object.keys(npmMetaOptionalDependencies({ version, platformBaseUrl: `${base}/` })),
+    ).toEqual(Object.values(NPM_PLATFORM_PACKAGE_NAMES));
+    expect(() =>
+      npmMetaOptionalDependencies({ version, platformBaseUrl: "http://example.com/x" }),
+    ).toThrow("https");
+    expect(() =>
+      npmMetaOptionalDependencies({ version, platformBaseUrl: base, platformTargets: ["sparc"] }),
+    ).toThrow("unknown npm platform target");
   });
 
   it("prints the star prompt before npm launch setup begins", () => {

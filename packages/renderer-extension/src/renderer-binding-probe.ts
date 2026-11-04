@@ -502,9 +502,9 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
     const thinkingOptionId =
       inspection.harnessId === "cursor-cli"
         ? undefined
-        : inspection.availableThinkingOptions !== undefined
-          ? selectableThinkingOptionId(inspection)
-          : (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId);
+        : inspection.availableThinkingOptions === undefined
+          ? (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId)
+          : selectableThinkingOptionId(inspection);
     const permissionModeId = inspection.effectivePermissionModeId ?? route.permissionModeId;
     return {
       agent: inspection.harnessId,
@@ -531,9 +531,9 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
     }
     const model = inspection.effectiveModel ?? route.model;
     const thinkingOptionId =
-      inspection.availableThinkingOptions !== undefined
-        ? selectableThinkingOptionId(inspection)
-        : (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId);
+      inspection.availableThinkingOptions === undefined
+        ? (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId)
+        : selectableThinkingOptionId(inspection);
     const permissionModeId = inspection.effectivePermissionModeId ?? route.permissionModeId;
     return {
       agent: inspection.harnessId,
@@ -549,9 +549,9 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
     }
     const model = inspection.effectiveModel ?? route.model;
     const thinkingOptionId =
-      inspection.availableThinkingOptions !== undefined
-        ? selectableThinkingOptionId(inspection)
-        : (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId);
+      inspection.availableThinkingOptions === undefined
+        ? (inspection.effectiveThinkingOptionId ?? route.thinkingOptionId)
+        : selectableThinkingOptionId(inspection);
     const permissionModeId = inspection.effectivePermissionModeId ?? route.permissionModeId;
     return {
       agent: inspection.harnessId,
@@ -1251,7 +1251,11 @@ export function installRendererBindingProbe(
         throw new Error("Thread owner could not be applied to the Composer");
       }
       mounted.ownershipStatus = "ready";
-      if (agent !== "codex") {
+      if (agent === "codex") {
+        mounted.threadConfiguration = undefined;
+        mounted.modelView = { status: "idle" };
+        mounted.permissionModeView = { status: "idle" };
+      } else {
         if (inspection.owner !== "external") {
           throw new Error("External Thread inspection did not include configuration");
         }
@@ -1273,10 +1277,6 @@ export function installRendererBindingProbe(
         mounted.modelView = { status: "loading" };
         mounted.permissionModeView = { status: "loading" };
         void loadExternalCatalog(mounted);
-      } else {
-        mounted.threadConfiguration = undefined;
-        mounted.modelView = { status: "idle" };
-        mounted.permissionModeView = { status: "idle" };
       }
     } catch {
       if (!isCurrentOwnershipRequest(mounted, generation)) return;
@@ -2210,7 +2210,7 @@ export function installRendererBindingProbe(
                 retryable: error.retryable,
                 ...(error.diagnostic ? { diagnostic: error.diagnostic } : {}),
                 ...(error.stage ? { stage: error.stage } : {}),
-                ...(error.durationMs !== undefined ? { durationMs: error.durationMs } : {}),
+                ...(error.durationMs === undefined ? {} : { durationMs: error.durationMs }),
                 ...(error.stderrTail ? { stderrTail: error.stderrTail } : {}),
               };
             }
@@ -2926,13 +2926,13 @@ export function installRendererBindingProbe(
       const { mounted, state: selection } = entry;
       const model = controller.modelForAgent(mounted.composer, selection.agent);
       const thinkingOptionId =
-        selection.agent !== "codex"
-          ? controller.thinkingOptionForAgent(mounted.composer, selection.agent)
-          : undefined;
+        selection.agent === "codex"
+          ? undefined
+          : controller.thinkingOptionForAgent(mounted.composer, selection.agent);
       const permissionModeId =
-        selection.agent !== "codex"
-          ? controller.permissionModeForAgent(mounted.composer, selection.agent)
-          : undefined;
+        selection.agent === "codex"
+          ? undefined
+          : controller.permissionModeForAgent(mounted.composer, selection.agent);
       return {
         composerId: selection.composerId,
         agent: selection.agent,

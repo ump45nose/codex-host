@@ -938,6 +938,26 @@ export function installRendererBindingProbe(
         getLocale: () => settingsLifecycle.locale,
         getEnabled: () => readSidebarStashEnabledPreference(window),
         logger: console,
+        loadExternalFile: async () => {
+          const client = modelClientForHost("local");
+          const read = client?.readSidebarStashLegacyFile;
+          if (!read) return undefined;
+          try {
+            const result = await read();
+            if (result.error) {
+              console.warn(
+                "[codexhost-sidebar-stash] legacy file read error",
+                result.path,
+                result.error,
+              );
+            }
+            // null document with no error (ENOENT) still completes one-time migration.
+            return result.document;
+          } catch (error) {
+            console.warn("[codexhost-sidebar-stash] Host RPC legacy-file failed", error);
+            return undefined;
+          }
+        },
       });
     } catch (error) {
       console.warn("[codexhost-sidebar-stash] install failed", error);

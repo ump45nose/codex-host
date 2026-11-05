@@ -7,13 +7,21 @@ import {
   isDue,
   normalizeOptionalDueAt,
 } from "../src/renderer-sidebar-stash/dates.js";
-import { emptyState, parseState, SCHEMA_VERSION } from "../src/renderer-sidebar-stash/state.js";
+import {
+  emptyState,
+  mergeStatesPerEntry,
+  parseState,
+  SCHEMA_VERSION,
+} from "../src/renderer-sidebar-stash/state.js";
 import { StashStore } from "../src/renderer-sidebar-stash/store.js";
 import { sortedEntries } from "../src/renderer-sidebar-stash/sort.js";
 import {
   createPersistedStore,
+  FILE_MIGRATION_MARKER_KEY,
+  hasCompletedFileMigration,
   LEGACY_STORAGE_KEY,
   loadState,
+  markFileMigrationComplete,
   mergeExternalFileState,
   STORAGE_KEY,
 } from "../src/renderer-sidebar-stash/storage.js";
@@ -206,5 +214,69 @@ describe("hotkeys + reminders + preference + registry", () => {
     registerReservedHotkeys(STASH_RESERVED_HOTKEYS);
     expect(listReservedHotkeys().filter((e) => e.id.startsWith("sidebar-stash.")).length).toBe(3);
     dispose();
+  });
+});
+
+describe("per-entry stash.json merge", () => {
+  it("unions entries and lets newer stashedAt win without dropping the other side", () => {
+    const local = {
+      version: 1 as const,
+      updatedAt: "2026-11-05T00:00:00.000Z",
+      items: {
+        localonly1: {
+          title: "Only local",
+          dueAt: null,
+          stashedAt: "2026-11-04T00:00:00.000Z",
+        },
+        sharedid1: {
+          title: "Local older",
+          dueAt: null,
+          stashedAt: "2026-10-01T00:00:00.000Z",
+        },
+      },
+    };
+    const file = {
+      version: 1 as const,
+      updatedAt: "2026-10-16T05:48:13.668Z",
+      items: {
+        fileonly1: {
+          title: "Only file (Oct)",
+          dueAt: null,
+          stashedAt: "2026-10-15T01:54:52.800Z",
+        },
+        sharedid1: {
+          title: "File newer",
+          dueAt: "2026-10-20T01:00:00.000Z",
+          stashedAt: "2026-10-15T01:54:52.800Z",
+        },
+      },
+    };
+    const merged = mergeStatesPerEntry(local, file);
+    expect(Object.keys(merged.items).sort()).toEqual(["fileonly1", "localonly1", "sharedid1"]);
+    expect(merged.items.sharedid1?.title).toBe("File newer");
+    expect(merged.items.localonly1?.title).toBe("Only local");
+    expect(merged.items.fileonly1?.title).toBe("Only file (Oct)");
+    // Top-level updatedAt keeps the newer of the two documents.
+    expect(merged.updatedAt).toBe("2026-11-05T00:00:00.000Z");
+
+    const viaStorage = mergeExternalFileState(local, file);
+    expect(viaStorage.merged).toBe(true);
+    expect(viaStorage.added).toBe(1);
+    expect(viaStorage.replaced).toBe(1);
+    expect(viaStorage.state.items.sharedid1?.title).toBe("File newer");
+  });
+
+  it("marks one-time file migration", () => {
+    const memory = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        memory.set(key, value);
+      },
+    };
+    expect(hasCompletedFileMigration(storage)).toBe(false);
+    markFileMigrationComplete(storage);
+    expect(memory.get(FILE_MIGRATION_MARKER_KEY)).toBe("1");
+    expect(hasCompletedFileMigration(storage)).toBe(true);
   });
 });

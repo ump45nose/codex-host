@@ -13,7 +13,14 @@ import { openDuePopover } from "./popover.js";
 import { readSidebarStashEnabledPreference } from "./preference.js";
 import { registerReservedHotkeys, STASH_RESERVED_HOTKEYS } from "./reserved-hotkeys.js";
 import { createStashSection } from "./section.js";
-import { createPersistedStore } from "./storage.js";
+import {
+  createPersistedStore,
+  hasCompletedFileMigration,
+  markFileMigrationComplete,
+  mergeExternalFileState,
+  saveState,
+  type StashStorageBackend,
+} from "./storage.js";
 import { StashStore } from "./store.js";
 import { pickStrings } from "./strings.js";
 import { ensureStyles } from "./style.js";
@@ -27,7 +34,13 @@ export interface InstallRendererSidebarStashOptions {
   document?: Document;
   window?: Window & typeof globalThis;
   storage?: Storage | null;
+  /** Synchronously available ~/.codex-stash/stash.json payload (tests / preloaded). */
   externalFileRaw?: unknown;
+  /**
+   * Async loader for ~/.codex-stash/stash.json via Host RPC. Runs once when the
+   * file-migration marker is absent; merges per-entry without dropping ids.
+   */
+  loadExternalFile?: () => Promise<unknown | null | undefined>;
   getLocale?: () => string | null | undefined;
   getEnabled?: () => boolean;
   adapter?: SidebarAdapter;
@@ -79,15 +92,42 @@ export function installRendererSidebarStash(
   const locale = options.getLocale?.() ?? detectLocale(ownerDocument);
   const strings = pickStrings(locale);
   const adapter = options.adapter ?? createSidebarAdapter(ownerDocument);
+  const storage: StashStorageBackend | null =
+    options.storage === undefined ? safeLocalStorage() : options.storage;
   const { store, migratedFromLegacy, mergedExternalFile } = createPersistedStore(StashStore, {
-    storage: options.storage === undefined ? safeLocalStorage() : options.storage,
+    storage,
     externalFileRaw: options.externalFileRaw,
+    skipExternalFile: options.externalFileRaw === undefined,
   });
   if (migratedFromLegacy) {
     log.info?.("[codexhost-sidebar-stash] migrated state from localStorage codex-stash:v1");
   }
   if (mergedExternalFile) {
-    log.info?.("[codexhost-sidebar-stash] merged newer ~/.codex-stash/stash.json payload");
+    log.info?.(
+      "[codexhost-sidebar-stash] merged ~/.codex-stash/stash.json payload (per-entry, no drops)",
+    );
+  }
+
+  let fileMigrationPending: Promise<void> | null = null;
+  const applyExternalFile = (fileRaw: unknown): void => {
+    const merged = mergeExternalFileState(store.getState(), fileRaw);
+    markFileMigrationComplete(storage);
+    if (!merged.merged) {
+      log.debug?.("[codexhost-sidebar-stash] stash.json migration: no changes", {
+        added: merged.added,
+        replaced: merged.replaced,
+      });
+      return;
+    }
+    store.replace(merged.state);
+    saveState(storage, merged.state);
+    log.info?.(
+      `[codexhost-sidebar-stash] merged ~/.codex-stash/stash.json (added ${merged.added}, replaced ${merged.replaced})`,
+    );
+  };
+
+  if (options.externalFileRaw !== undefined) {
+    markFileMigrationComplete(storage);
   }
 
   const disposeStyle = ensureStyles(ownerDocument);
@@ -361,6 +401,27 @@ export function installRendererSidebarStash(
   ownerWindow.addEventListener(USER_MESSAGE_EVENT, onUserMessage as EventListener);
 
   refresh();
+
+  if (
+    options.externalFileRaw === undefined &&
+    options.loadExternalFile &&
+    !hasCompletedFileMigration(storage)
+  ) {
+    fileMigrationPending = (async () => {
+      try {
+        const fileRaw = await options.loadExternalFile?.();
+        if (fileRaw === undefined) {
+          log.debug?.("[codexhost-sidebar-stash] stash.json loader returned undefined; will retry");
+          return;
+        }
+        applyExternalFile(fileRaw);
+        refresh();
+      } catch (error) {
+        log.warn?.("[codexhost-sidebar-stash] stash.json migration failed", error);
+      }
+    })();
+  }
+  void fileMigrationPending;
 
   let disposed = false;
   const handle: RendererSidebarStashHandle = {

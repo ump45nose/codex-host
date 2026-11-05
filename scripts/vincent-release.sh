@@ -269,12 +269,12 @@ deploy_local() {
   echo "$app" > "$backup/APP_DIR"
   (cd "$backup" && find . -type f ! -name SHA256SUMS ! -name APP_DIR | LC_ALL=C sort | while read -r f; do sha "$f"; done > SHA256SUMS)
   for f in "${APP_FILES[@]}"; do
-    "${run[@]}" cp "$src/app/$f" "$app/$f.vincent-new"; "${run[@]}" mv -f "$app/$f.vincent-new" "$app/$f"
+    ${run[@]+"${run[@]}"} cp "$src/app/$f" "$app/$f.vincent-new"; ${run[@]+"${run[@]}"} mv -f "$app/$f.vincent-new" "$app/$f"
   done
-  "${run[@]}" rm -rf "$app/plugins.vincent-new"; "${run[@]}" cp -R "$src/app/plugins" "$app/plugins.vincent-new"
-  "${run[@]}" rm -rf "$app/plugins.vincent-old"
-  [[ -d "$app/plugins" ]] && "${run[@]}" mv "$app/plugins" "$app/plugins.vincent-old"
-  "${run[@]}" mv "$app/plugins.vincent-new" "$app/plugins"; "${run[@]}" rm -rf "$app/plugins.vincent-old"
+  ${run[@]+"${run[@]}"} rm -rf "$app/plugins.vincent-new"; ${run[@]+"${run[@]}"} cp -R "$src/app/plugins" "$app/plugins.vincent-new"
+  ${run[@]+"${run[@]}"} rm -rf "$app/plugins.vincent-old"
+  [[ -d "$app/plugins" ]] && ${run[@]+"${run[@]}"} mv "$app/plugins" "$app/plugins.vincent-old"
+  ${run[@]+"${run[@]}"} mv "$app/plugins.vincent-new" "$app/plugins"; ${run[@]+"${run[@]}"} rm -rf "$app/plugins.vincent-old"
   local native
   native="$src/native-$(uname -s)-$(uname -m)"
   if [[ -d "$native" ]]; then
@@ -283,7 +283,7 @@ deploy_local() {
     for f in bin/codexhost libexec/codexhost-shim libexec/codexhost-updater; do
       [[ -f "$pkg/$f" ]] || continue
       cp -p "$pkg/$f" "$backup/native/$(basename "$f")"
-      "${run[@]}" cp "$native/$(basename "$f")" "$pkg/$f.vincent-new"; "${run[@]}" mv -f "$pkg/$f.vincent-new" "$pkg/$f"
+      ${run[@]+"${run[@]}"} cp "$native/$(basename "$f")" "$pkg/$f.vincent-new"; ${run[@]+"${run[@]}"} mv -f "$pkg/$f.vincent-new" "$pkg/$f"
     done
   fi
   (cd "$src" && for f in "${APP_FILES[@]}"; do
@@ -312,8 +312,8 @@ cmd_rollback() {
   [[ -f "$backup/APP_DIR" ]] || die "no usable backup (looked at '$backup')"
   local app run=(); app="$(cat "$backup/APP_DIR")"; [[ -w "$app" ]] || read -r -a run <<<"$CH_SUDO"
   (cd "$backup" && sha -c --quiet SHA256SUMS) || die "backup checksums do not match"
-  for f in "${APP_FILES[@]}"; do "${run[@]}" cp -p "$backup/$f" "$app/$f"; done
-  if [[ -d "$backup/plugins" ]]; then "${run[@]}" rm -rf "$app/plugins"; "${run[@]}" cp -Rp "$backup/plugins" "$app/plugins"; fi
+  for f in "${APP_FILES[@]}"; do ${run[@]+"${run[@]}"} cp -p "$backup/$f" "$app/$f"; done
+  if [[ -d "$backup/plugins" ]]; then ${run[@]+"${run[@]}"} rm -rf "$app/plugins"; ${run[@]+"${run[@]}"} cp -Rp "$backup/plugins" "$app/plugins"; fi
   log "restored $app from $backup (nothing restarted)"
 }
 

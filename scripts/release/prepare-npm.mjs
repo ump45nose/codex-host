@@ -606,7 +606,8 @@ if (userArguments.length === 0) {
   userArguments[0] === "delegate" ||
   userArguments[0] === "thread" ||
   userArguments[0] === "client" ||
-  userArguments[0] === "events"
+  userArguments[0] === "events" ||
+  userArguments[0] === "preview"
 ) {
   launchArguments = null;
   delegationArguments = userArguments;
@@ -628,6 +629,7 @@ if (userArguments.length === 0) {
       "  codexhost thread send|cancel|read|wait|watch|watches|list ...",
       "  codexhost client status|on|off|create|list|revoke ...",
       "  codexhost events pull|ack ...",
+      "  codexhost preview open|list|show|close ...",
       "",
       "This npm package uses the current Node.js runtime and the packaged",
       "Rust launcher/shim. Codex Desktop must already be installed.",

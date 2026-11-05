@@ -174,6 +174,9 @@ cmd_build() {
     cp packages/renderer-extension/dist/production.js "$out.tmp/app/renderer-extension.js"
     cp packages/renderer-extension/dist/console.js "$out.tmp/app/console-web.js"
     node scripts/release/harness-plugins.mjs --output "$out.tmp/app/plugins"
+    mkdir -p "$out.tmp/bin"
+    node -e 'import("./scripts/release/prepare-npm.mjs").then(({ createNpmBinLauncherSource }) => process.stdout.write(createNpmBinLauncherSource({ version: process.argv[1] })))' "${TAG#v}" > "$out.tmp/bin/codexhost.js"
+    chmod +x "$out.tmp/bin/codexhost.js"
     if $RUST; then
       log "cargo build --release (native binaries for $(uname -s)-$(uname -m))"
       cargo build --release --locked --package codexhost-launcher --package codexhost-shim --package codexhost-updater
@@ -285,6 +288,17 @@ deploy_local() {
       cp -p "$pkg/$f" "$backup/native/$(basename "$f")"
       ${run[@]+"${run[@]}"} cp "$native/$(basename "$f")" "$pkg/$f.vincent-new"; ${run[@]+"${run[@]}"} mv -f "$pkg/$f.vincent-new" "$pkg/$f"
     done
+  fi
+  if [[ -f "$src/bin/codexhost.js" ]]; then
+    local meta_bin
+    meta_bin="$(dirname "$(dirname "$(dirname "$app")")")/bin/codexhost.js"
+    if [[ -f "$meta_bin" ]]; then
+      mkdir -p "$backup/meta-bin"
+      cp -p "$meta_bin" "$backup/meta-bin/codexhost.js"
+      sed "s/^const version = \".*\";$/const version = \"$installed\";/" "$src/bin/codexhost.js" > "$meta_bin.vincent-new"
+      chmod +x "$meta_bin.vincent-new"
+      ${run[@]+"${run[@]}"} mv -f "$meta_bin.vincent-new" "$meta_bin"
+    fi
   fi
   (cd "$src" && for f in "${APP_FILES[@]}"; do
      [[ "$(sha "app/$f" | cut -d' ' -f1)" == "$(sha "$app/$f" | cut -d' ' -f1)" ]] || die "verify failed for $f"

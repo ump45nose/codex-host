@@ -184,6 +184,12 @@ interface ActiveTurn {
   pendingSteps: Map<number, AntigravityStepUpdateEvent["step_update"]>;
   thinkingSteps: Set<number>;
   checkedActiveThinkingSteps: Set<number>;
+  /**
+   * `agent_response` text held until that step's thinking is projected (or
+   * known absent at DONE/ERROR). Streaming reply deltas otherwise outrank a
+   * reasoning Item that only becomes available when the step finishes.
+   */
+  pendingAgentText: Map<number, string>;
   httpsPort: number | null;
 }
 
@@ -883,6 +889,7 @@ class AntigravitySession implements HarnessSession {
       pendingSteps: new Map(),
       thinkingSteps: new Set(),
       checkedActiveThinkingSteps: new Set(),
+      pendingAgentText: new Map(),
       httpsPort: null,
     };
     this.#active = active;
@@ -1221,17 +1228,16 @@ class AntigravitySession implements HarnessSession {
     }
     if (step.step_type === "agent_response") {
       await this.#maybeProjectStepThinking(active, step);
-      if (typeof step.text_delta === "string" && step.text_delta.length > 0) {
-        this.#appendOrSyncAgentText(active, step.text_delta, true);
-        return;
-      }
-      const fullOrDelta =
-        step.text ??
-        (typeof step.content === "string" ? step.content : undefined) ??
-        (typeof step.message === "string" ? step.message : undefined);
-      if (typeof fullOrDelta === "string" && fullOrDelta.length > 0) {
-        this.#appendOrSyncAgentText(active, fullOrDelta, false);
-        return;
+      const isDelta = typeof step.text_delta === "string" && step.text_delta.length > 0;
+      const text = isDelta
+        ? step.text_delta
+        : (step.text ??
+          (typeof step.content === "string" ? step.content : undefined) ??
+          (typeof step.message === "string" ? step.message : undefined));
+      if (typeof text === "string" && text.length > 0) {
+        this.#emitOrBufferAgentResponseText(active, step.step_index, text, isDelta);
+      } else if (active.thinkingSteps.has(step.step_index)) {
+        this.#flushPendingAgentText(active, step.step_index);
       }
       return;
     }
@@ -1240,6 +1246,7 @@ class AntigravitySession implements HarnessSession {
       return;
     }
     if (step.step_type !== "tool") return;
+    this.#flushAllPendingAgentText(active);
     if (active.agentItem) {
       this.#completeItem(active, active.agentItem, { status: "succeeded" });
       active.agentItem = null;
@@ -1385,7 +1392,10 @@ class AntigravitySession implements HarnessSession {
    * and omits `thinking` from `step_update`, reporting only `usage.thinking_tokens`
    * when a planner step finishes. Resolve the step's thinking from inline fields,
    * the Language Server trajectory, or the native brain transcript before
-   * projecting the step's visible response or subsequent tool calls.
+   * projecting the step's visible response or subsequent tool calls. Reply text
+   * for the same step is buffered until this returns with the step recorded in
+   * `thinkingSteps`, so a late-fetched reasoning Item is not outranked by the
+   * streamed answer.
    */
   async #maybeProjectStepThinking(
     active: ActiveTurn,
@@ -1430,7 +1440,12 @@ class AntigravitySession implements HarnessSession {
       }
     }
     if (isTerminal) active.thinkingSteps.add(step.step_index);
-    if (thinking === null || thinking.trim().length === 0) return;
+    if (thinking === null || thinking.trim().length === 0) {
+      // Without a thinking option, do not stall streamed replies waiting for a
+      // DONE-only transcript fetch that is unlikely to appear.
+      if (!isTerminal && !this.#thinkingOptionId) active.thinkingSteps.add(step.step_index);
+      return;
+    }
     active.thinkingSteps.add(step.step_index);
     if (active.agentItem) {
       this.#completeItem(active, active.agentItem, { status: "succeeded" });
@@ -1444,6 +1459,39 @@ class AntigravitySession implements HarnessSession {
     };
     this.#event({ type: "item.started", turnId: active.command.turnId, item });
     this.#completeItem(active, item, { status: "succeeded" });
+  }
+
+  /**
+   * Emit agent_response text only after that step's thinking is resolved when
+   * a late reasoning Item is still possible. Otherwise buffer so the streamed
+   * answer cannot outrank thinking that only becomes available at DONE.
+   */
+  #emitOrBufferAgentResponseText(
+    active: ActiveTurn,
+    stepIndex: number,
+    text: string,
+    isDelta: boolean,
+  ): void {
+    if (active.thinkingSteps.has(stepIndex) || !this.#thinkingOptionId) {
+      this.#flushPendingAgentText(active, stepIndex);
+      this.#appendOrSyncAgentText(active, text, isDelta);
+      return;
+    }
+    const previous = active.pendingAgentText.get(stepIndex) ?? "";
+    active.pendingAgentText.set(stepIndex, isDelta ? previous + text : text);
+  }
+
+  #flushPendingAgentText(active: ActiveTurn, stepIndex: number): void {
+    const pending = active.pendingAgentText.get(stepIndex);
+    if (pending === undefined) return;
+    active.pendingAgentText.delete(stepIndex);
+    if (pending.length > 0) this.#appendOrSyncAgentText(active, pending, true);
+  }
+
+  #flushAllPendingAgentText(active: ActiveTurn): void {
+    for (const stepIndex of [...active.pendingAgentText.keys()].sort((a, b) => a - b)) {
+      this.#flushPendingAgentText(active, stepIndex);
+    }
   }
 
   #appendOrSyncAgentText(active: ActiveTurn, text: string, isExplicitDelta: boolean): void {
@@ -1512,6 +1560,7 @@ class AntigravitySession implements HarnessSession {
           ? { status: "cancelled", ...(outcome.reason ? { reason: outcome.reason } : {}) }
           : { status: "succeeded" };
     active.subagents.finish(itemOutcome);
+    this.#flushAllPendingAgentText(active);
     if (active.compactionItem) this.#completeItem(active, active.compactionItem, itemOutcome);
     active.compactionItem = null;
     if (active.agentItem) this.#completeItem(active, active.agentItem, itemOutcome);

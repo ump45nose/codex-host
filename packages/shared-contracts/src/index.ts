@@ -384,3 +384,5 @@ export {
   type CodexSshConnection,
   type CodexSshDraft,
 } from "./remote-connections.js";
+
+export * from "./sidebar-stash.js";

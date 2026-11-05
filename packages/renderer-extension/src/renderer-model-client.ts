@@ -80,6 +80,9 @@ import {
   threadRelationListParamsSchema,
   threadRelationListResultSchema,
   THREAD_RELATION_LIST_METHOD,
+  SIDEBAR_STASH_LEGACY_FILE_METHOD,
+  sidebarStashLegacyFileResultSchema,
+  type SidebarStashLegacyFileResult,
   threadUsageInspectionParamsSchema,
   threadUsageInspectionSchema,
   updateCheckResultSchema,
@@ -215,6 +218,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
+  readSidebarStashLegacyFile?(): Promise<SidebarStashLegacyFileResult>;
   currentHostId?(composer?: Element): string | null;
   knownHostIds?(): readonly string[];
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
@@ -434,6 +438,11 @@ export function createRendererModelClient(
     },
     async listLoadedSessions(): Promise<LoadedSession[]> {
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
+    },
+    async readSidebarStashLegacyFile(): Promise<SidebarStashLegacyFileResult> {
+      return sidebarStashLegacyFileResultSchema.parse(
+        await manager.sendRequest(SIDEBAR_STASH_LEGACY_FILE_METHOD, {}),
+      );
     },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);

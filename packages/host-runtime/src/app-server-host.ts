@@ -55,6 +55,12 @@ import {
   ModelPriceOverridesError,
 } from "./model-price-overrides-file.js";
 import {
+  isSidebarStashLegacyFileMethod,
+  parseSidebarStashLegacyFileParams,
+  readSidebarStashLegacyFile,
+} from "./sidebar-stash-legacy-file.js";
+
+import {
   HARNESS_DISPLAY_GET_METHOD,
   HARNESS_DISPLAY_SET_METHOD,
   harnessDisplayGetSchema,
@@ -1492,6 +1498,17 @@ export class AppServerHost {
       } catch (error) {
         if (!(error instanceof ModelPriceOverridesError)) this.#diagnose(error);
         await this.#writer.json(rpcError(request, -32000, errorMessage(error)));
+      }
+      return;
+    }
+
+    if (isSidebarStashLegacyFileMethod(request.method)) {
+      try {
+        parseSidebarStashLegacyFileParams(request.params);
+        const result = await readSidebarStashLegacyFile();
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       }
       return;
     }

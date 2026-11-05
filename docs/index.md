@@ -56,6 +56,7 @@
 | [`harnesses/claude-code/claude-code-edit-recovery.md`](harnesses/claude-code/claude-code-edit-recovery.md) | 最后一条消息编辑后的独立 Session、空历史保留和关闭语义；修改编辑恢复时阅读。 |
 | [`harnesses/claude-code/claude-code-background-terminals.md`](harnesses/claude-code/claude-code-background-terminals.md) | Claude 后台命令作为 Desktop 后台终端：原生通知结算、实时输出、历史叠加与所有权；修改后台命令时阅读。 |
 | [`harnesses/claude-code/claude-code-steer.md`](harnesses/claude-code/claude-code-steer.md) | Claude Code `priority: "next"` 同轮插入、接受条件和历史分轮；修改运行中插入时阅读。 |
+| [`harnesses/claude-code/claude-code-entrypoint.md`](harnesses/claude-code/claude-code-entrypoint.md) | 会话报告的入口标识、默认值与选择加入的 Claude Desktop 入口及其风险提示；修改入口标识时阅读。 |
 
 ### CodeBuddy、WorkBuddy 与 Cursor
 

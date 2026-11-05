@@ -73,6 +73,9 @@ export function createNpmMetaPackageManifest({ version, platformBaseUrl, platfor
 }
 
 export function createNpmMetaReadme({ version }) {
+  const installCommand = version.includes("-vincent.")
+    ? `npm install -g https://github.com/ump45nose/codex-host/releases/download/v${version}/codexhost-cli.tgz`
+    : `npm install -g ${NPM_PACKAGE_NAME}@${version}`;
   return `# ${NPM_PACKAGE_NAME}
 
 ${NPM_PACKAGE_DESCRIPTION}
@@ -80,7 +83,7 @@ ${NPM_PACKAGE_DESCRIPTION}
 ## Install
 
 \`\`\`bash
-npm install -g ${NPM_PACKAGE_NAME}@${version}
+${installCommand}
 \`\`\`
 
 npm automatically installs the matching macOS, Windows, or Linux platform package. ${NPM_NODE_REQUIREMENT} and the official ChatGPT/Codex Desktop are required.

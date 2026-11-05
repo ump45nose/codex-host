@@ -290,7 +290,8 @@ jobs:
   report-failure:
     name: Open issue on failure
     needs: [merge, build, publish]
-    if: failure()
+    # Also fire when a job is cancelled (runner outage / timeout); failure() alone skips those.
+    if: failure() || cancelled()
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -322,6 +323,8 @@ jobs:
             echo
             if [[ "$PUBLISH" == "failure" ]]; then
               echo "The push or release step failed; check the run (a partial push or release may need cleanup)."
+            elif [[ "$MERGE" == "cancelled" || "$BUILD" == "cancelled" || "$PUBLISH" == "cancelled" ]]; then
+              echo "A job was cancelled (runner outage, timeout, or manual cancel). Nothing was pushed or published for this tag."
             else
               echo "Nothing was pushed or published for this tag."
             fi

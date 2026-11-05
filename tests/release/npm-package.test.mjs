@@ -586,6 +586,20 @@ describe("npm package release", () => {
     expect(source.match(/\n {2}printStarPrompt\(\);/gu)).toHaveLength(1);
   });
 
+  it("tells fork channel installs to reinstall from the Release tarball", () => {
+    const channel = createNpmBinLauncherSource({ version: "0.17.2-vincent.1" });
+    expect(channel).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(channel).not.toContain("npm install -g @codexhost/cli@0.17.2-vincent.1");
+    expect(createNpmMetaReadme({ version: "0.17.2-vincent.1" })).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(createNpmMetaReadme({ version: "0.1.0" })).toContain(
+      "npm install -g @codexhost/cli@0.1.0",
+    );
+  });
+
   it("injects package resources when the user runs codexhost with no args", () => {
     const source = createNpmBinLauncherSource({ version: "0.1.0" });
     expect(source).toContain('"darwin-arm64": "@codexhost/cli-darwin-arm64"');

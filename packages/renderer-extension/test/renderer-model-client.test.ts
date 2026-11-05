@@ -435,6 +435,7 @@ describe("Renderer fixed Model request client", () => {
       "openHarnessWebUi",
       "readDelegationThread",
       "readNativeThreadForkSource",
+      "readSidebarStashLegacyFile",
       "readUpdateStatus",
       "refreshCodexAccounts",
       "runtimeStatus",

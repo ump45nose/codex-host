@@ -291,7 +291,7 @@ deploy_local() {
   fi
   if [[ -f "$src/bin/codexhost.js" ]]; then
     local meta_bin
-    meta_bin="$(dirname "$(dirname "$(dirname "$app")")")/bin/codexhost.js"
+    meta_bin="${app%/node_modules/@codexhost/cli-*}/bin/codexhost.js"
     if [[ -f "$meta_bin" ]]; then
       mkdir -p "$backup/meta-bin"
       cp -p "$meta_bin" "$backup/meta-bin/codexhost.js"

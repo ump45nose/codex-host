@@ -9,6 +9,11 @@ import {
   setArchiveChildrenMode,
   subscribeArchiveChildrenMode,
 } from "../renderer-archive-children-preference.js";
+import {
+  readSidebarStashEnabledPreference,
+  setSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+} from "../renderer-sidebar-stash.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
 import { mountIdleReleaseControls } from "./idle-release-controls.js";
@@ -88,6 +93,23 @@ export function createAppearanceSettingsPage(
       archiveChildrenRow.item.append(archiveChildren);
       sidebar.card.append(archiveChildrenRow.item);
 
+      const stashId = preferenceId("sidebar-stash");
+      const stashRow = createPreferenceItem(document, {
+        title: messages.sidebarStashTitle,
+        description: messages.sidebarStashDescription,
+        controlId: stashId,
+      });
+      const stashToggle = createPreferenceSwitch(document, stashId, stashRow.description.id);
+      stashToggle.checked = readSidebarStashEnabledPreference(ownerWindow);
+      stashToggle.addEventListener("change", () => {
+        setSidebarStashEnabledPreference(ownerWindow, stashToggle.checked);
+      });
+      const disposeStashPref = subscribeSidebarStashEnabledPreference(ownerWindow, () => {
+        stashToggle.checked = readSidebarStashEnabledPreference(ownerWindow);
+      });
+      stashRow.item.append(stashToggle);
+      sidebar.card.append(stashRow.item);
+
       context.content.append(heading, description, group, sidebar.group);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
@@ -97,6 +119,7 @@ export function createAppearanceSettingsPage(
       return () => {
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeArchiveChildren();
+        disposeStashPref();
         disposeIdleRelease();
       };
     },

@@ -593,7 +593,9 @@ export async function handlePublicOAuthRoute(input: {
   if (
     request.method === "GET" &&
     (pathname === "/.well-known/oauth-protected-resource" ||
-      pathname === "/.well-known/oauth-protected-resource/mcp")
+      pathname === "/.well-known/oauth-protected-resource/mcp" ||
+      pathname === "/.well-known/oauth-protected-resource/codexhost" ||
+      pathname === "/.well-known/oauth-protected-resource/codexhost/mcp")
   ) {
     writeJson(response, 200, {
       resource: `${base}/mcp`,
@@ -606,7 +608,9 @@ export async function handlePublicOAuthRoute(input: {
   if (
     request.method === "GET" &&
     (pathname === "/.well-known/oauth-authorization-server" ||
-      pathname === "/.well-known/openid-configuration")
+      pathname === "/.well-known/oauth-authorization-server/codexhost" ||
+      pathname === "/.well-known/openid-configuration" ||
+      pathname === "/.well-known/openid-configuration/codexhost")
   ) {
     writeJson(response, 200, {
       issuer: base,

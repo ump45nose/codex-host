@@ -45,11 +45,28 @@ describe("Tailscale control", () => {
           Handlers: {
             "/other": { Proxy: "http://127.0.0.1:9" },
             "/codexhost": { Proxy: "http://127.0.0.1:5000" },
+            "/.well-known/oauth-protected-resource/codexhost/mcp": {
+              Proxy: "http://127.0.0.1:5000/.well-known/oauth-protected-resource",
+            },
+            "/.well-known/oauth-authorization-server/codexhost": {
+              Proxy: "http://127.0.0.1:5000/.well-known/oauth-authorization-server",
+            },
           },
         },
       },
     });
-    expect(parseFunnelStatus(text)).toEqual({ target: "http://127.0.0.1:5000" });
+    expect(parseFunnelStatus(text)).toEqual({
+      target: "http://127.0.0.1:5000",
+      complete: true,
+    });
+    expect(
+      parseFunnelStatus(
+        '{"Web":{"h:443":{"Handlers":{"/codexhost":{"Proxy":"http://127.0.0.1:5000"}}}}}',
+      ),
+    ).toEqual({
+      target: "http://127.0.0.1:5000",
+      complete: false,
+    });
     expect(parseFunnelStatus("")).toEqual({});
     expect(parseFunnelStatus('{"Web":{"h:443":{"Handlers":{"/other":{"Proxy":"x"}}}}}')).toEqual(
       {},
@@ -63,7 +80,25 @@ describe("Tailscale control", () => {
     await control.clearFunnel();
     expect(run.mock.calls).toEqual([
       [["funnel", "--bg", "--set-path=/codexhost", "http://127.0.0.1:5000"]],
+      [
+        [
+          "funnel",
+          "--bg",
+          "--set-path=/.well-known/oauth-protected-resource/codexhost/mcp",
+          "http://127.0.0.1:5000/.well-known/oauth-protected-resource",
+        ],
+      ],
+      [
+        [
+          "funnel",
+          "--bg",
+          "--set-path=/.well-known/oauth-authorization-server/codexhost",
+          "http://127.0.0.1:5000/.well-known/oauth-authorization-server",
+        ],
+      ],
       [["funnel", "--set-path=/codexhost", "off"]],
+      [["funnel", "--set-path=/.well-known/oauth-protected-resource/codexhost/mcp", "off"]],
+      [["funnel", "--set-path=/.well-known/oauth-authorization-server/codexhost", "off"]],
     ]);
     const failing = createTailscaleControl({}, async () => {
       throw new Error("tailscale: not found");

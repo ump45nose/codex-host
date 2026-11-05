@@ -221,14 +221,15 @@ export class ExternalAccessSupervisor {
     if (!this.#public) return { state: "unavailable", reason: "The public listener did not start" };
     const target = this.#public.endpoint;
     try {
-      const current = (await this.#tailscale.funnel()).target;
+      const funnel = await this.#tailscale.funnel();
+      const current = funnel.target;
       if (current !== undefined && !isLoopbackTarget(current))
         return {
           state: "unavailable",
           reason: `${FUNNEL_PATH} is already mapped to ${current}; codexhost does not replace it`,
         };
       this.#funnelMayExist = true;
-      if (current !== target) {
+      if (current !== target || funnel.complete === false) {
         await this.#tailscale.setFunnel(target);
         this.#diagnose(`Funnel ${FUNNEL_PATH} → ${target}`);
       }

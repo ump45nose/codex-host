@@ -2,8 +2,10 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
-/** codexhost's own Funnel path; nothing else under the Funnel is touched. */
+/** codexhost's own Funnel paths; nothing else under the Funnel is touched. */
 export const FUNNEL_PATH = "/codexhost";
+export const FUNNEL_PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource/codexhost/mcp";
+export const FUNNEL_AUTH_SERVER_PATH = "/.well-known/oauth-authorization-server/codexhost";
 
 export interface TailscaleState {
   running: boolean;
@@ -17,6 +19,8 @@ export interface TailscaleState {
 export interface FunnelMapping {
   /** Where the codexhost path is proxied to, or undefined when it is not mapped. */
   target?: string;
+  /** Whether the companion OAuth `.well-known` Funnel paths are also mapped to `target`. */
+  complete?: boolean;
 }
 
 /** The Tailscale operations codexhost needs; injected so tests do not need Tailscale. */
@@ -87,8 +91,17 @@ export function parseTailscaleStatus(text: string): TailscaleState {
 export function parseFunnelStatus(text: string): FunnelMapping {
   const web = record(record(text.trim() ? JSON.parse(text) : {})?.Web) ?? {};
   for (const host of Object.values(web)) {
-    const handler = record(record(record(host)?.Handlers)?.[FUNNEL_PATH]);
-    if (typeof handler?.Proxy === "string") return { target: handler.Proxy };
+    const handlers = record(record(host)?.Handlers);
+    const handler = record(handlers?.[FUNNEL_PATH]);
+    if (typeof handler?.Proxy === "string") {
+      const target = handler.Proxy;
+      const complete =
+        record(handlers?.[FUNNEL_PROTECTED_RESOURCE_PATH])?.Proxy ===
+          `${target}/.well-known/oauth-protected-resource` &&
+        record(handlers?.[FUNNEL_AUTH_SERVER_PATH])?.Proxy ===
+          `${target}/.well-known/oauth-authorization-server`;
+      return { target, complete };
+    }
   }
   return {};
 }
@@ -111,9 +124,27 @@ export function createTailscaleControl(
     },
     async setFunnel(target) {
       await tailscale(["funnel", "--bg", `--set-path=${FUNNEL_PATH}`, target]);
+      await tailscale([
+        "funnel",
+        "--bg",
+        `--set-path=${FUNNEL_PROTECTED_RESOURCE_PATH}`,
+        `${target}/.well-known/oauth-protected-resource`,
+      ]);
+      await tailscale([
+        "funnel",
+        "--bg",
+        `--set-path=${FUNNEL_AUTH_SERVER_PATH}`,
+        `${target}/.well-known/oauth-authorization-server`,
+      ]);
     },
     async clearFunnel() {
       await tailscale(["funnel", `--set-path=${FUNNEL_PATH}`, "off"]);
+      await tailscale(["funnel", `--set-path=${FUNNEL_PROTECTED_RESOURCE_PATH}`, "off"]).catch(
+        () => undefined,
+      );
+      await tailscale(["funnel", `--set-path=${FUNNEL_AUTH_SERVER_PATH}`, "off"]).catch(
+        () => undefined,
+      );
     },
   };
 }

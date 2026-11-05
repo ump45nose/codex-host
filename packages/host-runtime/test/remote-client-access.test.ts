@@ -210,6 +210,10 @@ describe("client scopes and networks", () => {
       resource: `${server.endpoint}/mcp`,
       authorization_servers: [server.endpoint],
     });
+    const prmPathInserted = (await (
+      await fetch(new URL("/.well-known/oauth-protected-resource/codexhost/mcp", server.endpoint))
+    ).json()) as { resource: string; authorization_servers: string[] };
+    expect(prmPathInserted).toEqual(prm);
     const asm = (await (
       await fetch(new URL("/.well-known/oauth-authorization-server", server.endpoint))
     ).json()) as {
@@ -222,6 +226,10 @@ describe("client scopes and networks", () => {
       token_endpoint: `${server.endpoint}/oauth/token`,
       registration_endpoint: `${server.endpoint}/oauth/register`,
     });
+    const asmPathInserted = (await (
+      await fetch(new URL("/.well-known/oauth-authorization-server/codexhost", server.endpoint))
+    ).json()) as typeof asm;
+    expect(asmPathInserted).toEqual(asm);
 
     const redirectUri = "http://127.0.0.1:6274/oauth/callback";
     const regResponse = await fetch(new URL("/oauth/register", server.endpoint), {

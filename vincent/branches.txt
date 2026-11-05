@@ -5,6 +5,7 @@
 fix/renderer-inspector-script-cache          # local: bound V8 inspector script cache (memory leak); no PR yet
 fix/antigravity-recovered-native-error       # PR #737
 fix/antigravity-thinking-projection          # PR #739
+fix/antigravity-compact                      # PR #747
 feat/external-cli-codex-user-instructions    # PR #741
 feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
 feat/external-client-access                  # PR #727 (contains PR #726 persist watches)

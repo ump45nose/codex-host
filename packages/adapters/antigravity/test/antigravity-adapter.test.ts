@@ -1221,7 +1221,7 @@ if (${keepAlive}) {
         }),
       ];
 
-      const { command, cwd, cleanup } = await fakeStreamingAgy(streamLines);
+      const { command, cwd, cleanup } = await fakeStreamingAgy(streamLines, true);
       const adapter = new AntigravityAdapter({ command });
       try {
         const opened = await adapter.open({ kind: "create", cwd });

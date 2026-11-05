@@ -964,8 +964,11 @@ class AntigravitySession implements HarnessSession {
       const active = this.#active;
       active.cancellationRequested = true;
       await active.subagents.cancel();
-      active.process.kill();
+      // Finish with "Session closed" before kill so the process `close` handler
+      // (which reports "Cancelled by user" when cancellationRequested) cannot win
+      // the race after the child exits.
       this.#completeTurn(active, { status: "cancelled", reason: "Session closed" });
+      active.process.kill();
     }
     await Promise.all([...this.#subagentObservers].map((observer) => observer.cancel()));
     await this.#questionCleanup;

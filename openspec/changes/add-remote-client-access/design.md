@@ -25,7 +25,7 @@ Funnel :443 /codexhost/*     ─┘    （客户端令牌或 OAuth 访问令牌 
 - 地址发现与 Funnel 都通过本机 `tailscale` CLI 的 JSON 输出与 `serve`/`funnel` 子命令完成，不链接 Tailscale 库。
 - codexhost 只添加自己的路径映射，关闭时只删除这些条目；启动时核对映射是否仍指向当前端口，并修正指向 codexhost 端口的过期条目。
 - `tailscale funnel --set-path <前缀>` 会剥离前缀，后端收到的是去掉前缀后的路径。公网 loopback 端口因此按“去前缀后的路径”路由，不依赖前缀。
-- OAuth 发现请求打在根路径的 `/.well-known/...` 下。codexhost 只额外映射以自身路径为后缀的发现地址（`/.well-known/oauth-protected-resource/codexhost/mcp` 与 `/.well-known/oauth-authorization-server/codexhost`，按 RFC 9728 / RFC 8414 的路径插入规则），不占用整个根路径。tailscale serve 能否把这些路径转发到后端的指定路径，在实现时验证；不能时退回为每个发现路径使用独立的 loopback 端口。
+- OAuth 发现请求打在根路径的 `/.well-known/...` 下。codexhost 只额外映射以自身路径为后缀的发现地址（`/.well-known/oauth-protected-resource/codexhost/mcp` 与 `/.well-known/oauth-authorization-server/codexhost`，按 RFC 9728 / RFC 8414 的路径插入规则），不占用整个根路径。实测确认 `tailscale funnel --bg --set-path=<路径> http://127.0.0.1:<端口>/<后端路径>` 支持直接转发到同一公网 loopback 端口的指定路径。
 - 首次开启 Funnel 时证书签发约需 1 分钟，其间 TLS 握手失败；控制台显示“证书签发中”，不判定为失败。
 - tailnet 地址变化（重新登录、切换 tailnet）时重新绑定；不可用时只影响该入口。
 
@@ -56,11 +56,11 @@ interface WebhookAdapter {
 
 投递状态（最后确认的事件标识、每条事件的重试计数和下次时间）按客户端持久化，与 PR 1 的 watch 持久化放在同一个私有状态目录。退避从 5 秒起每次翻倍，上限 15 分钟，总期限 24 小时。webhook 只做唤醒，payload 只含事件字段；bot 被唤醒后通过 MCP `thread_read` 获取结果。
 
-首个 adapter 依据前置验证的结果（Grok Bot 的 webhook 触发器建在 Cursor Automations 上，地址形如 `https://api2.cursor.sh/automations/webhook/<uuid>`）：
+前置验证（2026-11-03）表明：Grok Bot 的 webhook 触发器实际上是 Cursor Automations 的 `POST` 入口，契约为：
 
-| 项 | 行为 |
-| --- | --- |
-| 认证 | `Authorization: Bearer <key>`；key 由用户配置，按客户端仅当前用户可读保存，不出现在日志与控制台 |
+| 项目 | 行为 |
+|---|---|
+| 认证 | `Authorization: Bearer <key>`，密钥由用户配置，按客户端仅当前用户可读保存，不出现在日志与控制台 |
 | 签名 | 目标不校验签名，adapter 不签名 |
 | body | `application/json`，只含事件标识、Thread、结果、Harness、深度链接与引用，上限 4 KB（目标只向 bot 展示前几 KB）|
 | 幂等 | 目标不去重；adapter 以 `Idempotency-Key: <客户端>:<事件标识>` 透传事件标识，供 bot 自行去重 |
@@ -81,5 +81,5 @@ adapter 标识用 `grok-bot`，实现上只依赖这个 webhook 契约。
 
 ## Open Questions
 
-- tailscale serve 能否把 `/.well-known/...` 下的指定路径转发到后端的指定路径（见决策 3）。
+- tailscale serve 能否把 `/.well-known/...` 下的指定路径转发到后端的指定路径：**成立**（MacPro 实测 `tailscale funnel --bg --set-path=/.well-known/oauth-authorization-server/codexhost http://127.0.0.1:<端口>/.well-known/oauth-authorization-server` 可直接映射并转发）。
 - Grok Bot 走 OAuth 时实际请求的端点序列：前置验证中测试服务不返回 401，客户端未发起发现；在实现 OAuth 后用真实 Grok Bot 复测。

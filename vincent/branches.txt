@@ -18,3 +18,5 @@ fix/remote-ssh-share-local-data              # PR #584
 fix/cursor-side-chat-edit                    # PR #576
 fix/independent-native-provider-quota        # PR #470
 fix/macos-nested-codex-cli                   # PR #396
+fix/host-chain-npm-node                     # PR #752 (Fixes #749 npm Host chain ready)
+fix/console-shutdown-on-exit                 # PR #753 (Fixes #750 stale console on 4399)

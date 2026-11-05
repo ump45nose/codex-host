@@ -8,7 +8,9 @@ fix/antigravity-thinking-projection          # PR #739
 feat/external-cli-codex-user-instructions    # PR #741
 feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
 feat/external-client-access                  # PR #727 (contains PR #726 persist watches)
+feat/remote-client-access                    # PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)
 feat/local-design-preview                    # PR #728 (contains PR #725 openspec docs)
+feat/claude-desktop-entrypoint               # Claude Desktop opt-in entrypoint
 fix/remote-ssh-share-local-data              # PR #584
 fix/cursor-side-chat-edit                    # PR #576
 fix/independent-native-provider-quota        # PR #470

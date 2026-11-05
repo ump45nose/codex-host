@@ -8,6 +8,7 @@ fix/antigravity-thinking-projection          # PR #739
 fix/antigravity-compact                      # PR #747
 feat/external-cli-codex-user-instructions    # PR #741
 feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
+fix/sidebar-sticky-mirrors                   # local: retain sidebar mirrors when Recents collapses; also on PR #709
 feat/renderer-sidebar-stash                 # local: sidebar 收纳箱 (stash) renderer extension; no upstream PR
 feat/external-client-access                  # PR #727 (contains PR #726 persist watches)
 feat/remote-client-access                    # PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)

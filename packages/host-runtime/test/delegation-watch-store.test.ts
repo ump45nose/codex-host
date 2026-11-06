@@ -74,6 +74,36 @@ describe("FileDelegationWatchStore", () => {
     await expect(new FileDelegationWatchStore(directory).adopt()).resolves.toEqual([]);
   });
 
+  it("adopts silence configuration and pending stalled outcomes", async () => {
+    await mkdir(directory, { recursive: true });
+    const record = watch("stalled", {
+      stallAfterMs: 3_000,
+      stallNotified: true,
+      state: "pendingDelivery",
+      outcome: "stalled",
+    });
+    await writeForeign(
+      directory,
+      "stalled.json",
+      { pid: exitedPid(), boot: bootSeconds() },
+      record,
+    );
+    await expect(new FileDelegationWatchStore(directory).adopt()).resolves.toEqual([record]);
+  });
+
+  it.each([0, -1, 1.5])("rejects a stored invalid silence threshold %s", async (stallAfterMs) => {
+    await mkdir(directory, { recursive: true });
+    await writeForeign(
+      directory,
+      "bad-stall.json",
+      { pid: exitedPid(), boot: bootSeconds() },
+      watch("bad-stall", { stallAfterMs }),
+    );
+    const diagnose = vi.fn();
+    await expect(new FileDelegationWatchStore(directory, diagnose).adopt()).resolves.toEqual([]);
+    expect(diagnose).toHaveBeenCalledOnce();
+  });
+
   it("leaves records of a running Runtime alone", async () => {
     await new FileDelegationWatchStore(directory).save(watch("mine"));
     await expect(new FileDelegationWatchStore(directory).adopt()).resolves.toEqual([]);

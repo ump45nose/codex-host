@@ -16,9 +16,11 @@ export interface PersistedWatch extends ThreadWatchEntry {
   delivering?: boolean;
   /** Why an `interrupted` outcome was decided after a restart, for the notification. */
   restartNote?: string;
-  /** Recorded when the watched Thread stops, for client events. */
+  /** Recorded when an outcome is observed, for client events. */
   harnessId?: string;
   refs?: string[];
+  /** The current silence episode already produced a notification. Reset after a restart. */
+  stallNotified?: boolean;
 }
 
 export interface DelegationWatchStore {
@@ -50,6 +52,7 @@ const OUTCOMES = new Set<ThreadWatchOutcome>([
   "failed",
   "interrupted",
   "timedOut",
+  "stalled",
   "unreadable",
   "notFound",
 ]);
@@ -109,6 +112,9 @@ function parseWatchFile(text: string): WatchFile {
     !optionalString(watch.reason) ||
     !Number.isSafeInteger(watch.timeoutMs) ||
     !Number.isFinite(watch.deadline) ||
+    (watch.stallAfterMs !== undefined &&
+      (!Number.isSafeInteger(watch.stallAfterMs) || watch.stallAfterMs <= 0)) ||
+    (watch.stallNotified !== undefined && typeof watch.stallNotified !== "boolean") ||
     !optionalNumber(watch.deliveryDeadline) ||
     (watch.delivering !== undefined && typeof watch.delivering !== "boolean") ||
     !optionalString(watch.restartNote) ||

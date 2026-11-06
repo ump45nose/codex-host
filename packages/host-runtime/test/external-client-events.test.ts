@@ -64,6 +64,75 @@ describe("client event log", () => {
     expect(need(next).id).toBeGreaterThan(need(last).id);
   });
 
+  it("records stalled alerts in the client log and keeps observing until the final stop", async () => {
+    vi.useFakeTimers();
+    let status: DelegationThreadStatus = "running";
+    const send = vi.fn();
+    const log = new ClientEventLog({ directory, retentionDays: 7 });
+    const service = new DelegationWatchService(
+      {
+        read: vi.fn(
+          async ({ threadId }: { threadId: string }): Promise<DelegationThreadSnapshot> => ({
+            threadId,
+            harnessId: "codex",
+            status,
+            turn: { turnId: "turn-1", status },
+            progress: [],
+            result: { availability: "pending" },
+            nextCursor: null,
+          }),
+        ),
+        send,
+      },
+      { pollIntervalMs: 1_000, clientEvents: log },
+    );
+    try {
+      await service.watch({
+        threadId: "child",
+        notifyThreadId: "client:bot",
+        timeoutMs: 60_000,
+        stallAfterMs: 3_000,
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.waitFor(async () => expect((await log.read("bot", 0)).events).toHaveLength(1));
+      const [alert] = (await log.read("bot", 0)).events;
+      expect(alert).toMatchObject({
+        type: "watch",
+        threadId: "child",
+        outcome: "stalled",
+        turnId: "turn-1",
+        harnessId: "codex",
+        deepLink: "codex://threads/child",
+        note: expect.stringContaining("still running, but no Harness event was observed for 3 s"),
+      });
+      expect(alert?.note).toContain("The watch continues");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await log.read("bot", 0)).events).toHaveLength(1);
+      service.noteActivity(["child"]);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.waitFor(async () => expect((await log.read("bot", 0)).events).toHaveLength(2));
+      expect((await service.watches()).watches).toContainEqual(
+        expect.objectContaining({ state: "watching", stallAfterMs: 3_000 }),
+      );
+      status = "completed";
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(async () => expect((await service.watches()).watches).toEqual([]));
+      expect((await log.read("bot", 0)).events.map((event) => event.outcome)).toEqual([
+        "stalled",
+        "stalled",
+        "completed",
+      ]);
+      expect(send).not.toHaveBeenCalled();
+      // The stalled outcome and its explanation survive reopening the event log.
+      expect(
+        (await new ClientEventLog({ directory, retentionDays: 7 }).read("bot", 0)).events[0],
+      ).toEqual(alert);
+    } finally {
+      service.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("removes whole days past retention and reports an expired cursor", async () => {
     let now = Date.parse("2026-11-01T12:00:00Z");
     const log = new ClientEventLog({ directory, retentionDays: 7, now: () => now });

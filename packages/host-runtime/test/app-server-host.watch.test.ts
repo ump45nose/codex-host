@@ -1,13 +1,55 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonObject } from "@codexhost/protocol-core";
-import type { DelegationControlApi, DelegationThreadSnapshot } from "../src/delegation-types.js";
+import type {
+  DelegationControlApi,
+  DelegationControlRegistration,
+  DelegationThreadSnapshot,
+} from "../src/delegation-types.js";
 import { DelegationWatchService } from "../src/delegation-watch.js";
 import {
   bindOfficialThread,
   createFixture,
   readJsonLine,
+  startPiThread,
+  startPiTurn,
   stopFixture,
 } from "./app-server-host-fixture.js";
+
+describe("watch activity from Host Harness streams", () => {
+  it("publishes native tool events and external subagent events through the registration", async () => {
+    let registration: DelegationControlRegistration | undefined;
+    const fixture = createFixture({
+      onDelegationApi: (api) => {
+        registration = api;
+        return undefined;
+      },
+    });
+    try {
+      await fixture.ready;
+      if (!registration?.subscribeActivity) throw new Error("Missing activity subscription");
+      const activity = vi.fn();
+      const unsubscribe = registration.subscribeActivity(activity);
+      fixture.official.stdout.write(
+        `${JSON.stringify({ method: "item/commandExecution/outputDelta", params: { threadId: "native", delta: "output" } })}\n`,
+      );
+      await vi.waitFor(() => expect(activity).toHaveBeenCalledWith(["native"]));
+      const threadId = await startPiThread(fixture);
+      await startPiTurn(fixture, threadId);
+      const session = fixture.adapter.sessions[0];
+      if (!session) throw new Error("Missing fake Harness session");
+      activity.mockClear();
+      session.emitSubagentState("worker", "running");
+      await vi.waitFor(() => expect(activity).toHaveBeenCalledWith([threadId]));
+      unsubscribe();
+      activity.mockClear();
+      session.emitSubagentTranscriptChanged("worker");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(activity).not.toHaveBeenCalled();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+});
 
 async function watchFixture() {
   let api: DelegationControlApi | undefined;

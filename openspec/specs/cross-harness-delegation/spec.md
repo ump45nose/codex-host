@@ -183,7 +183,7 @@ Host SHALL 向它拉起的 Harness 进程提供配套 CLI 的绝对路径、Runt
 - **AND** 失败输出 SHALL 携带可辨识的错误代码
 
 ### Requirement: 委派创建与结果观察解耦且不主动注入父 Session
-`codexhost delegate start --harness <harnessId> --task <text> [--parent-thread <thread>] [--request-id <id>] [--watch true|false] [--watch-timeout-ms <n>]` SHALL 在创建目标 Session/Thread 并投递任务后立即返回。`--harness` 与 `--task` SHALL 为必填参数；`--parent-thread` SHALL 显式覆盖 Host 推断的调用方 Thread；`--request-id` SHALL 承载调用方提供的幂等标识。发起方 Agent SHALL 可以自主选择通过 `thread read` 读取、通过有界 `thread wait` 等待、通过 `thread watch` 或 `--watch true` 注册一次性停下通知、稍后再次观察，或不再跟踪。除调用方显式注册的 watch 外，Host MUST NOT 在子任务完成后向父 Session 注入结果、唤醒父 Agent 或为此创建自主 Turn。
+`codexhost delegate start --harness <harnessId> --task <text> [--parent-thread <thread>] [--request-id <id>] [--watch true|false] [--watch-timeout-ms <n>] [--stall-after-ms <n>]` SHALL 在创建目标 Session/Thread 并投递任务后立即返回。`--harness` 与 `--task` SHALL 为必填参数；`--parent-thread` SHALL 显式覆盖 Host 推断的调用方 Thread；`--request-id` SHALL 承载调用方提供的幂等标识。发起方 Agent SHALL 可以自主选择通过 `thread read` 读取、通过有界 `thread wait` 等待、通过 `thread watch` 或 `--watch true` 注册一次性停下通知、稍后再次观察，或不再跟踪。除调用方显式注册的 watch 外，Host MUST NOT 在子任务完成后向父 Session 注入结果、唤醒父 Agent 或为此创建自主 Turn。
 
 #### Scenario: 委派创建成功返回
 - **WHEN** 调用方执行有效的 `codexhost delegate start --harness <harnessId> --task <text>`
@@ -238,7 +238,7 @@ Host SHALL 向它拉起的 Harness 进程提供配套 CLI 的绝对路径、Runt
 - **AND** 它 MUST NOT 仅以自由文本表述成败
 
 ### Requirement: 调用方可显式注册一次性 Thread 停下通知
-系统 SHALL 提供 `codexhost thread watch <thread> [--notify <thread>] [--timeout-ms <n>]` 与 `codexhost thread watches`。watch 在被观察 Thread 停下或到期时，SHALL 通过与 `thread send` 相同的路径在被通知 Thread 中启动一个新 Turn，作为一次性通知。被观察 Thread 与被通知 Thread 可以是任意两个不同的 Thread，不要求委派血缘。通知 SHALL 只报告执行状态与 Thread 链接，MUST NOT 携带或摘要会话内容，也 MUST NOT 被表述为工作已验收。watch SHALL 只保存在 Host Runtime 内存中，不提供取消操作。
+系统 SHALL 提供 `codexhost thread watch <thread> [--notify <thread>] [--timeout-ms <n>] [--stall-after-ms <n>]` 与 `codexhost thread watches`。watch 在被观察 Thread 停下或到期时，SHALL 通过与 `thread send` 相同的路径在被通知 Thread 中启动一个新 Turn，作为一次性通知。被观察 Thread 与被通知 Thread 可以是任意两个不同的 Thread，不要求委派血缘。通知 SHALL 只报告执行状态与 Thread 链接，MUST NOT 携带或摘要会话内容，也 MUST NOT 被表述为工作已验收。watch SHALL 持久保存并在 Host Runtime 重启后恢复，不提供取消操作。可选卡住提醒 SHALL 独立于一次性停下通知，默认关闭，不结束观察。
 
 #### Scenario: 注册后立即返回
 - **WHEN** 调用方对一个运行中的 Thread 执行 `thread watch`
@@ -302,7 +302,10 @@ Host SHALL 向它拉起的 Harness 进程提供配套 CLI 的绝对路径、Runt
 
 #### Scenario: Host Runtime 重启
 - **WHEN** Host Runtime 在 watch 送达前重启
-- **THEN** 未送达的 watch SHALL 丢失且不再通知
+- **THEN** 未送达的 watch SHALL 恢复观察或投递；观察与投递的绝对期限 SHALL 保留，停机时间计入
+- **AND** 恢复后的观察 SHALL 为会话重新注册提供最多 5 分钟宽限；宽限内读取失败 MUST NOT 被当作 Thread 已删除或观察到期
+- **AND** 重启前观察中、首次恢复读取已终态或宽限后无法重开的 Thread SHALL 以 `interrupted` 通知并说明原因
+- **AND** 重启时正在投递的通知 SHALL 再次投递，因此允许重启后重复，MUST NOT 静默丢失
 - **AND** Delegation 关系 SHALL 保持持久化，调用方可重新注册
 
 ### Requirement: `thread read` 返回精简的可见对话结果而非执行轨迹
@@ -458,3 +461,32 @@ Thread 观察命令 SHALL 接受裸 Thread 标识与 Codex 深度链接两种形
 - **THEN** Host MUST NOT 启动或取消 Turn、发送消息或回复 Interaction
 - **AND** send/cancel MUST 仅由对应的显式命令触发
 
+### Requirement: 调用方可选择 Thread 静默卡住提醒
+`thread watch` 与 `delegate start --watch true` SHALL 接受可选正整数 `--stall-after-ms`，默认关闭。未启用 watch 的 `delegate start` MUST NOT 接受该参数。同一对 Thread 的重复注册 SHALL 保留原观察期限与静默阈值。
+
+#### Scenario: 静默达到阈值只提醒一次
+- **WHEN** 启用卡住提醒的被观察 Thread 仍在运行，且从注册或最后一次活动起静默达到阈值
+- **THEN** Host SHALL 生成 `stalled` 通知，含 Thread 链接、可用的 Turn 标识与静默阈值
+- **AND** 通知 SHALL 说明 Thread 仍在运行、静默不证明失败，不包含会话内容
+- **AND** 同一段持续静默 MUST NOT 重复触发，原 watch SHALL 继续观察停下与到期
+
+#### Scenario: 任意 Harness 活动与子代理活动
+- **WHEN** Host 收到被观察 Thread 或其 Harness 子代理的任何事件或交互，包括工具输出、推理与文件变化
+- **THEN** Host SHALL 刷新该 Thread 及已知子代理祖先 Thread 的内存活动时间，并重新允许下一次静默提醒
+- **AND** 轮询读取、Host 自己的投影通知 MUST NOT 被当作活动
+- **AND** 活动收集 MUST 使用已有原生 Codex app-server 与外部 Harness 事件流；MUST NOT 新建定时器、进程或 rollout 扫描
+
+#### Scenario: 合并投递且不结束观察
+- **WHEN** 卡住提醒触发时接收方正忙，或同一接收方还有其他待投递提醒
+- **THEN** 卡住提醒 SHALL 沿已有待投递机制重试并合并；活动恢复后待投递提醒仍保留其触发时刻的事实
+- **AND** 卡住提醒送达或投递失败 MUST NOT 结束主 watch 的停下观察
+
+#### Scenario: 默认关闭
+- **WHEN** 调用方未提供 `--stall-after-ms`
+- **THEN** watch SHALL 保持原来的一次性停下、到期与读取故障通知行为，MUST NOT 因静默生成通知
+
+#### Scenario: 静默状态持久化与重启
+- **WHEN** Host Runtime 重启
+- **THEN** 静默阈值、已触发状态及待投递卡住提醒 SHALL 随 watch 保存并恢复
+- **AND** 活动时间 SHALL 仅保留在内存；恢复观察 SHALL 清除静默抑制并从恢复时刻重新计时，MUST NOT 将停机时长算作静默
+- **AND** 既有待投递卡住提醒 SHALL 继续投递，主 watch SHALL 继续观察

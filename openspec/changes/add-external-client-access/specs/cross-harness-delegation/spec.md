@@ -221,8 +221,8 @@ Thread 观察命令 SHALL 接受裸 Thread 标识与 Codex 深度链接，并可
 
 #### Scenario: 停机期间被观察 Thread 已停下
 - **WHEN** 被观察 Thread 在 Host Runtime 停机期间达到终态
-- **THEN** 恢复后第一次读取已终态的 Thread SHALL 以 `interrupted` 通知，并说明重启前正在运行、恢复后的状态
-- **AND** 观察期限已过但 Thread 已是终态时，结果 SHALL 为 `interrupted` 而非 `timedOut`
+- **THEN** 恢复后 Host SHALL 按其实际终态通知被通知 Thread
+- **AND** 观察期限已过但 Thread 已是终态时，结果 SHALL 为该终态而非 `timedOut`
 
 #### Scenario: 期限按绝对时间计算
 - **WHEN** Host Runtime 停机一段时间后恢复

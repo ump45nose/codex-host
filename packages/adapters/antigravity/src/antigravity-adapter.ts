@@ -226,7 +226,7 @@ function unstreamedReplyTail(streamed: string, reply: string): string | null {
 
 const antigravityHarnessId = harnessIdSchema.parse("antigravity");
 const DEFAULT_INSPECT_TIMEOUT_MS = 20_000;
-const DEFAULT_PRINT_TIMEOUT = "30m";
+const DEFAULT_PRINT_TIMEOUT = "0s";
 const DEFAULT_TOOL_OUTPUT_LIMIT = 64_000;
 const DEFAULT_SUBAGENT_OBSERVATION_TIMEOUT_MS = 30_000;
 /** How long a finished Turn's agy may take to exit after its stdin closes before it is signalled. */
@@ -519,6 +519,11 @@ function hostUsage(
       : {}),
   };
   return Object.keys(usage).length > 0 ? usage : null;
+}
+
+function stderrPrintTimeoutMessage(stderr: string): string | null {
+  const match = stderr.match(/\b(print timeout after [^\r\n"]+)/iu);
+  return match?.[1]?.trim() ?? null;
 }
 
 function normalizedProcessError(
@@ -1075,8 +1080,8 @@ class AntigravitySession implements HarnessSession {
     const turnReply = response.startsWith(this.#lastResultResponse)
       ? response.slice(this.#lastResultResponse.length)
       : response;
-    const repliedThisTurn = Boolean(active.agentItem) || turnReply.trim() !== "";
     if (response) this.#lastResultResponse = response;
+    this.#flushAllPendingAgentText(active);
     if (turnReply.trim() !== "") {
       // The streamed segments are already on screen as separate messages, so
       // only text the stream never showed is added to the last one.
@@ -1084,6 +1089,8 @@ class AntigravitySession implements HarnessSession {
       if (unshown === null) this.#appendOrSyncAgentText(active, turnReply, false);
       else if (unshown.trim() !== "") this.#appendAgentText(active, unshown);
     }
+    const repliedThisTurn =
+      active.agentItem !== null && active.tools.size === 0 && active.pendingSteps.size === 0;
     if (!convId) {
       // agy ended before it ever named a Conversation (no `init`, empty result id), so no
       // native Turn exists to map. A placeholder identity would only be rejected by the Host
@@ -1114,7 +1121,7 @@ class AntigravitySession implements HarnessSession {
         { status: "cancelled", reason: "Cancelled by user", checkpoint },
         nativeTurnRef,
       );
-    } else if (event.result.status === "SUCCESS") {
+    } else if (this.#resultSucceeded(active, event)) {
       if (active.permissionDenial !== null && !active.agentItem) {
         this.#completeTurn(
           active,
@@ -1130,13 +1137,24 @@ class AntigravitySession implements HarnessSession {
       }
     } else {
       const error = this.#resultError(active, event);
-      if (repliedThisTurn && event.result.error?.trim() && this.#reportedEarlier(error)) {
+      const finishedReason = event.result.finished_reason?.trim();
+      const timedOut =
+        finishedReason === "print_timeout" || stderrPrintTimeoutMessage(active.stderr) !== null;
+      if (
+        !timedOut &&
+        finishedReason !== "interrupted" &&
+        repliedThisTurn &&
+        event.result.error?.trim() &&
+        this.#reportedEarlier(error)
+      ) {
         // agy keeps a Conversation's first failure and repeats it in the result
         // of every later Turn, even when that Turn answered without error. A
         // Turn that replied and only repeats an error an earlier Turn of this
         // Conversation already reported did not fail.
         this.#completeTurn(active, { status: "succeeded", checkpoint }, nativeTurnRef);
       } else if (
+        !timedOut &&
+        finishedReason !== "interrupted" &&
         repliedThisTurn &&
         event.result.error?.trim() &&
         (await nativeTurnRecoveredFromError({
@@ -1165,22 +1183,40 @@ class AntigravitySession implements HarnessSession {
     }
     this.#completeTurn(active, {
       status: "failed",
-      error:
-        event.result.status === "SUCCESS"
-          ? {
-              code: "protocolError",
-              message: "Antigravity finished the Turn without a Conversation identity",
-              retryable: true,
-            }
-          : this.#resultError(active, event),
+      error: this.#resultSucceeded(active, event)
+        ? {
+            code: "protocolError",
+            message: "Antigravity finished the Turn without a Conversation identity",
+            retryable: true,
+          }
+        : this.#resultError(active, event),
     });
   }
 
+  #resultSucceeded(active: ActiveTurn, event: AntigravityResultEvent): boolean {
+    return (
+      event.result.status === "SUCCESS" &&
+      !event.result.finished_reason?.trim() &&
+      stderrPrintTimeoutMessage(active.stderr) === null
+    );
+  }
+
   #resultError(active: ActiveTurn, event: AntigravityResultEvent): HarnessError {
-    const nativeError = event.result.error?.trim();
+    const finishedReason = event.result.finished_reason?.trim();
+    const timeoutDetail = stderrPrintTimeoutMessage(active.stderr);
+    const nativeError =
+      timeoutDetail ??
+      event.result.error?.trim() ??
+      (finishedReason === "print_timeout" ? "print timeout" : undefined);
+    const fallback =
+      timeoutDetail !== null || finishedReason === "print_timeout"
+        ? "Antigravity Turn timed out before completion"
+        : event.result.status === "SUCCESS" && finishedReason
+          ? `Antigravity Turn ended early (${finishedReason})`
+          : `Antigravity Turn ended with status ${event.result.status}`;
     return normalizedProcessError(
       nativeError || active.stderr,
-      `Antigravity Turn ended with status ${event.result.status}`,
+      fallback,
       nativeError !== undefined,
     );
   }

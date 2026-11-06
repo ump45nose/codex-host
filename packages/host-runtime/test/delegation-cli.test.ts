@@ -42,6 +42,22 @@ describe("delegation CLI", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("lists stalled alerts in the watch and event help", async () => {
+    const help = async (...command: string[]) => {
+      const output = new PassThrough();
+      await expect(runDelegationCli({ arguments: [...command, "--help"], output })).resolves.toBe(
+        0,
+      );
+      return outputText(output);
+    };
+    expect(await help("thread", "watch")).toContain(
+      "unreadable, notFound, or stalled (only with --stall-after-ms; the watch continues)",
+    );
+    expect(await help("events")).toContain(
+      "(outcome stalled, explained in note; the watch continues)",
+    );
+  });
+
   it("discovers Harnesses without reading a Model catalog", async () => {
     const fetchImpl = successfulFetch({ harnesses: ["codex", "pi"] });
     const output = new PassThrough();

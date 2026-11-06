@@ -7,6 +7,7 @@ fix/antigravity-recovered-native-error       # PR #737
 fix/antigravity-thinking-projection          # PR #739
 fix/antigravity-compact                      # PR #747
 fix/external-thread-compact-start            # PR #759 (Desktop thread/compact/start runs the Harness /compact)
+fix/antigravity-print-timeout                # PR #761 (Fixes #760 antigravity print timeout)
 feat/external-cli-codex-user-instructions    # PR #741
 feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
 fix/sidebar-sticky-mirrors                   # local: retain sidebar mirrors when Recents collapses; also on PR #709

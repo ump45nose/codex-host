@@ -15,6 +15,8 @@ feat/renderer-sidebar-thread-nesting         # PR #709 tip: pinned-child retain-
 feat/renderer-sidebar-stash                 # local: sidebar 收纳箱 (stash) renderer extension; no upstream PR
 feat/external-client-access                  # PR #727 (contains PR #726 persist watches)
 feat/remote-client-access                    # PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)
+feat/thread-watch-stall                      # local
+feat/delegation-capacity                     # local
 feat/local-design-preview                    # PR #728 (contains PR #725 openspec docs)
 feat/claude-desktop-entrypoint               # Claude Desktop opt-in entrypoint
 fix/remote-ssh-share-local-data              # PR #584

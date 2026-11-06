@@ -109,7 +109,9 @@ describe("client event log", () => {
           turnId: "turn-1",
           harnessId: "codex",
           deepLink: "codex://threads/child",
-          note: expect.stringContaining("still running, but no Harness event was observed for 3 s"),
+          note: expect.stringContaining(
+            "still running, but no Harness event had been observed for at least 3 s",
+          ),
         },
       ]);
       expect(appended[0]?.note).toContain("The watch continues");

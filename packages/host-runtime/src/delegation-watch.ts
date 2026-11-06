@@ -113,10 +113,16 @@ function threadLink(threadId: string): string {
 }
 
 function duration(milliseconds: number): string {
-  if (milliseconds < 1_000) return `${milliseconds} ms`;
   return milliseconds < 60_000
     ? `${Math.round(milliseconds / 1_000)} s`
     : `${Math.round(milliseconds / 60_000)} min`;
+}
+
+/** Never rounded: a stalled alert claims at least this much silence. */
+function exactDuration(milliseconds: number): string {
+  if (milliseconds % 60_000 === 0) return `${milliseconds / 60_000} min`;
+  if (milliseconds % 1_000 === 0) return `${milliseconds / 1_000} s`;
+  return `${milliseconds} ms`;
 }
 
 function describe(watch: Watch): string {
@@ -125,7 +131,7 @@ function describe(watch: Watch): string {
     return `${link}: interrupted${watch.turnId ? ` (Turn ${watch.turnId})` : ""}. ${watch.restartNote}`;
   switch (watch.outcome) {
     case "stalled":
-      return `${link}: stalled${watch.turnId ? ` (Turn ${watch.turnId})` : ""}; still running, but no Harness event was observed for ${duration(watch.stallAfterMs ?? 0)}. This may be a long operation; inspect the Thread before deciding whether to intervene. The watch continues.`;
+      return `${link}: stalled${watch.turnId ? ` (Turn ${watch.turnId})` : ""}. It was still running, but no Harness event had been observed for at least ${exactDuration(watch.stallAfterMs ?? 0)}. This may be a long operation; read the Thread for its latest progress before deciding whether to intervene. The watch continues.`;
     case "timedOut":
       return `${link} has not reached a terminal state after ${duration(watch.timeoutMs)}; this watch expired. Run 'codexhost thread watch' again to keep waiting.`;
     case "unreadable":

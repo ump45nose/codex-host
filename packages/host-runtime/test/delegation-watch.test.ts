@@ -128,13 +128,16 @@ describe("DelegationWatchService", () => {
     expect(fake.sent[0]?.message).toContain("has not reached a terminal state after 29 min");
   });
 
-  it("states a timeout shorter than a minute in seconds", async () => {
+  it.each([
+    [15_000, "15 s"],
+    [700, "1 s"],
+  ])("states a %i ms timeout in whole seconds", async (timeoutMs, text) => {
     const fake = runtime({ child: { status: "running" }, parent: { status: "completed" } });
     const service = new DelegationWatchService(fake, { pollIntervalMs: POLL_MS });
-    await service.watch({ threadId: "child", notifyThreadId: "parent", timeoutMs: 15_000 });
+    await service.watch({ threadId: "child", notifyThreadId: "parent", timeoutMs });
 
-    await vi.advanceTimersByTimeAsync(15_000 + POLL_MS);
-    expect(fake.sent[0]?.message).toContain("has not reached a terminal state after 15 s");
+    await vi.advanceTimersByTimeAsync(timeoutMs + POLL_MS);
+    expect(fake.sent[0]?.message).toContain(`has not reached a terminal state after ${text};`);
   });
 
   it("waits out a replacement Turn and notifies once when the Thread stops", async () => {
@@ -398,8 +401,9 @@ describe("DelegationWatchService", () => {
     expect(fake.sent).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(fake.sent).toHaveLength(1);
-    expect(fake.sent[0]?.message).toContain("stalled (Turn turn-child)");
-    expect(fake.sent[0]?.message).toContain("still running");
+    expect(fake.sent[0]?.message).toContain(
+      "codex://threads/child: stalled (Turn turn-child). It was still running, but no Harness event had been observed for at least 3 s.",
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fake.sent).toHaveLength(1);
     service.noteActivity(["unrelated"]);
@@ -417,6 +421,42 @@ describe("DelegationWatchService", () => {
     expect((await service.watches()).watches).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([
+    [90_000, "90 s"],
+    [600_000, "10 min"],
+    [1_500, "1500 ms"],
+  ])(
+    "states a %i ms silence threshold exactly and leaves progress to thread read",
+    async (stallAfterMs, text) => {
+      const fake = runtime({ child: { status: "running" }, parent: { status: "completed" } });
+      const service = new DelegationWatchService(
+        {
+          read: async (input) => ({
+            ...(await fake.read(input)),
+            progress: [
+              { id: "progress-1", turnId: "turn-child", text: "Compiling the release build" },
+            ],
+          }),
+          send: fake.send,
+        },
+        { pollIntervalMs: 60_000 },
+      );
+      await service.watch({
+        threadId: "child",
+        notifyThreadId: "parent",
+        timeoutMs: 60 * 60_000,
+        stallAfterMs,
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(fake.sent).toHaveLength(1);
+      const message = fake.sent[0]?.message;
+      expect(message).toContain(`no Harness event had been observed for at least ${text}.`);
+      expect(message).toContain("read the Thread for its latest progress");
+      expect(message).not.toContain("Compiling the release build");
+      service.close();
+    },
+  );
 
   it("counts Harness subagent events as parent activity without the parent sending progress", async () => {
     const fake = runtime({ parent: { status: "running" }, subscriber: { status: "completed" } });

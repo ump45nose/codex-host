@@ -5,6 +5,7 @@ import type {
   HarnessSessionState,
   HarnessThinkingOptionId,
 } from "@codexhost/harness-adapter";
+import type { DelegationCapacitySettings } from "@codexhost/shared-contracts";
 
 export const DELEGATION_RUNTIME_ENDPOINT_ENV = "CODEXHOST_RUNTIME_ENDPOINT";
 export const DELEGATION_RUNTIME_TOKEN_ENV = "CODEXHOST_RUNTIME_TOKEN";
@@ -25,8 +26,14 @@ export const NATIVE_CODEX_THREAD_ID_ENV = "CODEX_THREAD_ID";
 /** Default watch expiry; callers adjust it with --timeout-ms. */
 export const DEFAULT_WATCH_TIMEOUT_MS = 29 * 60_000;
 
+/** `queued`: waiting for the local capacity limit; the Thread does not exist yet. */
 export type DelegationThreadStatus =
-  "creating" | "running" | "completed" | "failed" | "interrupted";
+  "queued" | "creating" | "running" | "completed" | "failed" | "interrupted";
+
+/** 1-based place among the queued starts; present only while queued. */
+export interface DelegationQueuePlace {
+  position: number;
+}
 
 export type DelegationResultAvailability = "pending" | "available" | "unavailable";
 
@@ -62,6 +69,7 @@ export interface DelegationThreadSnapshot {
   nextCursor: string | null;
   /** Omitted when the Thread carries no references. */
   refs?: string[];
+  queue?: DelegationQueuePlace;
 }
 
 export interface DelegationStartInput {
@@ -116,7 +124,42 @@ export interface DelegationStartResult {
   refs?: string[];
   /** Present only when the caller asked `delegate start` to also watch the child. */
   watch?: ThreadWatchResult | { state: "notRegistered"; reason: string };
+  queue?: DelegationQueuePlace;
   next: { read: string; wait: string };
+}
+
+/** Identifiers a queued start keeps until its Thread is created. */
+export interface DelegationStartIdentity {
+  delegationId: string;
+  threadId: string;
+  turnId: string;
+}
+
+/** A validated start with its parent and workspace resolved, offered to the capacity limit. */
+export interface DelegationAdmissionRequest {
+  input: DelegationStartInput & { parentThreadId: string; cwd: string };
+  title: string;
+  taskDigest: string;
+  identity: DelegationStartIdentity;
+}
+
+export type DelegationAdmission =
+  /** Start now; release once the start has settled. */
+  | { state: "admitted"; release(): void }
+  /** Waiting or starting under this identity, possibly queued by an earlier identical request. */
+  | {
+      state: "queued";
+      identity: DelegationStartIdentity;
+      status: "queued" | "creating";
+      position?: number;
+      parentThreadId: string;
+      cwd: string;
+      title: string;
+    };
+
+export interface DelegationCapacityGate {
+  admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission>;
+  configure(settings: DelegationCapacitySettings): DelegationCapacitySettings;
 }
 
 export interface ThreadSendInput {
@@ -188,6 +231,7 @@ export interface DelegationThreadListItem {
   /** Set by native rows; recency-* sorts order by it, falling back to updatedAt. */
   recencyAt?: string;
   refs?: string[];
+  queue?: DelegationQueuePlace;
 }
 
 export interface DelegationThreadListResult {
@@ -266,8 +310,17 @@ export interface DelegationControlApi {
 }
 
 export interface DelegationControlRegistration extends DelegationControlApi {
+  /** `admitted` starts a queued delegation under its identity, bypassing the limit and deduplication. */
+  start(
+    input: DelegationStartInput,
+    admitted?: DelegationStartIdentity,
+  ): Promise<DelegationStartResult>;
   /** Thread and Harness subagent ancestors active in an incoming Harness event. */
   subscribeActivity?(listener: (threadIds: readonly string[]) => void): () => void;
+  /** Top-level Threads with an active Turn, counted against the capacity limit. */
+  runningThreadIds?(): readonly string[];
+  /** Receives the capacity limit of the registry this session joined. */
+  useCapacity?(capacity: DelegationCapacityGate): void;
   executionHostId?(threadId: string): string | undefined;
   canHandleStart(input: DelegationStartInput): boolean | Promise<boolean>;
   ownsThread(threadId: string): boolean | Promise<boolean>;

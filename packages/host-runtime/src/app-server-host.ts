@@ -35,11 +35,13 @@ import {
   consoleOpenResultSchema,
 } from "@codexhost/shared-contracts";
 import {
+  DELEGATION_CAPACITY_SETTINGS_METHOD,
   DELEGATION_MENTION_PATH_PREFIX,
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
   THREAD_MANUAL_COMPACTION_STARTED_METHOD,
+  delegationCapacitySettingsSchema,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import {
@@ -222,6 +224,7 @@ import {
 } from "@codexhost/shared-contracts";
 import { DesktopRequestQueue } from "./desktop-request-queue.js";
 import type {
+  DelegationCapacityGate,
   DelegationControlRegistration,
   DelegationStartInput,
   DelegationStartResult,
@@ -682,6 +685,8 @@ export class AppServerHost {
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
   #unregisterDelegationApi: (() => void) | undefined;
+  /** Set by the delegation registry this Host joined; absent means delegated starts are never queued. */
+  #delegationCapacity: DelegationCapacityGate | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
   #activeOfficialTurns = new Map<string, string>();
   /** Active reply guards by request ID; each records whether its request was answered. */
@@ -689,7 +694,7 @@ export class AppServerHost {
   #pendingOfficialTurnStarts = new Map<unknown, string>();
   #activeWorkDrainWaiters = new Set<() => void>();
   #pendingOfficialDelegationThreads = new Set<string>();
-  #pendingOfficialTerminalStatuses = new Map<string, DelegationStartResult["status"]>();
+  #pendingOfficialTerminalStatuses = new Map<string, "completed" | "failed" | "interrupted">();
   readonly #officialRateLimits = new AccountRateLimits();
   #routeObservationTracker = new RequestRouteObservationTracker();
   #officialServerRequests = new Map<JsonRpcId, JsonRpcId>();
@@ -858,27 +863,37 @@ export class AppServerHost {
       officialThreadMetadata: (threadId) => this.#readOfficialThreadMetadata(threadId),
       activeOfficialParents: () => [...this.#activeOfficialTurns.keys()],
       externalThreadBusy: (thread) => this.#externalThreadBusy(thread),
+      admitDelegation: (request) => this.#delegationCapacity?.admit(request),
     });
     const maintenanceOperation = <T>(run: () => Promise<T>): Promise<T> =>
       options.runtimeMaintenance ? options.runtimeMaintenance.operation(run) : run();
     const unregisterDelegationApi = options.onDelegationApi?.({
       subscribeActivity: (listener) => this.#threadActivity.subscribe(listener),
+      runningThreadIds: () => this.#runningTopLevelThreadIds(),
+      useCapacity: (capacity) => {
+        this.#delegationCapacity = capacity;
+      },
       listHarnesses: () =>
         this.#waitForPlugins().then(() => this.#delegationCoordinator.listHarnesses()),
       inspect: (input) =>
         this.#waitForPlugins().then(() => this.#delegationCoordinator.inspect(input)),
-      start: (input) =>
+      start: (input, admitted) =>
         maintenanceOperation(async () => {
           if (options.sharedDelegation && input.harnessId !== "codex") {
             const active = [...this.#activeOfficialTurns.keys()];
             const parentThreadId =
               input.parentThreadId ?? (active.length === 1 ? active[0] : undefined);
-            return options.sharedDelegation.start({
-              ...input,
-              ...(parentThreadId ? { parentThreadId } : {}),
-            });
+            return options.sharedDelegation.start(
+              {
+                ...input,
+                ...(parentThreadId ? { parentThreadId } : {}),
+              },
+              admitted,
+            );
           }
-          return this.#waitForPlugins().then(() => this.#delegationCoordinator.start(input));
+          return this.#waitForPlugins().then(() =>
+            this.#delegationCoordinator.start(input, admitted),
+          );
         }),
       send: (input) =>
         maintenanceOperation(() =>
@@ -1508,6 +1523,20 @@ export class AppServerHost {
         await this.#writer.json(rpcError(request, -32602, "Invalid idle release settings"));
       } else {
         const settings = this.#externalRuntime.idleRelease.configure(parsed.data);
+        await this.#writer.json(rpcEnvelope(request, { result: settings }));
+      }
+      return;
+    }
+    if (request.method === DELEGATION_CAPACITY_SETTINGS_METHOD) {
+      const parsed = delegationCapacitySettingsSchema.safeParse(request.params);
+      if (!this.#delegationCapacity) {
+        await this.#writer.json(
+          rpcError(request, -32601, "Delegation capacity is unavailable on this Host"),
+        );
+      } else if (!parsed.success) {
+        await this.#writer.json(rpcError(request, -32602, "Invalid delegation capacity settings"));
+      } else {
+        const settings = this.#delegationCapacity.configure(parsed.data);
         await this.#writer.json(rpcEnvelope(request, { result: settings }));
       }
       return;
@@ -2440,6 +2469,22 @@ export class AppServerHost {
     }
   }
 
+  /** Delegated and manually opened Threads alike; Harness and native subagents are excluded. */
+  #runningTopLevelThreadIds(): string[] {
+    const external = this.#externalRuntime
+      .values()
+      .filter(
+        (thread) =>
+          !thread.record.subagent &&
+          (this.#externalThreadBusy(thread) || thread.activeTurnId !== null),
+      )
+      .map((thread) => thread.id);
+    const native = [...this.#activeOfficialTurns.keys()].filter(
+      (threadId) => !this.#threadActivity.isSubagent(threadId),
+    );
+    return [...external, ...native];
+  }
+
   async #canHandleDelegationStart(input: DelegationStartInput): Promise<boolean> {
     if (input.parentThreadId) return this.#ownsDelegationThread(input.parentThreadId);
     const externalActive = this.#externalRuntime.values().some((thread) => thread.running);
@@ -2891,7 +2936,8 @@ export class AppServerHost {
     const delegation = await this.#repository.getDelegationByChild(
       hostThreadIdSchema.parse(input.threadId),
     );
-    if (delegation && delegation.status !== snapshot.status) {
+    // Queued Threads have no Delegation record; only the capacity queue reports them.
+    if (delegation && snapshot.status !== "queued" && delegation.status !== snapshot.status) {
       await this.#repository.setDelegationStatus(delegation.delegationId, snapshot.status);
     }
     return snapshot;

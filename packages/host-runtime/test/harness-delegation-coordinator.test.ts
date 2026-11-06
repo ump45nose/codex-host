@@ -18,6 +18,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { runDelegationCli } from "../src/delegation-cli.js";
 import { startDelegationControlServer } from "../src/delegation-control-server.js";
+import type {
+  DelegationAdmission,
+  DelegationAdmissionRequest,
+  DelegationStartInput,
+} from "../src/delegation-types.js";
 import { HarnessDelegationCoordinator } from "../src/harness-delegation-coordinator.js";
 import { ExternalThreadRepository } from "../src/external-thread-repository.js";
 import { ExternalThreadRuntime, type ExternalThread } from "../src/external-thread-runtime.js";
@@ -29,6 +34,12 @@ async function fixture(
   ) => Promise<string | undefined | { cwd?: string; title?: string }> = async () => undefined,
   environment: NodeJS.ProcessEnv = {},
   externalThreadBusy: (thread: ExternalThread) => boolean = (thread) => thread.running,
+  options: Partial<
+    Pick<
+      ConstructorParameters<typeof HarnessDelegationCoordinator>[0],
+      "admitDelegation" | "startOfficial"
+    >
+  > = {},
 ) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "codexhost-delegation-coordinator-"));
   const store = new MappingStore({ directory });
@@ -75,7 +86,7 @@ async function fixture(
     readOfficial: vi.fn(),
     sendOfficial: vi.fn(),
     cancelOfficial: vi.fn(),
-    startOfficial: vi.fn(),
+    startOfficial: options.startOfficial ?? vi.fn(),
     listOfficial: vi.fn(async () => ({ threads: [], nextCursor: null })),
     officialThreadMetadata: async (threadId) => {
       const metadata = await officialThreadCwd(threadId);
@@ -83,6 +94,7 @@ async function fixture(
     },
     activeOfficialParents: () => [],
     externalThreadBusy,
+    ...(options.admitDelegation ? { admitDelegation: options.admitDelegation } : {}),
   });
   return {
     adapter,
@@ -802,6 +814,155 @@ describe("HarnessDelegationCoordinator", () => {
           sort: "created-desc",
         }),
       ).resolves.toMatchObject({ threads: [{ threadId: result.threadId }] });
+    } finally {
+      await value.close();
+    }
+  });
+
+  it("returns a queued external start with its identity and creates nothing yet", async () => {
+    const admitDelegation = vi.fn(async (request: DelegationAdmissionRequest) => ({
+      state: "queued" as const,
+      identity: request.identity,
+      status: "queued" as const,
+      position: 2,
+      parentThreadId: request.input.parentThreadId,
+      cwd: request.input.cwd,
+      title: request.title,
+    }));
+    const value = await fixture(
+      undefined,
+      async () => ({ cwd: "/parent-workspace", title: "Main project" }),
+      {},
+      undefined,
+      { admitDelegation },
+    );
+    try {
+      const result = await value.coordinator.start({
+        harnessId: "pi",
+        task: "Full task",
+        taskName: "Review",
+        parentThreadId: "parent-thread",
+        requestId: "queued-request",
+      });
+      const request = admitDelegation.mock.calls[0]?.[0];
+      expect(request).toMatchObject({
+        input: {
+          harnessId: "pi",
+          task: "Full task",
+          taskName: "Review",
+          parentThreadId: "parent-thread",
+          cwd: path.resolve("/parent-workspace"),
+          requestId: "queued-request",
+        },
+        title: "Review · Main project",
+        taskDigest: expect.any(String),
+      });
+      expect(result).toEqual({
+        ...request?.identity,
+        harnessId: "pi",
+        deepLink: `codex://threads/${request?.identity.threadId}`,
+        status: "queued",
+        queue: { position: 2 },
+        cwd: path.resolve("/parent-workspace"),
+        title: "Review · Main project",
+        parentThreadId: "parent-thread",
+        next: expect.any(Object),
+      });
+      expect(value.adapter.sessions).toHaveLength(0);
+      expect(await value.repository.list()).toEqual([]);
+    } finally {
+      await value.close();
+    }
+  });
+
+  it("starts an admitted external delegation at once and then frees its slot", async () => {
+    const release = vi.fn();
+    const admitDelegation = vi.fn<
+      (request: DelegationAdmissionRequest) => Promise<DelegationAdmission>
+    >(async () => ({ state: "admitted", release }));
+    const value = await fixture(undefined, async () => undefined, {}, undefined, {
+      admitDelegation,
+    });
+    try {
+      const result = await value.coordinator.start({
+        harnessId: "pi",
+        task: "Now",
+        cwd: "/synthetic",
+        parentThreadId: "parent-thread",
+      });
+      expect(result).toMatchObject({
+        ...admitDelegation.mock.calls[0]?.[0].identity,
+        status: "running",
+      });
+      expect(result).not.toHaveProperty("queue");
+      expect(release).toHaveBeenCalledOnce();
+      expect(value.adapter.sessions).toHaveLength(1);
+    } finally {
+      await value.close();
+    }
+  });
+
+  it("starts a queued delegation under its identity without asking the limit or deduplicating", async () => {
+    const admitDelegation = vi.fn(async () => ({ state: "admitted" as const, release: vi.fn() }));
+    const value = await fixture(undefined, async () => undefined, {}, undefined, {
+      admitDelegation,
+    });
+    try {
+      const input = {
+        harnessId: "pi" as const,
+        task: "Same task",
+        cwd: "/synthetic",
+        parentThreadId: "parent-thread",
+      };
+      const earlier = await value.coordinator.start(input);
+      admitDelegation.mockClear();
+      const identity = {
+        delegationId: "queued-delegation",
+        threadId: "queued-thread",
+        turnId: "queued-turn",
+      };
+      // An identical earlier start would satisfy implicit deduplication; the queue already decided.
+      const result = await value.coordinator.start(input, identity);
+      expect(result).toMatchObject({ ...identity, status: "running" });
+      expect(result.threadId).not.toBe(earlier.threadId);
+      expect(admitDelegation).not.toHaveBeenCalled();
+      expect(
+        await value.repository.getDelegationByChild(hostThreadIdSchema.parse("queued-thread")),
+      ).toMatchObject({ delegationId: "queued-delegation", status: "running" });
+    } finally {
+      await value.close();
+    }
+  });
+
+  it("never queues native Codex starts", async () => {
+    const admitDelegation = vi.fn();
+    const startOfficial = vi.fn(
+      async (input: DelegationStartInput & { parentThreadId: string; cwd: string }) => ({
+        delegationId: "native-delegation",
+        threadId: "native-thread",
+        turnId: "native-turn",
+        harnessId: "codex",
+        deepLink: "codex://threads/native-thread",
+        status: "running" as const,
+        cwd: input.cwd,
+        next: { read: "read", wait: "wait" },
+      }),
+    );
+    const value = await fixture(undefined, async () => undefined, {}, undefined, {
+      admitDelegation,
+      startOfficial,
+    });
+    try {
+      await expect(
+        value.coordinator.start({
+          harnessId: "codex",
+          task: "native",
+          cwd: "/synthetic",
+          parentThreadId: "parent-thread",
+        }),
+      ).resolves.toMatchObject({ threadId: "native-thread", status: "running" });
+      expect(admitDelegation).not.toHaveBeenCalled();
+      expect(startOfficial).toHaveBeenCalledOnce();
     } finally {
       await value.close();
     }

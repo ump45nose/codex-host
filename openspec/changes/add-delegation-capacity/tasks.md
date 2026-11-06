@@ -1,0 +1,23 @@
+# Tasks
+
+依赖 `add-external-client-access`（MCP `delegate_start`）与 `add-thread-watch-stall-alerts`（卡住提醒）。行为验收见 [spec](specs/cross-harness-delegation/spec.md)。
+
+## 1. 设置
+
+- [x] 1.1 共享设置契约（开关与 1～32 的上限，默认关闭、4）；Renderer 本地偏好，连接本机 Host 后与修改时下发，Host 不支持时提示；设置页“委派”分组。验证：`renderer-delegation-capacity-preference.test.ts`、`renderer-host-routing.test.ts`、`versioned-renderer-adapter.test.ts`，以及 `tests/e2e/renderer-delegation-capacity.spec.ts`。
+- [x] 1.2 Host 接收设置：没有委派控制时返回“方法不支持”，非法值被拒绝。验证：`app-server-host.delegation-capacity.test.ts`。
+
+## 2. 计数与排队
+
+- [x] 2.1 计数：正在运行的顶层 Thread（含手动打开的，不含外部与原生子代理），加上已放行、尚未报告运行的启动。验证：`app-server-host.delegation-capacity.test.ts`、`thread-activity.test.ts`、`delegation-capacity-queue.test.ts`。
+- [x] 2.2 外部 Harness 的 `delegate start` 在校验与去重后排队，立即返回标识与位置；按先后自动开始，新启动不越过等待者；原生 Codex 不排队。验证：`delegation-capacity-queue.test.ts`、`harness-delegation-coordinator.test.ts`、`delegation-capacity-registry.test.ts`。
+- [x] 2.3 排队中 Thread 的 read、list、wait、watch、cancel、send 行为与 CLI 输出。验证：`delegation-capacity-registry.test.ts`、`delegation-cli-output.test.ts`。
+
+## 3. 持久化与恢复
+
+- [x] 3.1 每个 Runtime 一个私有队列文件，接管已退出 Runtime 的队列；设置到达前保持排队，5 分钟后按关闭处理；重启时正在开始的委派以 `interrupted` 结束。验证：`delegation-capacity-store.test.ts`、`delegation-capacity-queue.test.ts`、`delegation-capacity-registry.test.ts`。
+
+## 4. 文档与验收
+
+- [x] 4.1 CLI 帮助、MCP 说明、`docs/architecture/delegation-capacity.md` 及相关架构文档。验证：帮助、文档与规格描述一致。
+- [ ] 4.2 真实 Desktop 验收：上限设为 1，手动会话运行时委派一个外部 Harness 任务，确认排队并在会话结束后自动开始；排队中重启 codexhost 后恢复；取消排队中的任务。记录平台与版本。

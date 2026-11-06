@@ -83,7 +83,7 @@ describe("DelegationWatchService across a Host Runtime restart", () => {
     vi.useRealTimers();
   });
 
-  it("persists silence settings and suppression, then starts a fresh silence clock after restart", async () => {
+  it("persists the silence threshold but not its suppression, then starts a fresh silence clock after restart", async () => {
     const store = memoryStore();
     const before = runtime({ child: { status: "running" }, parent: { status: "completed" } });
     const first = service(before, store);
@@ -95,10 +95,12 @@ describe("DelegationWatchService across a Host Runtime restart", () => {
     });
     await vi.advanceTimersByTimeAsync(3_000);
     expect(before.sent).toHaveLength(1);
-    expect([...store.records.values()]).toMatchObject([
-      { state: "watching", stallAfterMs: 3_000, stallNotified: true },
-    ]);
-    expect([...store.records.values()][0]).not.toHaveProperty("lastActivityAt");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(before.sent).toHaveLength(1);
+    const records = [...store.records.values()];
+    expect(records).toMatchObject([{ state: "watching", stallAfterMs: 3_000 }]);
+    expect(records[0]).not.toHaveProperty("stallNotified");
+    expect(records[0]).not.toHaveProperty("lastActivityAt");
     first.close();
     await vi.advanceTimersByTimeAsync(60_000);
     const after = runtime({ child: { status: "running" }, parent: { status: "completed" } });

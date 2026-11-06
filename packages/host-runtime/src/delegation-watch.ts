@@ -33,6 +33,8 @@ const DEFAULT_RESTORE_GRACE_MS = 5 * 60_000;
 interface Watch extends PersistedWatch {
   /** Live event clock. Never restored from disk: downtime is not Harness silence. */
   lastActivityAt?: number;
+  /** This silence episode already alerted. Not stored either: a restart starts a new episode. */
+  stallNotified?: boolean;
   unreadableSince?: number;
   lastReadError?: string;
   /** Restored watch: read failures mean the owning session is not back yet. */
@@ -61,7 +63,6 @@ function persisted(watch: Watch): PersistedWatch {
     harnessId,
     refs,
     stallAfterMs,
-    stallNotified,
   } = watch;
   return {
     id,
@@ -80,7 +81,6 @@ function persisted(watch: Watch): PersistedWatch {
     ...(harnessId ? { harnessId } : {}),
     ...(refs?.length ? { refs } : {}),
     ...(stallAfterMs !== undefined ? { stallAfterMs } : {}),
-    ...(stallNotified ? { stallNotified } : {}),
   };
 }
 
@@ -308,10 +308,7 @@ export class DelegationWatchService {
       )
         continue;
       watch.lastActivityAt = now;
-      if (watch.stallNotified) {
-        delete watch.stallNotified;
-        void this.#persist(watch);
-      }
+      delete watch.stallNotified;
     }
   }
 
@@ -341,10 +338,7 @@ export class DelegationWatchService {
       if (watch.state === "watching") {
         watch.observeGraceUntil = graceUntil;
         watch.crossedRestart = true;
-        if (watch.stallAfterMs !== undefined) {
-          watch.lastActivityAt = now;
-          delete watch.stallNotified;
-        }
+        if (watch.stallAfterMs !== undefined) watch.lastActivityAt = now;
       }
       if (watch.state === "pendingDelivery" && now >= (watch.deliveryDeadline ?? 0)) {
         watch.state = "undeliverable";
@@ -352,8 +346,7 @@ export class DelegationWatchService {
       }
       if (watch.state !== "undeliverable") watch.deliverGraceUntil = graceUntil;
       this.#watches.push(watch);
-      if (record.delivering || watch.state !== record.state || record.stallNotified)
-        void this.#persist(watch);
+      if (record.delivering || watch.state !== record.state) void this.#persist(watch);
     }
     this.#trimUndeliverable();
     if (records.length > 0) this.#diagnose(`restored ${records.length} watch(es) after a restart`);
@@ -395,7 +388,6 @@ export class DelegationWatchService {
         watch.stallNotified = true;
         this.#watches.push(alert);
         await this.#persist(alert);
-        await this.#persist(watch);
         continue;
       }
       if (restartNote) watch.restartNote = restartNote;

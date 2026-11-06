@@ -78,7 +78,6 @@ describe("FileDelegationWatchStore", () => {
     await mkdir(directory, { recursive: true });
     const record = watch("stalled", {
       stallAfterMs: 3_000,
-      stallNotified: true,
       state: "pendingDelivery",
       outcome: "stalled",
     });

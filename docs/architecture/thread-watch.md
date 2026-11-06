@@ -71,7 +71,7 @@
 - `packages/host-runtime/src/delegation-watch.ts` 通过公开的 `read` 与 `send` 观察状态和投递，活动从 Host 已有事件流订阅，每轮完成后间隔 2 秒继续轮询（现有 `thread wait` 同样基于轮询）。它不依赖具体 Harness、Desktop、Renderer 或委派血缘。
 - 活动时间只放在 Host 内存中，不增加定时器、后台进程或 rollout 扫描。原生 Codex 使用已有 app-server 通知和请求中的 Thread 标识、`thread/started` 的子代理来源与 `spawnAgent` 接收方建立祖先关系；外部 Harness 在输出消费入口记录全部事件与交互，并使用已知子代理身份传播活动。未接入当前 Host 事件流的 Thread、没有上报活动的 Adapter，或未公布身份关系的子代理无法提供完整活动证据；静默提醒只表示“Host 没有观察到事件”，长工具执行也可能触发。
 - 服务由 `DelegationControlRegistry` 持有，位于各 Host 会话之上，因此两端可以属于不同的 Host 会话。
-- watch 持久保存在 `<数据目录>/delegation-watches/`（默认 `~/.codexhost`），每个 watch 一个仅当前用户可读写的记录，只含 Thread 标识、状态、期限与原因。Runtime 重启后恢复观察与投递，调用方无需重新注册；观察与投递期限按绝对时间计算，停机时间计入。卡住阈值、静默已提醒标记和待投递提醒随 watch 保存；活动时间不落盘，恢复观察后清除静默抑制并从 Runtime 恢复时刻重新计时，停机时长不计入静默。卡住提醒独立保存为普通待投递记录，送达或投递失败不会结束主 watch。
+- watch 持久保存在 `<数据目录>/delegation-watches/`（默认 `~/.codexhost`），每个 watch 一个仅当前用户可读写的记录，只含 Thread 标识、状态、期限与原因。Runtime 重启后恢复观察与投递，调用方无需重新注册；观察与投递期限按绝对时间计算，停机时间计入。卡住阈值和待投递提醒随 watch 保存；活动时间与“本段静默已提醒”状态只在内存中，恢复观察后从 Runtime 恢复时刻重新计时，停机时长不计入静默。卡住提醒独立保存为普通待投递记录，送达或投递失败不会结束主 watch。
 - 多个 Runtime 进程可共用数据目录（例如 Desktop 与远程监听同时运行）。每个进程只写自己的记录；启动时接管已退出进程（或上次开机遗留）的记录，以原子重命名认领，同一记录只被一个进程接管。
 - 恢复后的 watch 最多等待 5 分钟让持有 Thread 的会话重新注册：这期间读取失败不计入 60 秒 `unreadable` 宽限，也不报告 `notFound` 或 `timedOut`；待投递通知要等被通知 Thread 可读后再发送。
 - Host Runtime 重启会结束它持有的 Harness 进程，正在运行的 Turn 随之中断。之后读取时它可能显示为已完成（有的 Harness 恢复后还会换一个 Turn 标识），也可能根本无法重新打开。因此，重启前处于观察中的 watch，恢复后第一次成功读取若已是终态，或宽限结束后仍报告 Thread 不存在，都按 `interrupted` 通知并说明原因；原因随记录保存，再次重启也不丢失。代价是：由长期运行的远程监听持有、在停机期间真正完成的 Thread 也会被报告为 `interrupted`；被通知方本来就要先读取 Thread 再行动。

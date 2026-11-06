@@ -19,8 +19,6 @@ export interface PersistedWatch extends ThreadWatchEntry {
   /** Recorded when an outcome is observed, for client events. */
   harnessId?: string;
   refs?: string[];
-  /** The current silence episode already produced a notification. Reset after a restart. */
-  stallNotified?: boolean;
 }
 
 export interface DelegationWatchStore {
@@ -114,7 +112,6 @@ function parseWatchFile(text: string): WatchFile {
     !Number.isFinite(watch.deadline) ||
     (watch.stallAfterMs !== undefined &&
       (!Number.isSafeInteger(watch.stallAfterMs) || watch.stallAfterMs <= 0)) ||
-    (watch.stallNotified !== undefined && typeof watch.stallNotified !== "boolean") ||
     !optionalNumber(watch.deliveryDeadline) ||
     (watch.delivering !== undefined && typeof watch.delivering !== "boolean") ||
     !optionalString(watch.restartNote) ||

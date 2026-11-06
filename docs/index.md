@@ -28,7 +28,7 @@
 | [`architecture/delegation-thread-list.md`](architecture/delegation-thread-list.md) | 委派 CLI 列表的共享 catalog、独立来源分页、查询绑定与活列表一致性边界。 |
 | [`architecture/sidebar-thread-tree.md`](architecture/sidebar-thread-tree.md) | 侧边栏按委派和 Fork 关系缩进父子 Thread 的数据来源、Renderer 绑定与边界。 |
 | [`architecture/sidebar-archive-children.md`](architecture/sidebar-archive-children.md) | 归档父 Thread 时询问或按设置归档其委派和 Fork 子 Thread 的交互、实现与边界。 |
-| [`architecture/thread-watch.md`](architecture/thread-watch.md) | 一次性 Thread 停下通知（`thread watch`）的模型、结果、送达与边界；修改委派跟进或通知时阅读。 |
+| [`architecture/thread-watch.md`](architecture/thread-watch.md) | Thread 停下通知与可选卡住提醒（`thread watch`）的模型、结果、送达与边界；修改委派跟进或通知时阅读。 |
 | [`architecture/external-clients.md`](architecture/external-clients.md) | 不由 Host 拉起的本机进程的登记、本机监听、客户端来源、Thread 引用、事件日志与 MCP；修改外部接入时阅读。 |
 | [`architecture/local-design-preview.md`](architecture/local-design-preview.md) | `codexhost preview` 在内置浏览器中显示本地 HTML、自动刷新、服务范围与生命周期；修改预览时阅读。 |
 | [`architecture/official-traffic-ownership.md`](architecture/official-traffic-ownership.md) | Host 只截获自身流量、其余原样转发官方的归属判别与例外；修改请求路由或参数校验时阅读。 |

@@ -69,7 +69,7 @@
 ## 实现与边界
 
 - `packages/host-runtime/src/delegation-watch.ts` 通过公开的 `read` 与 `send` 观察状态和投递，活动从 Host 已有事件流订阅，每轮完成后间隔 2 秒继续轮询（现有 `thread wait` 同样基于轮询）。它不依赖具体 Harness、Desktop、Renderer 或委派血缘。
-- 活动时间只放在 Host 内存中，不增加定时器、后台进程或 rollout 扫描。原生 Codex 使用已有 app-server 通知和请求中的 Thread 标识、`thread/started` 的子代理来源与 `spawnAgent` 接收方建立祖先关系；外部 Harness 在输出消费入口记录全部事件与交互，并使用已知子代理身份传播活动。祖先关系只保留到 Thread 关闭或释放：原生 Thread 收到 `thread/closed`、外部 Harness 会话输出结束（包括空闲释放）或官方 app-server 停止时清除，不随 Host 运行时间增长。未接入当前 Host 事件流的 Thread、没有上报活动的 Adapter，或未公布身份关系的子代理无法提供完整活动证据；静默提醒只表示“Host 没有观察到事件”，长工具执行也可能触发。
+- 活动时间只放在 Host 内存中，不增加定时器、后台进程或 rollout 扫描。原生 Codex 使用已有 app-server 通知和请求中的 Thread 标识、`thread/started` 的子代理来源与 `spawnAgent` 接收方建立祖先关系；外部 Harness 在输出消费入口记录全部事件与交互，并使用已知子代理身份传播活动。原生祖先关系只在 Thread 启动时获知，因此原生 Thread 收到 `thread/closed` 后，只要还有未关闭的后代，通往祖先的整条链就保留，整棵子树都关闭后才清除；外部 Harness 的关系随每个事件重新记录，会话输出结束（包括空闲释放）即清除；官方 app-server 停止时全部清除，不随 Host 运行时间增长。未接入当前 Host 事件流的 Thread、没有上报活动的 Adapter，或未公布身份关系的子代理无法提供完整活动证据；静默提醒只表示“Host 没有观察到事件”，长工具执行也可能触发。
 - 服务由 `DelegationControlRegistry` 持有，位于各 Host 会话之上，因此两端可以属于不同的 Host 会话。
 - watch 持久保存在 `<数据目录>/delegation-watches/`（默认 `~/.codexhost`），每个 watch 一个仅当前用户可读写的记录，只含 Thread 标识、状态、期限与原因。Runtime 重启后恢复观察与投递，调用方无需重新注册；观察与投递期限按绝对时间计算，停机时间计入。卡住阈值和待投递提醒随 watch 保存；活动时间与“本段静默已提醒”状态只在内存中，恢复观察后从 Runtime 恢复时刻重新计时，停机时长不计入静默。卡住提醒独立保存为普通待投递记录，送达或投递失败不会结束主 watch。
 - 多个 Runtime 进程可共用数据目录（例如 Desktop 与远程监听同时运行）。每个进程只写自己的记录；启动时接管已退出进程（或上次开机遗留）的记录，以原子重命名认领，同一记录只被一个进程接管。

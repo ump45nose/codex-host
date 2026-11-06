@@ -10,7 +10,14 @@ function record(value: unknown): value is Record<string, unknown> {
  */
 export class ThreadActivity {
   readonly #parents = new Map<string, string>();
+  /** Closed Threads kept because an open descendant still reports through them. */
+  readonly #closed = new Set<string>();
   readonly #listeners = new Set<(threadIds: readonly string[]) => void>();
+
+  /** Threads whose ancestry is still retained. */
+  get size(): number {
+    return new Set([...this.#parents.keys(), ...this.#closed]).size;
+  }
 
   subscribe(listener: (threadIds: readonly string[]) => void): () => void {
     this.#listeners.add(listener);
@@ -18,7 +25,12 @@ export class ThreadActivity {
   }
 
   note(threadId: string, parentThreadId?: string): void {
-    if (parentThreadId && parentThreadId !== threadId) this.#parents.set(threadId, parentThreadId);
+    this.#closed.delete(threadId);
+    const previous = this.#parents.get(threadId);
+    if (parentThreadId && parentThreadId !== threadId && parentThreadId !== previous) {
+      this.#parents.set(threadId, parentThreadId);
+      this.#prune(previous);
+    }
     const active = new Set<string>();
     let current: string | undefined = threadId;
     while (current && !active.has(current)) {
@@ -29,16 +41,29 @@ export class ThreadActivity {
     for (const listener of this.#listeners) listener(threadIds);
   }
 
-  /** Drops a closed or released Thread together with its children's links to it. */
+  /**
+   * Native ancestry is learned only when a Thread starts, so a closed Thread keeps its
+   * link until every descendant reporting through it has closed too.
+   */
+  close(threadId: string): void {
+    this.#closed.add(threadId);
+    this.#prune(threadId);
+  }
+
+  /** Only for Threads whose links are noted again with every event they report. */
   forget(threadId: string): void {
+    const parent = this.#parents.get(threadId);
     this.#parents.delete(threadId);
-    for (const [child, parent] of this.#parents) {
-      if (parent === threadId) this.#parents.delete(child);
+    this.#closed.delete(threadId);
+    for (const [child, childParent] of this.#parents) {
+      if (childParent === threadId) this.#parents.delete(child);
     }
+    this.#prune(parent);
   }
 
   clear(): void {
     this.#parents.clear();
+    this.#closed.clear();
   }
 
   observeOfficial(value: JsonValue): void {
@@ -54,7 +79,7 @@ export class ThreadActivity {
     const parent = typeof spawn?.parent_thread_id === "string" ? spawn.parent_thread_id : undefined;
     this.note(threadId, parent);
     if (value.method === "thread/closed") {
-      this.forget(threadId);
+      this.close(threadId);
       return;
     }
     const item = record(params.item) ? params.item : undefined;
@@ -67,5 +92,21 @@ export class ThreadActivity {
         if (typeof child === "string" && child) this.note(child, threadId);
       }
     }
+  }
+
+  /** Drops closed Threads upward until one still has a retained child or is open. */
+  #prune(threadId: string | undefined): void {
+    let current = threadId;
+    while (current && this.#closed.has(current) && !this.#hasChildren(current)) {
+      this.#closed.delete(current);
+      const parent = this.#parents.get(current);
+      this.#parents.delete(current);
+      current = parent;
+    }
+  }
+
+  #hasChildren(threadId: string): boolean {
+    for (const parent of this.#parents.values()) if (parent === threadId) return true;
+    return false;
   }
 }

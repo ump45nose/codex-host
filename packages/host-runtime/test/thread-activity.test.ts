@@ -58,13 +58,10 @@ describe("ThreadActivity", () => {
     expect(listener).toHaveBeenLastCalledWith(["grandchild", "child", "parent"]);
   });
 
-  it("forgets a native Thread's ancestry and its children's links when it closes", () => {
-    const activity = new ThreadActivity();
-    const listener = vi.fn();
-    activity.subscribe(listener);
+  function nativeChain(activity: ThreadActivity): void {
     for (const [id, parent] of [
-      ["child", "parent"],
-      ["grandchild", "child"],
+      ["B", "A"],
+      ["C", "B"],
     ] as const) {
       activity.observeOfficial({
         method: "thread/started",
@@ -73,11 +70,55 @@ describe("ThreadActivity", () => {
         },
       });
     }
-    activity.observeOfficial({ method: "thread/closed", params: { threadId: "child" } });
-    activity.note("child");
-    expect(listener).toHaveBeenLastCalledWith(["child"]);
-    activity.note("grandchild");
-    expect(listener).toHaveBeenLastCalledWith(["grandchild"]);
+  }
+
+  function closeNative(activity: ThreadActivity, threadId: string): void {
+    activity.observeOfficial({ method: "thread/closed", params: { threadId } });
+  }
+
+  it("keeps the whole chain through a closed intermediate Thread until its subtree closes", () => {
+    const activity = new ThreadActivity();
+    const listener = vi.fn();
+    activity.subscribe(listener);
+    nativeChain(activity);
+    closeNative(activity, "B");
+    activity.observeOfficial({
+      method: "item/agentMessage/delta",
+      params: { threadId: "C", delta: "progress" },
+    });
+    expect(listener).toHaveBeenLastCalledWith(["C", "B", "A"]);
+    expect(activity.size).toBe(2);
+
+    closeNative(activity, "C");
+    expect(activity.size).toBe(0);
+    activity.note("C");
+    expect(listener).toHaveBeenLastCalledWith(["C"]);
+    activity.note("B");
+    expect(listener).toHaveBeenLastCalledWith(["B"]);
+  });
+
+  it("keeps the chain when parents close before their running child", () => {
+    const activity = new ThreadActivity();
+    const listener = vi.fn();
+    activity.subscribe(listener);
+    nativeChain(activity);
+    closeNative(activity, "A");
+    closeNative(activity, "B");
+    activity.note("C");
+    expect(listener).toHaveBeenLastCalledWith(["C", "B", "A"]);
+
+    closeNative(activity, "C");
+    expect(activity.size).toBe(0);
+    activity.note("C");
+    expect(listener).toHaveBeenLastCalledWith(["C"]);
+  });
+
+  it("releases a closed parent once its only child moves to another parent", () => {
+    const activity = new ThreadActivity();
+    nativeChain(activity);
+    closeNative(activity, "B");
+    activity.note("C", "D");
+    expect(activity.size).toBe(1);
   });
 
   it("forgets a released Thread with its children's links, and all ancestry when cleared", () => {
@@ -95,6 +136,7 @@ describe("ThreadActivity", () => {
     activity.note("subagent", "external");
     activity.note("other", "root");
     activity.clear();
+    expect(activity.size).toBe(0);
     activity.note("subagent");
     expect(listener).toHaveBeenLastCalledWith(["subagent"]);
     activity.note("other");

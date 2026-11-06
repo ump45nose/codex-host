@@ -20,6 +20,11 @@
 - **AND** 轮询读取与 Host 自己的投影通知 MUST NOT 被当作活动
 - **AND** 活动收集 MUST 使用已有原生 Codex app-server 与外部 Harness 事件流；MUST NOT 新建定时器、进程或 rollout 扫描
 
+#### Scenario: 中间 Thread 先关闭
+- **WHEN** 原生子代理链中的中间 Thread 或祖先 Thread 已关闭，而其后代仍在运行并产生事件
+- **THEN** Host SHALL 继续把后代活动计入整条链上的祖先 Thread，MUST NOT 因中间 Thread 关闭而对祖先误报静默
+- **AND** 该子树全部关闭后，Host SHALL 清除其祖先关系
+
 #### Scenario: 合并投递且不结束观察
 - **WHEN** 卡住提醒触发时接收方正忙，或同一接收方还有其他待投递通知
 - **THEN** 卡住提醒 SHALL 沿已有待投递机制重试并合并；活动恢复后，待投递提醒仍保留触发时刻的事实

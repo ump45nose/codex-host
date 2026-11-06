@@ -483,6 +483,44 @@ describe("DelegationWatchService", () => {
     service.close();
   });
 
+  it("keeps counting a grandchild's activity after the intermediate native Thread closes", async () => {
+    const fake = runtime({ A: { status: "running" }, subscriber: { status: "completed" } });
+    const service = new DelegationWatchService(fake, { pollIntervalMs: POLL_MS });
+    const activity = new ThreadActivity();
+    activity.subscribe((threadIds) => service.noteActivity(threadIds));
+    await service.watch({
+      threadId: "A",
+      notifyThreadId: "subscriber",
+      timeoutMs: 60_000,
+      stallAfterMs: 3_000,
+    });
+    for (const [id, parent] of [
+      ["B", "A"],
+      ["C", "B"],
+    ] as const) {
+      activity.observeOfficial({
+        method: "thread/started",
+        params: {
+          thread: { id, source: { subAgent: { thread_spawn: { parent_thread_id: parent } } } },
+        },
+      });
+    }
+    activity.observeOfficial({ method: "thread/closed", params: { threadId: "B" } });
+    for (let index = 0; index < 5; index += 1) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      activity.observeOfficial({
+        method: "item/commandExecution/outputDelta",
+        params: { threadId: "C", delta: "tool output" },
+      });
+    }
+    expect(fake.sent).toHaveLength(0);
+    activity.observeOfficial({ method: "thread/closed", params: { threadId: "C" } });
+    expect(activity.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(fake.sent[0]?.message).toContain(": stalled");
+    service.close();
+  });
+
   it("keeps silence detection disabled when the threshold is omitted", async () => {
     const fake = runtime({ child: { status: "running" }, parent: { status: "completed" } });
     const service = new DelegationWatchService(fake, { pollIntervalMs: POLL_MS });

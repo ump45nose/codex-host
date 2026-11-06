@@ -387,7 +387,6 @@ export class DelegationWatchService {
         };
         watch.stallNotified = true;
         this.#watches.push(alert);
-        await this.#persist(alert);
         continue;
       }
       if (restartNote) watch.restartNote = restartNote;
@@ -557,6 +556,8 @@ export class DelegationWatchService {
   }
 
   #persist(watch: Watch): Promise<void> {
+    // Silence is measured again after a restart, and older Runtimes set a stalled record aside as unreadable.
+    if (watch.outcome === "stalled") return Promise.resolve();
     const record = persisted(watch);
     return this.#write((store) => store.save(record));
   }

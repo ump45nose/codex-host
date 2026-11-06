@@ -41,6 +41,7 @@
 
 #### Scenario: 重启后重新计时
 - **WHEN** Host Runtime 重启
-- **THEN** 静默阈值与待投递的卡住提醒 SHALL 随 watch 保存并恢复，既有待投递提醒 SHALL 继续投递，主 watch SHALL 继续观察
+- **THEN** 静默阈值 SHALL 随 watch 保存并恢复，主 watch SHALL 继续观察
+- **AND** 卡住提醒不是终态，MUST NOT 写入 watch 持久记录；重启前未送达的卡住提醒不再投递
 - **AND** 恢复观察 SHALL 从恢复时刻重新计时，MUST NOT 将停机时长算作静默
 - **AND** 重启前已经提醒过的静默，恢复后再次达到阈值时 SHALL 重新提醒

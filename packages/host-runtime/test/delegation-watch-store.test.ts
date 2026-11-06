@@ -74,20 +74,22 @@ describe("FileDelegationWatchStore", () => {
     await expect(new FileDelegationWatchStore(directory).adopt()).resolves.toEqual([]);
   });
 
-  it("adopts silence configuration and pending stalled outcomes", async () => {
+  it("adopts the silence threshold but not a stalled outcome, which is never stored", async () => {
     await mkdir(directory, { recursive: true });
-    const record = watch("stalled", {
-      stallAfterMs: 3_000,
-      state: "pendingDelivery",
-      outcome: "stalled",
-    });
+    const record = watch("silent", { stallAfterMs: 3_000 });
+    const owner = { pid: exitedPid(), boot: bootSeconds() };
+    await writeForeign(directory, "silent.json", owner, record);
     await writeForeign(
       directory,
       "stalled.json",
-      { pid: exitedPid(), boot: bootSeconds() },
-      record,
+      owner,
+      watch("stalled", { stallAfterMs: 3_000, state: "pendingDelivery", outcome: "stalled" }),
     );
-    await expect(new FileDelegationWatchStore(directory).adopt()).resolves.toEqual([record]);
+    const diagnose = vi.fn();
+    await expect(new FileDelegationWatchStore(directory, diagnose).adopt()).resolves.toEqual([
+      record,
+    ]);
+    expect(diagnose).toHaveBeenCalledOnce();
   });
 
   it.each([0, -1, 1.5])("rejects a stored invalid silence threshold %s", async (stallAfterMs) => {

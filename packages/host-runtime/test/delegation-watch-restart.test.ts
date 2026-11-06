@@ -116,7 +116,7 @@ describe("DelegationWatchService across a Host Runtime restart", () => {
     second.close();
   });
 
-  it("restores a pending silence alert while continuing to watch for the final stop", async () => {
+  it("never stores a pending silence alert and measures silence again after a restart", async () => {
     const store = memoryStore();
     const before = runtime({ child: { status: "running" }, parent: { status: "running" } });
     before.send.mockRejectedValue(new DelegationControlError("THREAD_BUSY", "busy"));
@@ -128,10 +128,17 @@ describe("DelegationWatchService across a Host Runtime restart", () => {
       stallAfterMs: 3_000,
     });
     await vi.advanceTimersByTimeAsync(3_000);
+    expect((await first.watches()).watches).toMatchObject([
+      { state: "watching" },
+      { state: "pendingDelivery", outcome: "stalled" },
+    ]);
+    expect([...store.records.values()]).toMatchObject([{ state: "watching", stallAfterMs: 3_000 }]);
     first.close();
     const after = runtime({ child: { status: "running" }, parent: { status: "completed" } });
     const second = service(after, store);
     await second.watches();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(after.sent).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(after.sent).toHaveLength(1);
     expect(after.sent[0]?.message).toContain(": stalled");

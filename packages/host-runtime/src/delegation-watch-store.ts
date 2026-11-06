@@ -50,7 +50,6 @@ const OUTCOMES = new Set<ThreadWatchOutcome>([
   "failed",
   "interrupted",
   "timedOut",
-  "stalled",
   "unreadable",
   "notFound",
 ]);

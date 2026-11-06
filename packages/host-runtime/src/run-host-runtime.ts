@@ -242,7 +242,7 @@ async function prepareDelegationRuntime(input: {
   try {
     return await input.createHost(environment, (value) => registry.register(value), registry);
   } finally {
-    registry.close();
+    await registry.close();
     await externalServer?.close();
     await server.close();
   }

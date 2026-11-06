@@ -537,57 +537,157 @@ describe("DelegationCapacityQueue", () => {
     expect(prepared).toEqual(["native-a", "native-b"]);
   });
 
-  it("hands a waiting start to its session when claimed, and discards a cancelled Thread", async () => {
+  it("holds a claimed start in its place until the Turn start settles", async () => {
     const value = sessions();
     value.running.add("busy");
-    const discard = vi.fn(async () => undefined);
+    const adopt = vi.fn(async () => false);
     const store = new MemoryQueueStore();
-    const queue = track(new DelegationCapacityQueue({ ...value.runtime, discard }, { store }));
+    const queue = track(new DelegationCapacityQueue({ ...value.runtime, adopt }, { store }));
     queue.configure({ enabled: true, maxRunning: 1 });
     const claimed = request({ harnessId: "codex" });
-    const cancelled = request({ harnessId: "codex" });
+    const taken = request({ harnessId: "codex" });
     const behind = request();
-    for (const entry of [claimed, cancelled, behind]) queued(await queue.admit(entry));
+    for (const entry of [claimed, taken, behind]) queued(await queue.admit(entry));
+    const { threadId } = claimed.identity;
 
-    expect(await queue.claim(claimed.identity.threadId, "pi")).toBeUndefined();
-    expect(await queue.claim(claimed.identity.threadId, "codex")).toEqual({
+    expect(await queue.claim(threadId, "pi")).toBeUndefined();
+    const claim = await queue.claim(threadId, "codex");
+    expect(claim).toMatchObject({
       identity: claimed.identity,
       input: { ...claimed.input },
       taskDigest: claimed.taskDigest,
     });
-    expect(await queue.claim(claimed.identity.threadId, "codex")).toBeUndefined();
-    // Claimed work is the session's now, not a start that never happened.
-    expect(await queue.finished({ threadId: claimed.identity.threadId, view: "result" })).toBe(
+    expect(await queue.claim(threadId, "codex")).toBeUndefined();
+    expect(await queue.peek(threadId)).toEqual({ status: "creating" });
+    expect(await queue.peek(taken.identity.threadId)).toEqual({ status: "queued", position: 1 });
+    // A crash during the takeover leaves the start to be checked for a Turn.
+    expect(store.saved.find((saved) => saved.threadId === threadId)?.starting).toBe(true);
+
+    let cancelled = false;
+    const cancelling = queue.cancel(threadId).then((result) => {
+      cancelled = true;
+      return result;
+    });
+    await flush();
+    expect(cancelled).toBe(false);
+    await claim?.settle("rejected");
+    expect(store.saved.find((saved) => saved.threadId === threadId)?.starting).toBeUndefined();
+    // The rejected takeover kept the start's place, and the waiting cancel goes on from there.
+    expect(await cancelling).toMatchObject({ cancelled: true });
+    expect(adopt).toHaveBeenCalledWith(expect.objectContaining({ identity: claimed.identity }));
+
+    const second = await queue.claim(taken.identity.threadId, "codex");
+    await second?.settle("started");
+    expect(await queue.peek(taken.identity.threadId)).toBeUndefined();
+    // Taken-over work is the session's now, not a start that never happened.
+    expect(await queue.finished({ threadId: taken.identity.threadId, view: "result" })).toBe(
       undefined,
     );
-    expect(await queue.peek(cancelled.identity.threadId)).toEqual({
-      status: "queued",
-      position: 1,
-    });
-
-    expect(await queue.cancel(cancelled.identity.threadId)).toMatchObject({ cancelled: true });
-    expect(discard).toHaveBeenCalledWith({ ...cancelled.identity, harnessId: "codex" });
     expect(store.saved.map((saved) => saved.threadId)).toEqual([behind.identity.threadId]);
     expect(value.runtime.start).not.toHaveBeenCalled();
   });
 
-  it("restores a native start cut off by a restart to the queue instead of failing it", async () => {
+  it("returns a takeover with an unknown outcome to its place, to be checked first", async () => {
+    const value = sessions();
+    value.running.add("busy");
+    const adopt = vi.fn(async () => true);
+    const queue = track(new DelegationCapacityQueue({ ...value.runtime, adopt }));
+    queue.configure({ enabled: true, maxRunning: 1 });
+    const entry = request({ harnessId: "codex" });
+    queued(await queue.admit(entry));
+    await (await queue.claim(entry.identity.threadId, "codex"))?.settle("unknown");
+    // Its Turn did begin, so a second message joins that Turn instead of repeating the task.
+    expect(await queue.claim(entry.identity.threadId, "codex")).toBeUndefined();
+    expect(adopt).toHaveBeenCalledOnce();
+    expect(await queue.peek(entry.identity.threadId)).toBeUndefined();
+  });
+
+  it("leaves a cancelled start whose Thread has a Turn to its session", async () => {
+    const value = sessions();
+    value.running.add("busy");
+    const begun = request({ harnessId: "codex" });
+    const empty = request({ harnessId: "codex" });
+    const adopt = vi.fn(
+      async (queuedStart: { identity: DelegationStartIdentity }) =>
+        queuedStart.identity.threadId === begun.identity.threadId,
+    );
+    const queue = track(new DelegationCapacityQueue({ ...value.runtime, adopt }));
+    queue.configure({ enabled: true, maxRunning: 1 });
+    for (const entry of [begun, empty]) queued(await queue.admit(entry));
+
+    expect(await queue.cancel(begun.identity.threadId)).toBeUndefined();
+    expect(await queue.finished({ threadId: begun.identity.threadId, view: "result" })).toBe(
+      undefined,
+    );
+    expect(await queue.cancel(empty.identity.threadId)).toMatchObject({ cancelled: true });
+    expect(
+      await queue.finished({ threadId: empty.identity.threadId, view: "result" }),
+    ).toMatchObject({ status: "interrupted" });
+    expect(adopt).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks a native start cut off by a restart for a Turn before using it", async () => {
     const value = sessions();
     const store = new MemoryQueueStore([
-      record({ threadId: "native-starting", harnessId: "codex", starting: true }),
+      record({ threadId: "native-begun", harnessId: "codex", starting: true }),
+      record({ threadId: "native-empty", harnessId: "codex", starting: true }),
       record({ threadId: "pi-starting", starting: true }),
       record({ threadId: "native-waiting", harnessId: "codex" }),
     ]);
-    const queue = track(new DelegationCapacityQueue(value.runtime, { store }));
-    expect((await queue.list({})).map((entry) => [entry.threadId, entry.queue?.position])).toEqual([
-      ["native-starting", 1],
-      ["native-waiting", 2],
+    const adopt = vi.fn(
+      async (queuedStart: { identity: DelegationStartIdentity }) =>
+        queuedStart.identity.threadId === "native-begun",
+    );
+    const queue = track(new DelegationCapacityQueue({ ...value.runtime, adopt }, { store }));
+    expect((await queue.list({})).map((entry) => entry.threadId)).toEqual([
+      "native-begun",
+      "native-empty",
+      "native-waiting",
     ]);
     expect(await queue.finished({ threadId: "pi-starting", view: "result" })).toMatchObject({
       status: "interrupted",
     });
+    // Still unknown on disk until checked.
+    expect(store.saved.filter((saved) => saved.starting).map((saved) => saved.threadId)).toEqual([
+      "native-begun",
+      "native-empty",
+    ]);
+
+    // Its Turn began before the restart: it is the session's now, not a waiting start.
+    expect(await queue.read({ threadId: "native-begun", view: "result" })).toBeUndefined();
+    const claim = await queue.claim("native-empty", "codex");
+    expect(claim?.identity.threadId).toBe("native-empty");
+    await claim?.settle("rejected");
     expect(store.saved.some((saved) => saved.starting)).toBe(false);
+    expect(adopt.mock.calls.map(([queuedStart]) => queuedStart.identity.threadId)).toEqual([
+      "native-begun",
+      "native-empty",
+    ]);
+
     queue.configure({ enabled: true, maxRunning: 4 });
-    await vi.waitFor(() => expect(value.started()).toEqual(["native-starting", "native-waiting"]));
+    await vi.waitFor(() => expect(value.started()).toEqual(["native-empty", "native-waiting"]));
+  });
+
+  it("stores a start that fails after close as one to check, not as failed", async () => {
+    const value = sessions();
+    const store = new MemoryQueueStore();
+    const queue = new DelegationCapacityQueue(value.runtime, { store });
+    value.running.add("busy");
+    queue.configure({ enabled: true, maxRunning: 1 });
+    const entry = request({ harnessId: "codex" });
+    queued(await queue.admit(entry));
+    value.hold.next = true;
+    value.running.delete("busy");
+    queue.refresh();
+    await vi.waitFor(() => expect(value.held.has(entry.identity.threadId)).toBe(true));
+    await queue.close();
+    value.held.get(entry.identity.threadId)?.reject(new Error("backend closed"));
+    await vi.waitFor(() => expect(store.saves).toBeGreaterThan(2));
+    expect(store.saved).toEqual([
+      expect.objectContaining({ threadId: entry.identity.threadId, starting: true }),
+    ]);
+    expect(await queue.finished({ threadId: entry.identity.threadId, view: "result" })).toBe(
+      undefined,
+    );
   });
 });

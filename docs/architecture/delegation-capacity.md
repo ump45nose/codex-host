@@ -36,10 +36,10 @@ Host 可以限制本机同时运行的顶层 Thread 数量。开启后，`delega
 | `thread wait` | 排队时间计入超时；到期时 Thread 仍在排队，则返回排队快照与 `timedOut: true` |
 | `thread watch` | 照常注册。排队与创建期间既不算停下，也不算卡住提醒的静默；Thread 开始后真正停下才通知。被移出队列时通知 `interrupted` |
 | `thread list` | 排队中的 Thread 按队列顺序排在第一页最前面，不占 `--limit`，续页不再出现；同样按 `--parent` 或工作区过滤 |
-| `thread cancel` | 把 Thread 移出队列并返回 `cancelled: true`。之后读取为 `interrupted`，并说明它在开始前已被移出队列，不会再启动 |
+| `thread cancel` | 把 Thread 移出队列并返回 `cancelled: true`。之后读取为 `interrupted`，并说明它在开始前已被移出队列，不会再启动；原生 Thread 已有 Turn 时按已开始的委派取消 |
 | `thread send` | 返回 `THREAD_BUSY`，`details.status` 为 `queued` 或 `creating`，排队时附 `queuePosition`；移出队列或启动失败后返回 `THREAD_NOT_FOUND` |
 
-移出队列、启动失败或被重启中断的外部 Harness 启动不会生成 Thread；原生 Codex 的排队 Thread 见下文。Host 在内存中保留最近 50 条这类记录，使 `read`、`wait`、`cancel` 与 watch 能给出终态；Host Runtime 重启后不再保留。
+移出队列、启动失败或被重启中断的外部 Harness 启动不会生成 Thread；原生 Codex 的排队 Thread 见下文。远程 Host 上排队中的 Thread 同样可以用 `thread read --host` 读取。Host 在内存中保留最近 50 条这类记录，使 `read`、`wait`、`cancel` 与 watch 能给出终态；Host Runtime 重启后不再保留。
 
 ## 自动开始
 
@@ -51,9 +51,9 @@ Host 可以限制本机同时运行的顶层 Thread 数量。开启后，`delega
 
 - 没有 Turn 的原生 Thread 会写入 rollout，官方后端重启后仍能 `thread/resume` 并开始 Turn。官方 `thread/list` 不列出没有 Turn 的 Thread，因此 Desktop 重启后，排队中的原生 Thread 可能不在线程列表中出现，直到第一条 Turn 开始；`codexhost thread list` 仍由队列给出。空闲释放只作用于外部 Harness，不会卸载它。
 - 开始时，Host 先 `thread/resume`，再读取最新 Turn；已经有 Turn 时沿用它补建委派记录，不再发送任务。
-- 用户在 Desktop 中直接给排队中的原生 Thread 发消息时，Host 把它移出队列，把排队的任务放在这条消息之前一起发出，并建立委派记录。任务只执行一次，这条 Turn 不受上限限制，Model 与 Thinking 以 Desktop 的请求为准。
-- `thread cancel` 移出队列后用官方 `thread/delete` 删除这个 Thread，之后读取为 `interrupted`。
-- 重启时正在启动的原生记录重新排队，开始时按上面的检查决定沿用已有 Turn 还是发送任务，不会重复创建。
+- 用户在 Desktop 中直接给排队中的原生 Thread 发消息时，Host 把排队的任务放在这条消息之前一起发出。在后端答复之前，这一项留在原位、标为正在认领：队列不会同时开始它，取消要等认领结束。后端开始了 Turn，才移出队列并建立委派记录；后端拒绝时取消标记，仍在原位排队。任务只执行一次，这条 Turn 不受上限限制，Model 与 Thinking 以 Desktop 的请求为准。
+- 排队相关的代码从不删除 Thread：后端对有进行中 Turn 的 Thread 也会执行 `thread/delete` 并删掉 rollout。`thread cancel` 先读取 Thread 的 Turn：没有 Turn 时移出队列，之后读取为 `interrupted`，空 Thread 留在后端（官方 `thread/list` 不列出它）；已有 Turn 时按已开始的委派补建记录并中断这条 Turn。取消与用户消息交错时，最坏结果是用户的消息照常进入这个 Thread、委派记为取消，内容不丢。
+- 重启前正在开始或正在认领的原生记录，恢复后标为“可能已开始”。之后无论是自动开始、取消、用户发消息还是 `thread read`，都先 `thread/resume` 并读取 Turn：已有 Turn 时按已开始的委派收编，补建委派记录，watch 随之观察这个 Thread，不再发送任务，也不再把任务拼进用户消息；没有 Turn 才按排队处理。Host Runtime 关闭时仍把启动结果写盘；强杀时写不了，靠这项检查保障。
 
 ## 重启
 

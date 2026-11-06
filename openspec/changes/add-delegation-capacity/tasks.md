@@ -11,8 +11,8 @@
 
 - [x] 2.1 计数：正在运行的顶层 Thread（含手动打开的，不含外部与原生子代理），加上已放行、尚未报告运行的启动。验证：`app-server-host.delegation-capacity.test.ts`、`thread-activity.test.ts`、`delegation-capacity-queue.test.ts`。
 - [x] 2.2 `delegate start` 在校验与去重后排队，立即返回标识与位置；按先后自动开始，新启动不越过等待者。验证：`delegation-capacity-queue.test.ts`、`harness-delegation-coordinator.test.ts`、`delegation-capacity-registry.test.ts`。
-- [x] 2.4 原生 Codex：排队时先建 Thread，只排队第一条 Turn；用户直接发消息时并入任务且不再开始；取消删除 Thread；重启后重新排队并沿用已有 Turn。验证：`app-server-host.native-delegation-capacity.test.ts`、`delegation-capacity-queue.test.ts`。
-- [x] 2.3 排队中 Thread 的 read、list、wait、watch、cancel、send 行为与 CLI 输出。验证：`delegation-capacity-registry.test.ts`、`delegation-cli-output.test.ts`。
+- [x] 2.3 排队中 Thread 的 read、list、wait、watch、cancel、send 行为与 CLI 输出；远程 `thread read --host` 读取排队中的 Thread。验证：`delegation-capacity-registry.test.ts`、`delegation-cli-output.test.ts`、`remote-delegation-read.test.ts`。
+- [x] 2.4 原生 Codex：排队时先建 Thread，只排队第一条 Turn，排队相关代码不删除 Thread；取消先读 Turn，已有 Turn 时按已开始取消；用户直接发消息时分两步认领，后端开始 Turn 后才移出队列，拒绝时留在原位；取消与用户消息交错时不丢内容；重启后“可能已开始”的记录先读 Turn 再决定收编或排队；关闭时写入启动结果。验证：`app-server-host.native-delegation-capacity.test.ts`、`delegation-capacity-queue.test.ts`。
 
 ## 3. 持久化与恢复
 

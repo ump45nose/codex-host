@@ -17,6 +17,7 @@ import {
   type DelegationAdmissionRequest,
   type DelegationCapacityGate,
   type DelegationQueueClaim,
+  type DelegationQueuedStart,
   type DelegationStartIdentity,
   type DelegationStartInput,
   type DelegationThreadListItem,
@@ -36,8 +37,13 @@ const RESTART_NOTE =
 
 interface QueueEntry {
   record: PersistedQueuedDelegation;
-  state: "queued" | "starting";
+  /** `claiming`: a user message is taking the start over; it keeps its place until that settles. */
+  state: "queued" | "starting" | "claiming";
+  /** A start or takeover with an unknown outcome, so its Thread may already have a Turn. */
+  uncertain?: boolean;
   started?: Promise<void>;
+  /** A Turn check or takeover in progress; nothing else happens to the entry until it settles. */
+  busy?: Promise<unknown> | undefined;
 }
 
 /** A queued start that never became a Thread: cancelled, failed to start, or cut off by a restart. */
@@ -54,12 +60,23 @@ export interface DelegationCapacityRuntime {
   /** False while no session could take a start. */
   canStart(): boolean;
   start(input: DelegationStartInput, identity: DelegationStartIdentity): Promise<unknown>;
-  /** Deletes the Thread a removed start was waiting in, when the Harness created one. */
-  discard?(queued: DelegationStartIdentity & { harnessId: string }): Promise<void>;
+  /**
+   * Whether the Thread a waiting start was given already has a Turn, adopting it as
+   * the start when it does; undefined when no session can tell.
+   */
+  adopt?(queued: DelegationQueuedStart): Promise<boolean | undefined>;
 }
 
 function identityOf(record: PersistedQueuedDelegation): DelegationStartIdentity {
   return { delegationId: record.delegationId, threadId: record.threadId, turnId: record.turnId };
+}
+
+function queuedStartOf(record: PersistedQueuedDelegation): DelegationQueuedStart {
+  return {
+    identity: identityOf(record),
+    input: { ...inputOf(record), parentThreadId: record.parentThreadId, cwd: record.cwd },
+    taskDigest: record.taskDigest,
+  };
 }
 
 function inputOf(record: PersistedQueuedDelegation): DelegationStartInput {
@@ -174,18 +191,79 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
 
   async claim(threadId: string, harnessId: string): Promise<DelegationQueueClaim | undefined> {
     await this.#ready;
-    const entry = this.#entry(threadId);
-    if (!entry || entry.state !== "queued" || entry.record.harnessId !== harnessId)
-      return undefined;
-    this.#remove(entry);
+    for (;;) {
+      const entry = this.#entry(threadId);
+      if (!entry || entry.state !== "queued" || entry.record.harnessId !== harnessId)
+        return undefined;
+      if (entry.busy) {
+        await entry.busy;
+        continue;
+      }
+      if (!entry.uncertain) return this.#hold(entry);
+      // A Turn that already began is the start itself, and the message joins it as an ordinary one.
+      if ((await this.#check(entry)) || entry.uncertain) return undefined;
+    }
+  }
+
+  async #hold(entry: QueueEntry): Promise<DelegationQueueClaim> {
+    entry.state = "claiming";
+    let release = (): void => undefined;
+    entry.busy = new Promise<void>((resolve) => (release = resolve));
+    this.#notify();
+    // Stored as starting first, so a crash during the takeover leaves the Turn to be checked.
     await this.#persist();
-    this.#schedule();
-    const { record } = entry;
+    let settled = false;
     return {
-      identity: identityOf(record),
-      input: { ...inputOf(record), parentThreadId: record.parentThreadId, cwd: record.cwd },
-      taskDigest: record.taskDigest,
+      ...queuedStartOf(entry.record),
+      settle: async (outcome) => {
+        if (settled) return;
+        settled = true;
+        entry.busy = undefined;
+        if (outcome === "started") {
+          this.#remove(entry);
+        } else {
+          entry.state = "queued";
+          if (outcome === "unknown") entry.uncertain = true;
+          this.#notify();
+        }
+        release();
+        await this.#persist();
+        this.#pump();
+      },
     };
+  }
+
+  /**
+   * Asks the sessions whether the entry's Thread already has a Turn. One that does
+   * has been adopted as the start and leaves the queue.
+   */
+  #check(entry: QueueEntry): Promise<boolean> {
+    if (!this.#runtime.adopt) return Promise.resolve(false);
+    const check = (async () => {
+      let begun: boolean | undefined;
+      try {
+        begun = await this.#runtime.adopt?.(queuedStartOf(entry.record));
+      } catch (error) {
+        this.#diagnose(error);
+      }
+      if (begun === undefined || (!begun && !entry.uncertain)) return false;
+      if (begun) this.#remove(entry);
+      else entry.uncertain = false;
+      await this.#persist();
+      return begun;
+    })();
+    entry.busy = check;
+    return check.finally(() => {
+      if (entry.busy === check) entry.busy = undefined;
+      this.#pump();
+    });
+  }
+
+  /** The entry of a Thread, after checking a start that may have begun; undefined once it left. */
+  async #current(threadId: string): Promise<QueueEntry | undefined> {
+    const entry = this.#entry(threadId);
+    if (entry?.uncertain && entry.state === "queued") await (entry.busy ?? this.#check(entry));
+    return this.#entry(threadId);
   }
 
   /** Re-evaluates the queue, for example after a session registers. */
@@ -197,7 +275,7 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
     threadId: string,
   ): Promise<{ status: "queued" | "creating"; position?: number } | undefined> {
     await this.#ready;
-    const entry = this.#entry(threadId);
+    const entry = await this.#current(threadId);
     if (!entry) return undefined;
     const position = this.#position(entry);
     return { status: this.#status(entry), ...(position ? { position } : {}) };
@@ -206,7 +284,7 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
   /** The snapshot of a Thread that is waiting or being started by the queue. */
   async read(input: ThreadReadInput): Promise<DelegationThreadSnapshot | undefined> {
     await this.#ready;
-    const entry = this.#entry(input.threadId);
+    const entry = await this.#current(input.threadId);
     if (!entry) return undefined;
     const position = this.#position(entry);
     return {
@@ -231,6 +309,7 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
   /** Resolves true once the Thread has left the queue, or false when the timeout passes first. */
   async settled(threadId: string, timeoutMs: number): Promise<boolean> {
     await this.#ready;
+    await this.#current(threadId);
     if (!this.#entry(threadId)) return true;
     return new Promise((resolve) => {
       const finish = (value: boolean): void => {
@@ -247,26 +326,31 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
   }
 
   /**
-   * Removes a waiting start. A start already in progress is awaited instead and
-   * left to the session, which owns the Thread from then on.
+   * Removes a waiting start. A start already in progress, or whose Thread turns out
+   * to have a Turn, is left to the session instead, which owns the Thread from then on.
+   * A Thread created for the start stays: a user message may have reached it meanwhile.
    */
   async cancel(threadId: string): Promise<ThreadCancelResult | undefined> {
     await this.#ready;
-    const entry = this.#entry(threadId);
-    if (!entry) return undefined;
-    if (entry.state === "starting") {
-      await entry.started;
-      return undefined;
+    for (;;) {
+      const entry = this.#entry(threadId);
+      if (!entry) return undefined;
+      if (entry.state === "starting") {
+        await entry.started;
+        return undefined;
+      }
+      if (entry.busy) {
+        await entry.busy;
+        continue;
+      }
+      if (await this.#check(entry)) return undefined;
+      if (this.#entry(threadId) !== entry || entry.state !== "queued" || entry.busy) continue;
+      this.#remove(entry);
+      this.#finish(entry.record, "interrupted", CANCELLED_NOTE);
+      await this.#persist();
+      this.#schedule();
+      return { threadId, turnId: null, harnessId: entry.record.harnessId, cancelled: true };
     }
-    this.#remove(entry);
-    this.#finish(entry.record, "interrupted", CANCELLED_NOTE);
-    await this.#persist();
-    this.#schedule();
-    const { record } = entry;
-    await this.#runtime
-      .discard?.({ ...identityOf(record), harnessId: record.harnessId })
-      .catch((error: unknown) => this.#diagnose(error));
-    return { threadId, turnId: null, harnessId: record.harnessId, cancelled: true };
   }
 
   /** Waiting and starting Threads for a list by parent, or by workspace when no parent is given. */
@@ -298,13 +382,17 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
       });
   }
 
-  /** Stops starting work in this process. The stored queue stays on disk for the next Runtime. */
-  close(): void {
+  /**
+   * Stops starting work in this process. The stored queue stays on disk for the next
+   * Runtime, and starts still settling keep updating it; resolves once pending writes finish.
+   */
+  close(): Promise<void> {
     this.#closed = true;
     if (this.#timer) clearInterval(this.#timer);
     if (this.#graceTimer) clearTimeout(this.#graceTimer);
     this.#timer = undefined;
     this.#graceTimer = undefined;
+    return this.#writes;
   }
 
   async #restore(store: DelegationQueueStore): Promise<void> {
@@ -319,10 +407,10 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
     let interrupted = 0;
     for (const record of records) {
       if (record.starting && record.harnessId === "codex") {
-        // The native Thread was created when queued, and its start skips a Turn that already began.
+        // The native Thread was created when queued; whether its Turn began is checked before use.
         const waiting = { ...record };
         delete waiting.starting;
-        this.#entries.push({ record: waiting, state: "queued" });
+        this.#entries.push({ record: waiting, state: "queued", uncertain: true });
       } else if (record.starting) {
         // The restart ended the Harness process the start was talking to.
         this.#finish(record, "interrupted", RESTART_NOTE);
@@ -423,7 +511,7 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
       for (;;) {
         const next = this.#entries.find((entry) => entry.state === "queued");
         const settings = this.#settings;
-        if (!next || settings === undefined || !this.#runtime.canStart()) break;
+        if (!next || next.busy || settings === undefined || !this.#runtime.canStart()) break;
         if (settings.enabled && this.#occupied() >= settings.maxRunning) break;
         this.#launch(next);
       }
@@ -444,6 +532,12 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
       .then(
         () => this.#remove(entry),
         (error: unknown) => {
+          if (this.#closed) {
+            // Shutdown can fail a start whose Turn already began; the next Runtime checks it.
+            entry.state = "queued";
+            entry.uncertain = true;
+            return;
+          }
           this.#remove(entry);
           this.#finish(record, "failed", error instanceof Error ? error.message : String(error));
           this.#diagnose(error);
@@ -519,13 +613,14 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
 
   #persist(): Promise<void> {
     const store = this.#store;
-    if (!store || this.#closed) return Promise.resolve();
-    // Each write stores the queue as it is when the write runs, in order.
+    if (!store) return Promise.resolve();
+    // Each write stores the queue as it is when the write runs, in order. The file
+    // belongs to this process, so writes after close still reach only the next Runtime.
     const next = this.#writes
       .then(() =>
         store.save(
-          this.#entries.map(({ record, state }) =>
-            state === "starting" ? { ...record, starting: true } : record,
+          this.#entries.map(({ record, state, uncertain }) =>
+            state !== "queued" || uncertain ? { ...record, starting: true } : record,
           ),
         ),
       )

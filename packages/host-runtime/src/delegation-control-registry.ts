@@ -90,10 +90,12 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
         canStart: () => this.#registrations.size > 0,
         start: (input, identity) => this.#startQueued(input, identity),
         // A waiting Thread has no Turn or Delegation yet, so no session claims to own it.
-        discard: async (queued) => {
-          await Promise.all(
-            [...this.#registrations].map((registration) => registration.discardQueued?.(queued)),
-          );
+        adopt: async (queued) => {
+          for (const registration of [...this.#registrations]) {
+            const begun = await registration.adoptQueued?.(queued);
+            if (begun !== undefined) return begun;
+          }
+          return undefined;
         },
       },
       options.capacity,
@@ -257,9 +259,9 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
   }
 
   /** Stops watching and starting queued work in this process; both resume in the next Runtime. */
-  close(): void {
+  close(): Promise<void> {
     this.#watchService.close();
-    this.#capacity.close();
+    return this.#capacity.close();
   }
 
   async list(input: ThreadListInput) {

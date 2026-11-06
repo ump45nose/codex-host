@@ -148,11 +148,23 @@ export interface DelegationAdmissionRequest {
   prepare?(): Promise<DelegationStartIdentity>;
 }
 
-/** A queued start a user message took over before its turn came. */
-export interface DelegationQueueClaim {
+/** A start waiting in the queue, with what its session needs to start or adopt it. */
+export interface DelegationQueuedStart {
   identity: DelegationStartIdentity;
   input: DelegationStartInput & { parentThreadId: string; cwd: string };
   taskDigest: string;
+}
+
+/**
+ * A queued start a user message is taking over. It stays in its place, and is
+ * neither started nor cancelled, until the message's Turn start settles.
+ */
+export interface DelegationQueueClaim extends DelegationQueuedStart {
+  /**
+   * `started` removes it from the queue; `rejected` puts it back as it was;
+   * `unknown` puts it back to be checked for a Turn before anything else happens to it.
+   */
+  settle(outcome: "started" | "rejected" | "unknown"): Promise<void>;
 }
 
 export type DelegationAdmission =
@@ -172,7 +184,7 @@ export type DelegationAdmission =
 export interface DelegationCapacityGate {
   admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission>;
   configure(settings: DelegationCapacitySettings): DelegationCapacitySettings;
-  /** Removes a waiting start of this Harness so its session can start it now; undefined when none waits. */
+  /** Holds a waiting start of this Harness for its session to start now; undefined when none waits. */
   claim(threadId: string, harnessId: string): Promise<DelegationQueueClaim | undefined>;
 }
 
@@ -335,8 +347,11 @@ export interface DelegationControlRegistration extends DelegationControlApi {
   runningThreadIds?(): readonly string[];
   /** Receives the capacity limit of the registry this session joined. */
   useCapacity?(capacity: DelegationCapacityGate): void;
-  /** Deletes a Thread created for a queued start that was removed before it started. */
-  discardQueued?(queued: DelegationStartIdentity & { harnessId: string }): Promise<void>;
+  /**
+   * Whether the Thread a queued start waits in already has a Turn; one that does is
+   * adopted as this start, without sending the task. Undefined when this session cannot tell.
+   */
+  adoptQueued?(queued: DelegationQueuedStart): Promise<boolean | undefined>;
   executionHostId?(threadId: string): string | undefined;
   canHandleStart(input: DelegationStartInput): boolean | Promise<boolean>;
   ownsThread(threadId: string): boolean | Promise<boolean>;

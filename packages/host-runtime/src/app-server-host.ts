@@ -227,6 +227,8 @@ import { DesktopRequestQueue } from "./desktop-request-queue.js";
 import type {
   DelegationAdmission,
   DelegationCapacityGate,
+  DelegationQueueClaim,
+  DelegationQueuedStart,
   DelegationStartIdentity,
   DelegationControlRegistration,
   DelegationStartInput,
@@ -702,6 +704,8 @@ export class AppServerHost {
   /** Active reply guards by request ID; each records whether its request was answered. */
   readonly #replyGuards = new Map<unknown, Set<{ answered: boolean }>>();
   #pendingOfficialTurnStarts = new Map<unknown, string>();
+  /** Desktop Turn starts carrying a queued native task, by request ID, until the backend answers. */
+  readonly #pendingQueuedClaims = new Map<unknown, DelegationQueueClaim>();
   #activeWorkDrainWaiters = new Set<() => void>();
   #pendingOfficialDelegationThreads = new Set<string>();
   #pendingOfficialTerminalStatuses = new Map<string, "completed" | "failed" | "interrupted">();
@@ -797,6 +801,7 @@ export class AppServerHost {
       scope: this.#officialRuntimeScope,
       onBackendStopped: () => {
         this.#pendingOfficialTurnStarts.clear();
+        this.#abandonQueuedClaims();
         this.#activeOfficialTurns.clear();
         this.#threadActivity.clear();
         this.#signalActiveWorkChanged();
@@ -883,12 +888,9 @@ export class AppServerHost {
       useCapacity: (capacity) => {
         this.#delegationCapacity = capacity;
       },
-      discardQueued: async (queued) => {
-        if (queued.harnessId !== "codex" || this.#options.externalOnly) return;
-        // Another session's backend may hold the Thread; deleting an unknown one is harmless.
-        await this.#requestOfficial("thread/delete", { threadId: queued.threadId }).catch(
-          () => undefined,
-        );
+      adoptQueued: async (queued) => {
+        if (queued.input.harnessId !== "codex" || this.#options.externalOnly) return undefined;
+        return this.#adoptQueuedOfficialStart(queued);
       },
       listHarnesses: () =>
         this.#waitForPlugins().then(() => this.#delegationCoordinator.listHarnesses()),
@@ -1103,6 +1105,7 @@ export class AppServerHost {
       this.#externalRuntime.clear();
       this.#externalPrewarms.clear();
       this.#pendingOfficialTurnStarts.clear();
+      this.#abandonQueuedClaims();
       this.#routeObservationTracker.clear();
       this.#unregisterDelegationApi?.();
       this.#unregisterDelegationApi = undefined;
@@ -1137,6 +1140,40 @@ export class AppServerHost {
     const waiters = [...this.#activeWorkDrainWaiters];
     this.#activeWorkDrainWaiters.clear();
     for (const resolve of waiters) resolve();
+  }
+
+  /** The backend's answer to a Turn start that took over a queued native task. */
+  #settleQueuedClaim(value: JsonValue): void {
+    if (!isRecord(value) || !("id" in value) || "method" in value) return;
+    const claim = this.#pendingQueuedClaims.get(value.id);
+    if (!claim) return;
+    this.#pendingQueuedClaims.delete(value.id);
+    const result = isRecord(value.result) ? value.result : null;
+    const turn = result && isRecord(result.turn) ? result.turn : null;
+    if (!turn || typeof turn.id !== "string") {
+      void claim.settle(isRecord(value.error) ? "rejected" : "unknown");
+      return;
+    }
+    const turnId = turn.id;
+    void claim
+      .settle("started")
+      .then(() =>
+        this.#adoptBegunOfficialDelegation({
+          input: claim.input,
+          delegationId: claim.identity.delegationId,
+          threadId: claim.identity.threadId,
+          turnId,
+          taskDigest: claim.taskDigest,
+        }),
+      )
+      .catch((error: unknown) => this.#diagnose(error));
+  }
+
+  /** Takeovers whose answer will never arrive; each Thread is checked for a Turn before reuse. */
+  #abandonQueuedClaims(): void {
+    const claims = [...this.#pendingQueuedClaims.values()];
+    this.#pendingQueuedClaims.clear();
+    for (const claim of claims) void claim.settle("unknown");
   }
 
   #observeOfficialTurnStartResponse(value: JsonValue): void {
@@ -2261,21 +2298,17 @@ export class AppServerHost {
   /**
    * A user message to a native Thread still waiting in the delegation queue starts
    * the queued task now, ahead of the message in the same Turn, so it runs exactly once.
+   * The start stays held in the queue until the backend answers this Turn start.
    */
   async #claimQueuedOfficialStart(request: JsonRpcRequest): Promise<JsonRpcRequest | undefined> {
     if (request.method !== "turn/start" || !this.#delegationCapacity) return undefined;
+    if (this.#options.externalOnly) return undefined;
     if (!isRecord(request.params) || !Array.isArray(request.params.input)) return undefined;
     const { threadId } = request.params;
     if (typeof threadId !== "string") return undefined;
     const claim = await this.#delegationCapacity.claim(threadId, "codex");
     if (!claim) return undefined;
-    await this.#adoptBegunOfficialDelegation({
-      input: claim.input,
-      delegationId: claim.identity.delegationId,
-      threadId,
-      turnId: "pending",
-      taskDigest: claim.taskDigest,
-    });
+    this.#pendingQueuedClaims.set(request.id, claim);
     return {
       ...(request as unknown as JsonObject),
       params: {
@@ -2362,6 +2395,10 @@ export class AppServerHost {
       if (request.method === "turn/start") {
         this.#pendingOfficialTurnStarts.delete(request.id);
         this.#signalActiveWorkChanged();
+        const claim = this.#pendingQueuedClaims.get(request.id);
+        this.#pendingQueuedClaims.delete(request.id);
+        // The frame may have reached the backend before the failure.
+        void claim?.settle("unknown");
       }
       await this.#writer.json(
         rpcError(request, -32001, "Official request failed; retry explicitly"),
@@ -2384,6 +2421,7 @@ export class AppServerHost {
     const parsed = input.value;
     const observedAtMs = Date.now();
     this.#observeOfficialTurnStartResponse(parsed);
+    this.#settleQueuedClaim(parsed);
     let forwarded: JsonValue = parsed;
     if (isRecord(parsed) && typeof parsed.method === "string" && "id" in parsed) {
       const originalId = parsed.id;
@@ -2764,7 +2802,7 @@ export class AppServerHost {
     let opened: OpenedOfficialThread | undefined;
     if (admitted) {
       opened = await this.#resumeQueuedOfficialThread(admitted.threadId);
-      // A restart may have cut the queued start off after its Turn began.
+      // A restart or a user message may have begun the Turn without the queue.
       const begun = await this.#latestOfficialTurnId(admitted.threadId);
       if (begun) {
         return this.#adoptBegunOfficialDelegation({
@@ -2798,6 +2836,7 @@ export class AppServerHost {
         nativeModelId,
         requestedModel,
         opened: opened ?? (await this.#openOfficialDelegationThread(input, nativeModelId)),
+        queued: admitted !== undefined,
       });
     } finally {
       admission?.release();
@@ -2843,13 +2882,44 @@ export class AppServerHost {
     return { threadId, thread, result: resumed.result };
   }
 
-  async #latestOfficialTurnId(threadId: string): Promise<string | undefined> {
+  /** Null when the Thread has no Turn; a Thread that cannot be read throws instead. */
+  async #latestOfficialTurnId(threadId: string): Promise<string | null> {
     const response = await this.#requestOfficial("thread/read", { threadId, includeTurns: true });
     const result = isRecord(response.result) ? response.result : null;
     const thread = result && isRecord(result.thread) ? result.thread : null;
-    const turns = thread && Array.isArray(thread.turns) ? thread.turns : [];
-    const latest = turns.at(-1);
-    return isRecord(latest) && typeof latest.id === "string" ? latest.id : undefined;
+    if (isRecord(response.error) || !thread || !Array.isArray(thread.turns)) {
+      throw new DelegationControlError(
+        "DELEGATION_FAILED",
+        "Official queued Thread could not be read",
+      );
+    }
+    const latest = thread.turns.at(-1);
+    if (latest === undefined) return null;
+    if (!isRecord(latest) || typeof latest.id !== "string") {
+      throw new DelegationControlError("DELEGATION_FAILED", "Official Turn has no identity");
+    }
+    return latest.id;
+  }
+
+  /** Whether a queued native Thread already has a Turn; one that does is recorded as the delegation. */
+  async #adoptQueuedOfficialStart(queued: DelegationQueuedStart): Promise<boolean | undefined> {
+    const { threadId, delegationId } = queued.identity;
+    let turnId: string | null;
+    try {
+      await this.#resumeQueuedOfficialThread(threadId);
+      turnId = await this.#latestOfficialTurnId(threadId);
+    } catch {
+      return undefined;
+    }
+    if (turnId === null) return false;
+    await this.#adoptBegunOfficialDelegation({
+      input: queued.input,
+      delegationId,
+      threadId,
+      turnId,
+      taskDigest: queued.taskDigest,
+    });
+    return true;
   }
 
   #queuedOfficialResult(
@@ -2920,6 +2990,8 @@ export class AppServerHost {
     nativeModelId: string | undefined;
     requestedModel: HarnessModelRef | undefined;
     opened: OpenedOfficialThread;
+    /** A queued Thread is never deleted: a user message may have reached it. */
+    queued: boolean;
   }): Promise<DelegationStartResult> {
     const { input, delegationId, digest, nativeModelId, requestedModel } = context;
     const { threadId, thread, result: startedResult } = context.opened;
@@ -2940,7 +3012,9 @@ export class AppServerHost {
     } catch (error) {
       this.#pendingOfficialDelegationThreads.delete(threadId);
       this.#pendingOfficialTerminalStatuses.delete(threadId);
-      await this.#requestOfficial("thread/delete", { threadId }).catch(() => undefined);
+      if (!context.queued) {
+        await this.#requestOfficial("thread/delete", { threadId }).catch(() => undefined);
+      }
       throw error;
     }
     this.#activeOfficialTurns.set(threadId, turnId);
@@ -2986,9 +3060,12 @@ export class AppServerHost {
         },
       };
     } catch (error) {
-      this.#activeOfficialTurns.delete(threadId);
-      this.#signalActiveWorkChanged();
-      await this.#requestOfficial("thread/delete", { threadId }).catch(() => undefined);
+      // A queued Turn keeps running: its Thread may already hold a user message.
+      if (!context.queued) {
+        this.#activeOfficialTurns.delete(threadId);
+        this.#signalActiveWorkChanged();
+        await this.#requestOfficial("thread/delete", { threadId }).catch(() => undefined);
+      }
       throw error;
     } finally {
       this.#pendingOfficialDelegationThreads.delete(threadId);

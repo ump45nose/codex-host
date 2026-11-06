@@ -58,6 +58,49 @@ describe("ThreadActivity", () => {
     expect(listener).toHaveBeenLastCalledWith(["grandchild", "child", "parent"]);
   });
 
+  it("forgets a native Thread's ancestry and its children's links when it closes", () => {
+    const activity = new ThreadActivity();
+    const listener = vi.fn();
+    activity.subscribe(listener);
+    for (const [id, parent] of [
+      ["child", "parent"],
+      ["grandchild", "child"],
+    ] as const) {
+      activity.observeOfficial({
+        method: "thread/started",
+        params: {
+          thread: { id, source: { subAgent: { thread_spawn: { parent_thread_id: parent } } } },
+        },
+      });
+    }
+    activity.observeOfficial({ method: "thread/closed", params: { threadId: "child" } });
+    activity.note("child");
+    expect(listener).toHaveBeenLastCalledWith(["child"]);
+    activity.note("grandchild");
+    expect(listener).toHaveBeenLastCalledWith(["grandchild"]);
+  });
+
+  it("forgets a released Thread with its children's links, and all ancestry when cleared", () => {
+    const activity = new ThreadActivity();
+    const listener = vi.fn();
+    activity.subscribe(listener);
+    activity.note("external", "root");
+    activity.note("subagent", "external");
+    activity.forget("external");
+    activity.note("subagent");
+    expect(listener).toHaveBeenLastCalledWith(["subagent"]);
+    activity.note("external");
+    expect(listener).toHaveBeenLastCalledWith(["external"]);
+
+    activity.note("subagent", "external");
+    activity.note("other", "root");
+    activity.clear();
+    activity.note("subagent");
+    expect(listener).toHaveBeenLastCalledWith(["subagent"]);
+    activity.note("other");
+    expect(listener).toHaveBeenLastCalledWith(["other"]);
+  });
+
   it("does not turn sendInput recipients into children or loop on malformed ancestry", () => {
     const activity = new ThreadActivity();
     const listener = vi.fn();

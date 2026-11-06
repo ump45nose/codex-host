@@ -783,6 +783,7 @@ export class AppServerHost {
       onBackendStopped: () => {
         this.#pendingOfficialTurnStarts.clear();
         this.#activeOfficialTurns.clear();
+        this.#threadActivity.clear();
         this.#signalActiveWorkChanged();
       },
       output: async (output) =>
@@ -5258,6 +5259,7 @@ export class AppServerHost {
         thread.id,
         new Error("External Harness output ended before replacement"),
       );
+      this.#threadActivity.forget(thread.id);
     }
   }
 

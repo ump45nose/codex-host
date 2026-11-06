@@ -4,7 +4,10 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Live Harness events only: retains ancestry, never event or conversation content. */
+/**
+ * Live Harness events only: retains ancestry while Threads are open, never event or
+ * conversation content.
+ */
 export class ThreadActivity {
   readonly #parents = new Map<string, string>();
   readonly #listeners = new Set<(threadIds: readonly string[]) => void>();
@@ -26,6 +29,18 @@ export class ThreadActivity {
     for (const listener of this.#listeners) listener(threadIds);
   }
 
+  /** Drops a closed or released Thread together with its children's links to it. */
+  forget(threadId: string): void {
+    this.#parents.delete(threadId);
+    for (const [child, parent] of this.#parents) {
+      if (parent === threadId) this.#parents.delete(child);
+    }
+  }
+
+  clear(): void {
+    this.#parents.clear();
+  }
+
   observeOfficial(value: JsonValue): void {
     // Replies to Host polling are not Harness activity.
     if (!record(value) || typeof value.method !== "string" || !record(value.params)) return;
@@ -38,6 +53,10 @@ export class ThreadActivity {
     const spawn = record(subagent?.thread_spawn) ? subagent.thread_spawn : undefined;
     const parent = typeof spawn?.parent_thread_id === "string" ? spawn.parent_thread_id : undefined;
     this.note(threadId, parent);
+    if (value.method === "thread/closed") {
+      this.forget(threadId);
+      return;
+    }
     const item = record(params.item) ? params.item : undefined;
     if (
       item?.type === "collabAgentToolCall" &&

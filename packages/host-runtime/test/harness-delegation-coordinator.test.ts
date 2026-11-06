@@ -21,6 +21,7 @@ import { startDelegationControlServer } from "../src/delegation-control-server.j
 import type {
   DelegationAdmission,
   DelegationAdmissionRequest,
+  DelegationStartIdentity,
   DelegationStartInput,
 } from "../src/delegation-types.js";
 import { HarnessDelegationCoordinator } from "../src/harness-delegation-coordinator.js";
@@ -934,11 +935,14 @@ describe("HarnessDelegationCoordinator", () => {
     }
   });
 
-  it("never queues native Codex starts", async () => {
+  it("leaves the limit of native Codex starts to the Host and passes a queued identity on", async () => {
     const admitDelegation = vi.fn();
     const startOfficial = vi.fn(
-      async (input: DelegationStartInput & { parentThreadId: string; cwd: string }) => ({
-        delegationId: "native-delegation",
+      async (
+        input: DelegationStartInput & { parentThreadId: string; cwd: string },
+        admitted?: DelegationStartIdentity,
+      ) => ({
+        delegationId: admitted?.delegationId ?? "native-delegation",
         threadId: "native-thread",
         turnId: "native-turn",
         harnessId: "codex",
@@ -961,8 +965,13 @@ describe("HarnessDelegationCoordinator", () => {
           parentThreadId: "parent-thread",
         }),
       ).resolves.toMatchObject({ threadId: "native-thread", status: "running" });
+      const identity = { delegationId: "queued", threadId: "native-thread", turnId: "pending" };
+      await value.coordinator.start(
+        { harnessId: "codex", task: "native", cwd: "/synthetic", parentThreadId: "parent-thread" },
+        identity,
+      );
       expect(admitDelegation).not.toHaveBeenCalled();
-      expect(startOfficial).toHaveBeenCalledOnce();
+      expect(startOfficial.mock.calls.map((call) => call[1])).toEqual([undefined, identity]);
     } finally {
       await value.close();
     }

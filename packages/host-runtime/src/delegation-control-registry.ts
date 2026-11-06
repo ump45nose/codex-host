@@ -89,6 +89,12 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
           ),
         canStart: () => this.#registrations.size > 0,
         start: (input, identity) => this.#startQueued(input, identity),
+        // A waiting Thread has no Turn or Delegation yet, so no session claims to own it.
+        discard: async (queued) => {
+          await Promise.all(
+            [...this.#registrations].map((registration) => registration.discardQueued?.(queued)),
+          );
+        },
       },
       options.capacity,
     );

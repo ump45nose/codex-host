@@ -7,7 +7,7 @@
 ## What Changes
 
 - Codex Desktop 设置页“通用”中新增“委派”分组：开关“限制同时运行的委派”（默认关闭）与“同时运行上限”（1～32，默认 4）。存储与下发沿用空闲释放：Renderer 本地偏好，只下发给本机 Host，Host 保存在内存。
-- 开启后，本机正在运行的顶层 Thread（含用户手动打开的，不含子代理）达到上限时，目标为外部 Harness 的 `delegate start` 立即返回 Thread 标识、`status: "queued"` 与排队位置，有空位时按先后自动开始。`thread send` 与用户消息不受限制。
+- 开启后，本机正在运行的顶层 Thread（含用户手动打开的，不含子代理）达到上限时，`delegate start`（外部 Harness 与原生 Codex 相同）立即返回 Thread 标识、`status: "queued"` 与排队位置，有空位时按先后自动开始。`thread send` 与用户消息不受限制。
 - `thread read`、`thread list` 显示排队状态与位置；`thread wait`、`thread watch` 等到 Thread 开始后真正停下；`thread cancel` 把它移出队列；`thread send` 对排队中的 Thread 返回 `THREAD_BUSY`。
 - 队列持久保存在 Host 私有数据目录，Host Runtime 重启后按原顺序恢复。
 - CLI 帮助、MCP `delegate_start` 说明与架构文档同步更新。
@@ -17,9 +17,9 @@
 - **排队而非拒绝。** 拒绝要求每个调用方自己重试并维持顺序；排队保持 `delegate start`“立即返回、之后观察”的语义，调用方用同一套 read、wait、watch 跟进。
 - **排队时即分配 Thread 标识。** 排队期间拿到的链接、watch 与后续命令在开始后继续有效。
 - **只限制新委派。** 后续消息属于已有工作，拦截会让进行中的协作卡住，用户消息也不应因 Agent 的派发被拒绝。上限因此只是开始新委派的门槛，运行数可能因后续消息超过上限。
-- **原生 Codex 委派不排队，但计入名额。** 原生委派由官方后端创建 Thread 与 Turn，排队需要改变原生创建流程，本次不做。
+- **原生 Codex 委派先建 Thread，只排队第一条 Turn。** 主要的编排场景使用 `--harness codex`，不排队上限就不起作用。官方后端不接受调用方指定的 Thread 标识，由 Host 分配别名则深链接、父子关系与子进程环境都要换算；先用官方 `thread/start` 建好 Thread，排队时返回的就是真实标识。没有 Turn 的 Thread 会持久保存，重启后可恢复并开始 Turn，但官方 `thread/list` 不列出它。用户直接向它发消息时，排队的任务并入这条消息，只执行一次。
 - **设置与队列分开保存。** 设置是用户偏好，沿用空闲释放由 Renderer 在连接后下发；队列是待执行的工作，必须跨重启保存。重启后设置到达前，恢复的委派保持排队，最多等待 5 分钟，避免在上限未知时一次全部开始。
-- **重启时正在开始的委派不自动重试。** 无法确认 Thread 是否已经创建，重试可能重复创建；按 `interrupted` 结束并说明原因。
+- **重启时正在开始的外部 Harness 委派不自动重试。** 无法确认 Thread 是否已经创建，重试可能重复创建；按 `interrupted` 结束并说明原因。原生 Codex 的 Thread 已经存在，重新排队，开始时检查是否已有 Turn。
 
 ## Capabilities
 

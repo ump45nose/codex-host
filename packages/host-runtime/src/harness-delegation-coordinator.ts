@@ -158,6 +158,7 @@ export class HarnessDelegationCoordinator {
   readonly #cancelOfficial: (input: ThreadCancelInput) => Promise<ThreadCancelResult>;
   readonly #startOfficial: (
     input: DelegationStartInput & { parentThreadId: string; cwd: string; title: string },
+    admitted?: DelegationStartIdentity,
   ) => Promise<DelegationStartResult>;
   readonly #listOfficial: (input: ThreadListInput) => Promise<DelegationThreadListResult>;
   readonly #officialThreadMetadata: (threadId: string) => Promise<ParentMetadata>;
@@ -187,8 +188,10 @@ export class HarnessDelegationCoordinator {
     readOfficial(input: ThreadReadInput): Promise<DelegationThreadSnapshot>;
     sendOfficial(input: ThreadSendInput): Promise<ThreadSendResult>;
     cancelOfficial(input: ThreadCancelInput): Promise<ThreadCancelResult>;
+    /** Native Codex starts apply the capacity limit themselves: their Thread exists while queued. */
     startOfficial(
       input: DelegationStartInput & { parentThreadId: string; cwd: string; title: string },
+      admitted?: DelegationStartIdentity,
     ): Promise<DelegationStartResult>;
     listOfficial(input: ThreadListInput): Promise<DelegationThreadListResult>;
     officialThreadMetadata(threadId: string): Promise<ParentMetadata>;
@@ -255,12 +258,10 @@ export class HarnessDelegationCoordinator {
     const selectedCwd = input.cwd ?? parent.cwd ?? process.cwd();
     const title = delegationTitle(parent.title, input);
     if (input.harnessId === "codex") {
-      const result = await this.#startOfficial({
-        ...input,
-        parentThreadId,
-        cwd: selectedCwd,
-        title,
-      });
+      const result = await this.#startOfficial(
+        { ...input, parentThreadId, cwd: selectedCwd, title },
+        admitted,
+      );
       return {
         ...result,
         parentThreadId,

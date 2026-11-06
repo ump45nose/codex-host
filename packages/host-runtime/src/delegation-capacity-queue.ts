@@ -16,6 +16,7 @@ import {
   type DelegationAdmission,
   type DelegationAdmissionRequest,
   type DelegationCapacityGate,
+  type DelegationQueueClaim,
   type DelegationStartIdentity,
   type DelegationStartInput,
   type DelegationThreadListItem,
@@ -53,6 +54,8 @@ export interface DelegationCapacityRuntime {
   /** False while no session could take a start. */
   canStart(): boolean;
   start(input: DelegationStartInput, identity: DelegationStartIdentity): Promise<unknown>;
+  /** Deletes the Thread a removed start was waiting in, when the Harness created one. */
+  discard?(queued: DelegationStartIdentity & { harnessId: string }): Promise<void>;
 }
 
 function identityOf(record: PersistedQueuedDelegation): DelegationStartIdentity {
@@ -72,8 +75,11 @@ function inputOf(record: PersistedQueuedDelegation): DelegationStartInput {
   };
 }
 
-function recordFor(request: DelegationAdmissionRequest): PersistedQueuedDelegation {
-  const { input, identity } = request;
+function recordFor(
+  request: DelegationAdmissionRequest,
+  identity: DelegationStartIdentity,
+): PersistedQueuedDelegation {
+  const { input } = request;
   return {
     ...identity,
     harnessId: input.harnessId,
@@ -111,6 +117,7 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
   /** Unknown after a restart until the Renderer delivers it again. */
   #settings: DelegationCapacitySettings | undefined;
   #writes: Promise<void> = Promise.resolve();
+  #admissions: Promise<void> = Promise.resolve();
   #timer: ReturnType<typeof setInterval> | undefined;
   #graceTimer: ReturnType<typeof setTimeout> | undefined;
   #closed = false;
@@ -141,17 +148,44 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
     return { ...settings };
   }
 
-  async admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission> {
+  admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission> {
+    // One at a time, so a start whose Thread is still being prepared keeps its place.
+    const admitted = this.#admissions.then(() => this.#admit(request));
+    this.#admissions = admitted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return admitted;
+  }
+
+  async #admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission> {
     await this.#ready;
     if (this.#closed) throw new DelegationControlError("INTERNAL_ERROR", "Host Runtime is closing");
     const existing = this.#duplicate(request);
     if (existing) return this.#queued(existing);
     if (!this.#mustQueue()) return this.#reserve(request.identity.threadId);
-    const entry: QueueEntry = { record: recordFor(request), state: "queued" };
+    const identity = request.prepare ? await request.prepare() : request.identity;
+    const entry: QueueEntry = { record: recordFor(request, identity), state: "queued" };
     this.#entries.push(entry);
     await this.#persist();
     this.#schedule();
     return this.#queued(entry);
+  }
+
+  async claim(threadId: string, harnessId: string): Promise<DelegationQueueClaim | undefined> {
+    await this.#ready;
+    const entry = this.#entry(threadId);
+    if (!entry || entry.state !== "queued" || entry.record.harnessId !== harnessId)
+      return undefined;
+    this.#remove(entry);
+    await this.#persist();
+    this.#schedule();
+    const { record } = entry;
+    return {
+      identity: identityOf(record),
+      input: { ...inputOf(record), parentThreadId: record.parentThreadId, cwd: record.cwd },
+      taskDigest: record.taskDigest,
+    };
   }
 
   /** Re-evaluates the queue, for example after a session registers. */
@@ -228,7 +262,11 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
     this.#finish(entry.record, "interrupted", CANCELLED_NOTE);
     await this.#persist();
     this.#schedule();
-    return { threadId, turnId: null, harnessId: entry.record.harnessId, cancelled: true };
+    const { record } = entry;
+    await this.#runtime
+      .discard?.({ ...identityOf(record), harnessId: record.harnessId })
+      .catch((error: unknown) => this.#diagnose(error));
+    return { threadId, turnId: null, harnessId: record.harnessId, cancelled: true };
   }
 
   /** Waiting and starting Threads for a list by parent, or by workspace when no parent is given. */
@@ -280,7 +318,12 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
     if (records.length === 0 || this.#closed) return;
     let interrupted = 0;
     for (const record of records) {
-      if (record.starting) {
+      if (record.starting && record.harnessId === "codex") {
+        // The native Thread was created when queued, and its start skips a Turn that already began.
+        const waiting = { ...record };
+        delete waiting.starting;
+        this.#entries.push({ record: waiting, state: "queued" });
+      } else if (record.starting) {
         // The restart ended the Harness process the start was talking to.
         this.#finish(record, "interrupted", RESTART_NOTE);
         interrupted += 1;

@@ -499,4 +499,95 @@ describe("DelegationCapacityQueue", () => {
     expect(store.saved.map((saved) => saved.threadId)).toEqual([entry.identity.threadId]);
     await expect(queue.admit(request())).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
+
+  it("prepares a Harness-created Thread only for a start that must wait, keeping arrival order", async () => {
+    const value = sessions();
+    value.running.add("busy");
+    const queue = track(new DelegationCapacityQueue(value.runtime));
+    queue.configure({ enabled: true, maxRunning: 2 });
+    const prepared: string[] = [];
+    const native = (threadId: string, task: string) => {
+      const base = request({ harnessId: "codex", task }, task);
+      return {
+        ...base,
+        prepare: vi.fn(async () => {
+          // A slow backend must not let a later start take this one's place.
+          await new Promise((resolve) => setTimeout(resolve, threadId === "native-a" ? 20 : 0));
+          prepared.push(threadId);
+          return { ...base.identity, threadId };
+        }),
+      };
+    };
+    const now = native("unused", "now");
+    admitted(await queue.admit(now));
+    expect(now.prepare).not.toHaveBeenCalled();
+    const [first, second] = await Promise.all([
+      queue.admit(native("native-a", "a")),
+      queue.admit(native("native-b", "b")),
+    ]);
+    expect([queued(first).identity.threadId, queued(second).identity.threadId]).toEqual([
+      "native-a",
+      "native-b",
+    ]);
+    expect((await queue.list({})).map((entry) => entry.threadId)).toEqual(["native-a", "native-b"]);
+    // A retry of a waiting start is answered from the queue without preparing again.
+    const retry = native("native-c", "a");
+    expect(queued(await queue.admit(retry)).identity.threadId).toBe("native-a");
+    expect(retry.prepare).not.toHaveBeenCalled();
+    expect(prepared).toEqual(["native-a", "native-b"]);
+  });
+
+  it("hands a waiting start to its session when claimed, and discards a cancelled Thread", async () => {
+    const value = sessions();
+    value.running.add("busy");
+    const discard = vi.fn(async () => undefined);
+    const store = new MemoryQueueStore();
+    const queue = track(new DelegationCapacityQueue({ ...value.runtime, discard }, { store }));
+    queue.configure({ enabled: true, maxRunning: 1 });
+    const claimed = request({ harnessId: "codex" });
+    const cancelled = request({ harnessId: "codex" });
+    const behind = request();
+    for (const entry of [claimed, cancelled, behind]) queued(await queue.admit(entry));
+
+    expect(await queue.claim(claimed.identity.threadId, "pi")).toBeUndefined();
+    expect(await queue.claim(claimed.identity.threadId, "codex")).toEqual({
+      identity: claimed.identity,
+      input: { ...claimed.input },
+      taskDigest: claimed.taskDigest,
+    });
+    expect(await queue.claim(claimed.identity.threadId, "codex")).toBeUndefined();
+    // Claimed work is the session's now, not a start that never happened.
+    expect(await queue.finished({ threadId: claimed.identity.threadId, view: "result" })).toBe(
+      undefined,
+    );
+    expect(await queue.peek(cancelled.identity.threadId)).toEqual({
+      status: "queued",
+      position: 1,
+    });
+
+    expect(await queue.cancel(cancelled.identity.threadId)).toMatchObject({ cancelled: true });
+    expect(discard).toHaveBeenCalledWith({ ...cancelled.identity, harnessId: "codex" });
+    expect(store.saved.map((saved) => saved.threadId)).toEqual([behind.identity.threadId]);
+    expect(value.runtime.start).not.toHaveBeenCalled();
+  });
+
+  it("restores a native start cut off by a restart to the queue instead of failing it", async () => {
+    const value = sessions();
+    const store = new MemoryQueueStore([
+      record({ threadId: "native-starting", harnessId: "codex", starting: true }),
+      record({ threadId: "pi-starting", starting: true }),
+      record({ threadId: "native-waiting", harnessId: "codex" }),
+    ]);
+    const queue = track(new DelegationCapacityQueue(value.runtime, { store }));
+    expect((await queue.list({})).map((entry) => [entry.threadId, entry.queue?.position])).toEqual([
+      ["native-starting", 1],
+      ["native-waiting", 2],
+    ]);
+    expect(await queue.finished({ threadId: "pi-starting", view: "result" })).toMatchObject({
+      status: "interrupted",
+    });
+    expect(store.saved.some((saved) => saved.starting)).toBe(false);
+    queue.configure({ enabled: true, maxRunning: 4 });
+    await vi.waitFor(() => expect(value.started()).toEqual(["native-starting", "native-waiting"]));
+  });
 });

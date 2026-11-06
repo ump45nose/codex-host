@@ -10,9 +10,9 @@
 - **AND** SHALL 在响应中给出可用于 `thread read` 与 `thread wait` 的下一步命令提示
 
 #### Scenario: 本机委派上限已满
-- **WHEN** 本机委派上限已开启且已满，调用方执行有效的外部 Harness `delegate start`
+- **WHEN** 本机委派上限已开启且已满，调用方执行有效的 `delegate start`
 - **THEN** CLI SHALL 立即返回 Thread 标识、`status: "queued"` 与排队位置
-- **AND** Host MUST NOT 在排到之前创建目标 Session/Thread 或投递任务
+- **AND** Host MUST NOT 在排到之前投递任务；外部 Harness MUST NOT 在排到之前创建目标 Session/Thread
 - **AND** 该委派开始后 SHALL 沿用已返回的 Thread 标识
 
 #### Scenario: 运行期间打开外部 Harness 委派 Thread
@@ -64,7 +64,7 @@
 ## ADDED Requirements
 
 ### Requirement: 本机同时运行的委派可选上限
-Host SHALL 提供本机同时运行的委派上限设置，默认关闭，上限为 1～32 的整数。设置 SHALL 保存在 Desktop 本地偏好中并只下发给本机 Host，Host 只在内存中保存。开启时，占用名额的 SHALL 是本 Host Runtime 中有活跃 Turn 的顶层 Thread，包括用户手动打开的 Thread，不含子代理。只有目标为外部 Harness 的 `delegate start` SHALL 受限；后续消息与用户消息 MUST NOT 被拦截、排队或因上限失败。队列 SHALL 持久保存并在 Host Runtime 重启后恢复。
+Host SHALL 提供本机同时运行的委派上限设置，默认关闭，上限为 1～32 的整数。设置 SHALL 保存在 Desktop 本地偏好中并只下发给本机 Host，Host 只在内存中保存。开启时，占用名额的 SHALL 是本 Host Runtime 中有活跃 Turn 的顶层 Thread，包括用户手动打开的 Thread，不含子代理。只有 `delegate start` SHALL 受限，外部 Harness 与原生 Codex 相同；后续消息与用户消息 MUST NOT 被拦截、排队或因上限失败。队列 SHALL 持久保存并在 Host Runtime 重启后恢复。
 
 #### Scenario: 默认关闭
 - **WHEN** 用户没有开启上限
@@ -72,7 +72,7 @@ Host SHALL 提供本机同时运行的委派上限设置，默认关闭，上限
 
 #### Scenario: 超过上限时排队
 - **WHEN** 上限已开启，正在运行的顶层 Thread 数已达到上限，或已有委派在排队
-- **THEN** 外部 Harness 的 `delegate start` SHALL 排队，并立即返回 Thread 标识、`queued` 状态与从 1 开始的排队位置
+- **THEN** `delegate start` SHALL 排队，并立即返回 Thread 标识、`queued` 状态与从 1 开始的排队位置
 - **AND** 参数、父 Thread 与 Model 配置的校验 SHALL 在排队前完成，无效请求 MUST NOT 进入队列
 - **AND** 相同 Request ID 或近期相同任务的重复请求 SHALL 返回同一个排队中的 Thread
 
@@ -87,7 +87,17 @@ Host SHALL 提供本机同时运行的委派上限设置，默认关闭，上限
 - **WHEN** 用户手动打开的 Thread、原生 Codex 委派或子代理正在运行
 - **THEN** 手动打开的 Thread 与原生 Codex 委派 SHALL 占用名额
 - **AND** 外部 Harness 与原生 Codex 的子代理 MUST NOT 占用名额
-- **AND** 原生 Codex 委派 MUST NOT 排队
+
+#### Scenario: 原生 Codex 委派排队
+- **WHEN** `delegate start --harness codex` 需要排队
+- **THEN** Host SHALL 在官方后端先创建没有 Turn 的 Thread，并返回该 Thread 的标识
+- **AND** 只有第一条 Turn SHALL 排队，开始时 SHALL 在同一 Thread 中投递任务
+- **AND** 取消时 SHALL 删除该 Thread
+
+#### Scenario: 用户直接向排队中的原生 Thread 发消息
+- **WHEN** 用户在 Desktop 中向排队中的原生 Codex Thread 发送消息
+- **THEN** Host SHALL 将它移出队列，把排队的任务与该消息在同一 Turn 中投递，并建立委派关系
+- **AND** 排队的任务 MUST NOT 之后再次开始
 
 #### Scenario: 后续消息不受上限限制
 - **WHEN** 运行数已达到或超过上限，调用方执行 `thread send` 或用户在已有 Thread 中发送消息
@@ -103,7 +113,8 @@ Host SHALL 提供本机同时运行的委派上限设置，默认关闭，上限
 - **WHEN** Host Runtime 在排队的委派开始前重启
 - **THEN** 重启后队列 SHALL 按原顺序与原 Thread 标识恢复
 - **AND** 设置重新下发前，恢复的委派 SHALL 保持排队，新的启动排在其后；5 分钟内仍未收到设置时 SHALL 按关闭处理
-- **AND** 重启时正在开始的委派 SHALL 以 `interrupted` 结束并说明原因，MUST NOT 自动重试
+- **AND** 重启时正在开始的外部 Harness 委派 SHALL 以 `interrupted` 结束并说明原因，MUST NOT 自动重试
+- **AND** 重启时正在开始的原生 Codex 委派 SHALL 重新排队；开始时 Thread 已有 Turn 则 SHALL 沿用，MUST NOT 再次投递任务
 
 #### Scenario: 队列存储
 - **WHEN** 排队记录写入持久存储

@@ -141,6 +141,18 @@ export interface DelegationAdmissionRequest {
   title: string;
   taskDigest: string;
   identity: DelegationStartIdentity;
+  /**
+   * Creates the Thread a queued start waits in, when its identity comes from the
+   * Harness; called only once the start must queue, and its identity replaces `identity`.
+   */
+  prepare?(): Promise<DelegationStartIdentity>;
+}
+
+/** A queued start a user message took over before its turn came. */
+export interface DelegationQueueClaim {
+  identity: DelegationStartIdentity;
+  input: DelegationStartInput & { parentThreadId: string; cwd: string };
+  taskDigest: string;
 }
 
 export type DelegationAdmission =
@@ -160,6 +172,8 @@ export type DelegationAdmission =
 export interface DelegationCapacityGate {
   admit(request: DelegationAdmissionRequest): Promise<DelegationAdmission>;
   configure(settings: DelegationCapacitySettings): DelegationCapacitySettings;
+  /** Removes a waiting start of this Harness so its session can start it now; undefined when none waits. */
+  claim(threadId: string, harnessId: string): Promise<DelegationQueueClaim | undefined>;
 }
 
 export interface ThreadSendInput {
@@ -321,6 +335,8 @@ export interface DelegationControlRegistration extends DelegationControlApi {
   runningThreadIds?(): readonly string[];
   /** Receives the capacity limit of the registry this session joined. */
   useCapacity?(capacity: DelegationCapacityGate): void;
+  /** Deletes a Thread created for a queued start that was removed before it started. */
+  discardQueued?(queued: DelegationStartIdentity & { harnessId: string }): Promise<void>;
   executionHostId?(threadId: string): string | undefined;
   canHandleStart(input: DelegationStartInput): boolean | Promise<boolean>;
   ownsThread(threadId: string): boolean | Promise<boolean>;

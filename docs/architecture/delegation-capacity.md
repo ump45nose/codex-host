@@ -20,7 +20,7 @@ Host 可以限制本机同时运行的顶层 Thread 数量。开启后，`delega
 
 ## 哪些请求会排队
 
-- 只有目标为外部 Harness 的 `delegate start` 会排队，CLI、外部客户端的 MCP `delegate_start` 以及带 `--watch true` 的启动都一样。`--harness codex` 立即启动，但占用名额。
+- 只有 `delegate start` 会排队，外部 Harness 与 `--harness codex` 都一样，CLI、外部客户端的 MCP `delegate_start` 以及带 `--watch true` 的启动也都一样。
 - `thread send`、用户在 Desktop 中发送的消息，以及对已有 Thread 的后续消息，从不排队，也不会因上限失败，即使运行数已经超过上限。
 - 参数、父 Thread、工作区与 Model 配置的校验，以及幂等去重，都在排队前完成：无效请求直接报错，不进入队列。相同 Request ID，或 30 秒内同一父 Thread、目标与任务的重复请求，返回同一个排队中的 Thread；Request ID 相同而配置不同时返回 `INVALID_ARGUMENT`。
 - 已经有启动在排队时，新的启动排在后面，即使此刻有空位；空位总是先给队首。
@@ -39,21 +39,31 @@ Host 可以限制本机同时运行的顶层 Thread 数量。开启后，`delega
 | `thread cancel` | 把 Thread 移出队列并返回 `cancelled: true`。之后读取为 `interrupted`，并说明它在开始前已被移出队列，不会再启动 |
 | `thread send` | 返回 `THREAD_BUSY`，`details.status` 为 `queued` 或 `creating`，排队时附 `queuePosition`；移出队列或启动失败后返回 `THREAD_NOT_FOUND` |
 
-移出队列、启动失败或被重启中断的启动不会生成 Thread。Host 在内存中保留最近 50 条这类记录，使 `read`、`wait`、`cancel` 与 watch 能给出终态；Host Runtime 重启后不再保留。
+移出队列、启动失败或被重启中断的外部 Harness 启动不会生成 Thread；原生 Codex 的排队 Thread 见下文。Host 在内存中保留最近 50 条这类记录，使 `read`、`wait`、`cancel` 与 watch 能给出终态；Host Runtime 重启后不再保留。
 
 ## 自动开始
 
 队列每 2 秒检查一次正在运行的 Thread（与 `thread wait`、watch 一样基于轮询），有空位就按先后启动队首，直到名额用完。上限调高或关闭后，等待中的启动随之开始。启动沿用排队时记录的参数（任务、任务名、工作区、父 Thread、Model 与 Thinking 选择）和已分配的 Thread 标识。启动失败时，该 Thread 读取为 `failed` 并附失败原因，同时写入 Host Runtime 日志。
+
+## 原生 Codex 的排队
+
+官方后端不接受调用方指定的 Thread 标识，所以 `--harness codex` 需要排队时，Host 先用官方 `thread/start` 与 `thread/name/set` 建好 Thread，只把第一条 Turn 排队。返回的标识就是真实的原生 Thread，深链接、父子关系和子进程环境不需要别名。没有排队、直接放行的启动仍按原流程创建。
+
+- 没有 Turn 的原生 Thread 会写入 rollout，官方后端重启后仍能 `thread/resume` 并开始 Turn。官方 `thread/list` 不列出没有 Turn 的 Thread，因此 Desktop 重启后，排队中的原生 Thread 可能不在线程列表中出现，直到第一条 Turn 开始；`codexhost thread list` 仍由队列给出。空闲释放只作用于外部 Harness，不会卸载它。
+- 开始时，Host 先 `thread/resume`，再读取最新 Turn；已经有 Turn 时沿用它补建委派记录，不再发送任务。
+- 用户在 Desktop 中直接给排队中的原生 Thread 发消息时，Host 把它移出队列，把排队的任务放在这条消息之前一起发出，并建立委派记录。任务只执行一次，这条 Turn 不受上限限制，Model 与 Thinking 以 Desktop 的请求为准。
+- `thread cancel` 移出队列后用官方 `thread/delete` 删除这个 Thread，之后读取为 `interrupted`。
+- 重启时正在启动的原生记录重新排队，开始时按上面的检查决定沿用已有 Turn 还是发送任务，不会重复创建。
 
 ## 重启
 
 - 队列保存在 `<数据目录>/delegation-queue/`（默认 `~/.codexhost`），每个 Runtime 进程一个仅当前用户可读写的文件。与 watch 记录不同，排队记录必须包含任务文本，因为 Thread 在开始前并不存在；启动后记录随即删除。
 - 多个 Runtime 进程可以共用数据目录。每个进程只写自己的文件；启动时接管已退出进程（或上次开机遗留）的队列，以原子重命名认领，同一记录只被一个进程接管，接管后按原排队时间合并。无法解析的记录改名为 `.invalid` 留存并写诊断，不阻止 Runtime 启动。
 - 上限设置只在内存中，重启后要等 Renderer 重新下发。在此之前，恢复的启动保持排队，新的启动排在它们后面；最多等待 5 分钟，仍未收到设置就按关闭处理，依次启动。
-- 重启时正在启动的记录无法确认 Thread 是否已经创建，按 `interrupted` 结束并说明原因，不自动重试；如果 Thread 实际已经创建，读取时以持有它的会话为准。
+- 重启时正在启动的外部 Harness 记录无法确认 Thread 是否已经创建，按 `interrupted` 结束并说明原因，不自动重试；如果 Thread 实际已经创建，读取时以持有它的会话为准。
 
 ## 实现与边界
 
 - `packages/host-runtime/src/delegation-capacity-queue.ts` 实现计数、排队、恢复与自动开始，由 `DelegationControlRegistry` 持有，位于各 Host 会话之上；`delegation-capacity-store.ts` 负责队列文件。各会话通过注册提供正在运行的顶层 Thread，并把收到的设置转交给队列。
-- 名额检查位于外部 Harness 委派创建 Thread 之前，原生 Codex 委派不经过它。排队的启动开始时，以已分配的标识重新进入同一启动流程，跳过名额检查与去重。
+- 外部 Harness 的名额检查位于创建 Thread 之前；原生 Codex 的在 `AppServerHost` 中，需要排队时才通过 `prepare` 建好 Thread，去重先于建 Thread，重试不会留下多余的 Thread。排队的启动开始时，以已分配的标识重新进入同一启动流程，跳过名额检查与去重。
 - 只有收到设置的 Host Runtime 计数并限制。同一台机器上的其他 Runtime（例如远程监听）既不计入，也不受限制；它们只会接管已退出 Runtime 留下的队列文件。

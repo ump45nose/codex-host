@@ -44,6 +44,9 @@ import {
   type LoadedSession,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
+  DELEGATION_CAPACITY_SETTINGS_METHOD,
+  delegationCapacitySettingsSchema,
+  type DelegationCapacitySettings,
   harnessAccountInspectParamsSchema,
   harnessAccountInspectResultSchema,
   harnessAccountSourceListResultSchema,
@@ -239,6 +242,9 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   getHarnessLaunchSettings?(input: HarnessLaunchSettingsGet): Promise<HarnessLaunchSettings>;
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
+  setDelegationCapacitySettings?(
+    settings: DelegationCapacitySettings,
+  ): Promise<DelegationCapacitySettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
   readSidebarStashLegacyFile?(): Promise<SidebarStashLegacyFileResult>;
   currentHostId?(composer?: Element): string | null;
@@ -530,6 +536,14 @@ export function createRendererModelClient(
       const params = idleReleaseSettingsSchema.parse(settings);
       return idleReleaseSettingsSchema.parse(
         await manager.sendRequest(IDLE_RELEASE_SETTINGS_METHOD, params),
+      );
+    },
+    async setDelegationCapacitySettings(
+      settings: DelegationCapacitySettings,
+    ): Promise<DelegationCapacitySettings> {
+      const params = delegationCapacitySettingsSchema.parse(settings);
+      return delegationCapacitySettingsSchema.parse(
+        await manager.sendRequest(DELEGATION_CAPACITY_SETTINGS_METHOD, params),
       );
     },
     ...createRendererSessionImportClient(async (method, params) =>

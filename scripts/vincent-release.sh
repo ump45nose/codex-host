@@ -10,6 +10,7 @@
 #   scripts/vincent-release.sh deploy local [--tag vX.Y.Z] [--artifacts DIR] [--dry-run] [--allow-version-mismatch]
 #   scripts/vincent-release.sh deploy ssh USER@HOST [same options]   # copies artifacts + this script, runs "deploy local" there
 #   scripts/vincent-release.sh rollback [BACKUP_DIR]           # restore the newest (or given) backup on this machine
+#   scripts/vincent-release.sh stale [--ssh USER@HOST]         # list running CodexHost processes older than the install
 #
 # Environment:
 #   CH_REPO            git clone used for building (default: the clone containing this script)
@@ -21,11 +22,16 @@
 #   GIT_AUTHOR         commit identity (default: "Vincent <1729065730@qq.com>")
 #
 # The manifest of feature branches is vincent/branches.txt next to this script's repo root.
-# Nothing here restarts CodexHost or Codex Desktop; deploy prints a notice instead.
+# Nothing here restarts CodexHost or Codex Desktop; deploy prints a notice instead, followed by
+# the "stale" report: every running CodexHost process that started before the files were installed.
 set -euo pipefail
 
-SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-TOOLS_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  TOOLS_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+else # streamed over stdin ("stale --ssh"): only the read-only commands work
+  SCRIPT_PATH="vincent-release.sh"; TOOLS_ROOT="$PWD"
+fi
 MANIFEST="${CH_MANIFEST:-$TOOLS_ROOT/vincent/branches.txt}"
 CH_WORK="${CH_WORK:-$HOME/.codexhost-vincent}"
 CH_SUDO="${CH_SUDO:-sudo}"
@@ -223,6 +229,56 @@ detect_app_dir() {
   echo "$root/@codexhost/cli/node_modules/@codexhost/cli-$os-$arch/app"
 }
 
+file_ctime() { stat -c %Z "$1" 2>/dev/null || stat -f %c "$1"; }
+format_epoch() { date -d "@$1" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || date -r "$1" '+%Y-%m-%d %H:%M:%S %Z'; }
+
+# Prints the running CodexHost processes that started before $1/host-runtime.mjs was written.
+# npm pack stamps every mtime with 1985-10-26, so the install time is the file's ctime.
+# Only reads the process table; nothing is signalled or restarted.
+stale_runtimes() {
+  local app="$1" host installed_at version now
+  host="$(hostname -s 2>/dev/null || hostname)"
+  [[ -f "$app/host-runtime.mjs" ]] || { log "$host: no CodexHost install at $app"; return 0; }
+  installed_at="$(file_ctime "$app/host-runtime.mjs")"
+  version="$(node -p "require('$app/codexhost-distribution.json').version" 2>/dev/null ||
+    node -p "require('$app/../package.json').version" 2>/dev/null || echo unknown)"
+  now="$(date +%s)"
+  local stale=0 total=0 pid etime title secs started
+  # ps etime is [[dd-]hh:]mm:ss on both macOS and Linux procps.
+  while read -r pid etime title; do
+    case "$title" in
+      *"$app/"*|"codexhost remote app-server listener"*|codexhost\ *\ harness\ broker*) ;;
+      *) continue ;;
+    esac
+    secs="$(awk -v t="$etime" 'BEGIN { d = 0; if (index(t, "-")) { split(t, a, "-"); d = a[1]; t = a[2] }
+      n = split(t, p, ":"); s = 0; for (i = 1; i <= n; i++) s = s * 60 + p[i]; print d * 86400 + s }')"
+    started=$((now - secs))
+    total=$((total + 1))
+    if (( started < installed_at )); then
+      stale=$((stale + 1))
+      printf '[vincent-release] %s: installed %s but NOT active: pid %s (%s, started %s) predates the install (%s) - restart needed\n' \
+        "$host" "$version" "$pid" "${title:0:90}" "$(format_epoch "$started")" "$(format_epoch "$installed_at")"
+    fi
+  done < <(ps -axo pid=,etime=,command= 2>/dev/null || ps -eo pid=,etime=,args=)
+  if (( total == 0 )); then
+    printf '[vincent-release] %s: installed %s; no CodexHost process is running (the next start loads it)\n' "$host" "$version"
+  elif (( stale == 0 )); then
+    printf '[vincent-release] %s: installed %s is active: all %s running CodexHost processes started after the install\n' "$host" "$version" "$total"
+  else
+    printf '[vincent-release] %s: %s of %s running CodexHost processes still run the old code - restart them to activate %s\n' "$host" "$stale" "$total" "$version"
+  fi
+}
+
+cmd_stale() {
+  if [[ "${1:-}" == "--ssh" ]]; then
+    local host="${2:-}"; [[ -n "$host" ]] || die "stale --ssh USER@HOST"
+    # Read-only on the remote side: the script is streamed over stdin, nothing is copied.
+    ssh "$host" "bash -lc 'bash -s stale'" < "$SCRIPT_PATH"
+    return
+  fi
+  stale_runtimes "$(detect_app_dir)"
+}
+
 cmd_deploy() {
   local mode="${1:-}"; shift || true
   case "$mode" in
@@ -314,6 +370,7 @@ deploy_local() {
   Roll back with: $SCRIPT_PATH rollback $backup
 
 NOTICE
+  stale_runtimes "$app" >&2
 }
 
 cmd_rollback() {
@@ -340,7 +397,8 @@ main() {
     auto) cmd_auto "$@" ;;
     deploy) cmd_deploy "$@" ;;
     rollback) cmd_rollback "$@" ;;
-    ""|-h|--help|help) sed -n '2,25p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//' ;;
+    stale) cmd_stale "$@" ;;
+    ""|-h|--help|help) sed -n '2,27p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown command $cmd (see --help)" ;;
   esac
 }

@@ -150,7 +150,7 @@ Thread 观察命令 SHALL 接受裸 Thread 标识与 Codex 深度链接，并可
 - **AND** 相同请求在 Thread 未变化时 SHALL 返回语义相同的结果
 
 ### Requirement: 调用方可显式注册一次性 Thread 停下通知
-系统 SHALL 提供 `codexhost thread watch <thread> [--notify <thread>] [--timeout-ms <n>] [--stall-after-ms <n>]` 与 `codexhost thread watches`。watch 在被观察 Thread 停下或到期时，SHALL 通过与 `thread send` 相同的路径在被通知 Thread 中启动一个新 Turn，作为一次性通知。被观察 Thread 与被通知方可以是任意两个不同的 Thread，不要求委派血缘；被通知方也可以是外部客户端，此时通知写入其事件日志而不启动 Turn。通知 SHALL 只报告执行状态与 Thread 链接，MUST NOT 携带或摘要会话内容，也 MUST NOT 被表述为工作已验收。watch SHALL 持久保存并在 Host Runtime 重启后恢复，不提供取消操作。
+系统 SHALL 提供 `codexhost thread watch <thread> [--notify <thread>] [--timeout-ms <n>]` 与 `codexhost thread watches`。watch 在被观察 Thread 停下或到期时，SHALL 通过与 `thread send` 相同的路径在被通知 Thread 中启动一个新 Turn，作为一次性通知。被观察 Thread 与被通知方可以是任意两个不同的 Thread，不要求委派血缘；被通知方也可以是外部客户端，此时通知写入其事件日志而不启动 Turn。通知 SHALL 只报告执行状态与 Thread 链接，MUST NOT 携带或摘要会话内容，也 MUST NOT 被表述为工作已验收。watch SHALL 持久保存并在 Host Runtime 重启后恢复，不提供取消操作。
 
 #### Scenario: 注册后立即返回
 - **WHEN** 调用方对一个运行中的 Thread 执行 `thread watch`
@@ -258,10 +258,3 @@ Thread 观察命令 SHALL 接受裸 Thread 标识与 Codex 深度链接，并可
 - **THEN** 记录 SHALL 只包含 Thread 标识、状态、结果、来源 Turn、期限、时间戳与原因
 - **AND** MUST NOT 包含会话内容、任务文本或凭据
 - **AND** 存储 SHALL 仅当前 OS 用户可读写
-#### Scenario: 客户端收到卡住提醒
-- **WHEN** 已启用 `--stall-after-ms` 的 watch 以外部客户端为接收方，运行 Thread 静默达到阈值
-- **THEN** Host SHALL 将 `outcome: "stalled"` 写入同一客户端事件日志，包含 Thread 链接与可用的 Turn 标识，不启动 Turn
-- **AND** 事件 SHALL 表达 Host 未观察到 Harness 事件的提醒，MUST NOT 表示已失败或已停止
-- **AND** 主 watch SHALL 继续观察；后续 Harness 活动 SHALL 允许下一段静默再次提醒
-- **AND** 待投递状态与重启恢复 SHALL 使用同一 watch 持久化机制，重启后静默重新计时
-- **AND** MCP 的 `thread_watch` 与 `delegate_start`（`watch: true`）SHALL 以可选正整数 `stallAfterMs` 提供同样行为；未启用 watch 时 MUST NOT 接受该参数

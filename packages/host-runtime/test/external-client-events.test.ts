@@ -68,7 +68,12 @@ describe("client event log", () => {
     vi.useFakeTimers();
     let status: DelegationThreadStatus = "running";
     const send = vi.fn();
-    const log = new ClientEventLog({ directory, retentionDays: 7 });
+    // Fake timers cannot wait for real file writes, so polling appends to memory and
+    // the real log stores the recorded events once real timers are back.
+    const appended: NewClientEvent[] = [];
+    const append = vi.fn(async (_client: string, events: readonly NewClientEvent[]) => {
+      appended.push(...events);
+    });
     const service = new DelegationWatchService(
       {
         read: vi.fn(
@@ -84,7 +89,7 @@ describe("client event log", () => {
         ),
         send,
       },
-      { pollIntervalMs: 1_000, clientEvents: log },
+      { pollIntervalMs: 1_000, clientEvents: { append } },
     );
     try {
       await service.watch({
@@ -93,44 +98,47 @@ describe("client event log", () => {
         timeoutMs: 60_000,
         stallAfterMs: 3_000,
       });
-      await vi.advanceTimersByTimeAsync(3_000);
-      await vi.waitFor(async () => expect((await log.read("bot", 0)).events).toHaveLength(1));
-      const [alert] = (await log.read("bot", 0)).events;
-      expect(alert).toMatchObject({
-        type: "watch",
-        threadId: "child",
-        outcome: "stalled",
-        turnId: "turn-1",
-        harnessId: "codex",
-        deepLink: "codex://threads/child",
-        note: expect.stringContaining("still running, but no Harness event was observed for 3 s"),
-      });
-      expect(alert?.note).toContain("The watch continues");
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect((await log.read("bot", 0)).events).toHaveLength(1);
-      service.noteActivity(["child"]);
-      await vi.advanceTimersByTimeAsync(4_000);
-      await vi.waitFor(async () => expect((await log.read("bot", 0)).events).toHaveLength(2));
-      expect((await service.watches()).watches).toContainEqual(
-        expect.objectContaining({ state: "watching", stallAfterMs: 3_000 }),
-      );
-      status = "completed";
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.waitFor(async () => expect((await service.watches()).watches).toEqual([]));
-      expect((await log.read("bot", 0)).events.map((event) => event.outcome)).toEqual([
-        "stalled",
-        "stalled",
-        "completed",
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(appended).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(appended).toEqual([
+        {
+          type: "watch",
+          threadId: "child",
+          outcome: "stalled",
+          turnId: "turn-1",
+          harnessId: "codex",
+          deepLink: "codex://threads/child",
+          note: expect.stringContaining("still running, but no Harness event was observed for 3 s"),
+        },
       ]);
+      expect(appended[0]?.note).toContain("The watch continues");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(appended).toHaveLength(1);
+      service.noteActivity(["child"]);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(appended).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(appended).toHaveLength(2);
+      expect((await service.watches()).watches).toEqual([
+        expect.objectContaining({ state: "watching", stallAfterMs: 3_000 }),
+      ]);
+      status = "completed";
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(appended.map((event) => event.outcome)).toEqual(["stalled", "stalled", "completed"]);
+      expect((await service.watches()).watches).toEqual([]);
+      expect(append.mock.calls.map(([client]) => client)).toEqual(["bot", "bot", "bot"]);
       expect(send).not.toHaveBeenCalled();
-      // The stalled outcome and its explanation survive reopening the event log.
-      expect(
-        (await new ClientEventLog({ directory, retentionDays: 7 }).read("bot", 0)).events[0],
-      ).toEqual(alert);
     } finally {
       service.close();
       vi.useRealTimers();
     }
+    // The stalled outcome and its explanation survive the real log and reopening it.
+    await new ClientEventLog({ directory, retentionDays: 7 }).append("bot", appended);
+    const reopened = new ClientEventLog({ directory, retentionDays: 7 });
+    expect((await reopened.read("bot", 0)).events).toEqual(
+      appended.map((event) => ({ ...event, id: expect.any(Number), time: expect.any(String) })),
+    );
   });
 
   it("removes whole days past retention and reports an expired cursor", async () => {

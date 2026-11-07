@@ -82,6 +82,8 @@ export class MappingStoreError extends Error {
 export interface MappingStoreOptions {
   directory: string;
   instanceId?: string;
+  /** Diagnostic role recorded in the lock so a contender can name the live owner. */
+  ownerRole?: string;
   now?: () => Date;
   beforeReplace?: (record: StoredThreadRecordV1) => Promise<void> | void;
 }
@@ -92,6 +94,16 @@ interface LockRecord {
   startedAt: string;
   executablePath?: string;
   processStartedAt?: string;
+  role?: string;
+}
+
+function lockOwnerDescription(lock: Partial<LockRecord>): string {
+  const details = [`PID ${String(lock.pid)}`];
+  if (typeof lock.role === "string" && lock.role) details.push(lock.role);
+  if (typeof lock.startedAt === "string" && lock.startedAt) {
+    details.push(`started ${lock.startedAt}`);
+  }
+  return details.join(", ");
 }
 
 interface ProcessIdentity {
@@ -353,6 +365,7 @@ export class MappingStore {
   readonly #directory: string;
   readonly #instanceId: string;
   readonly #lockPath: string;
+  readonly #ownerRole: string | undefined;
   readonly #metadataDirectory: string;
   readonly #now: () => Date;
   readonly #quarantineDirectory: string;
@@ -383,6 +396,7 @@ export class MappingStore {
     this.#metadataDirectory = path.join(this.#directory, "thread-metadata");
     this.#lockPath = path.join(this.#directory, "store.lock");
     this.#instanceId = options.instanceId ?? randomUUID();
+    this.#ownerRole = options.ownerRole;
     this.#now = options.now ?? (() => new Date());
     this.#beforeReplace = options.beforeReplace;
   }
@@ -400,6 +414,7 @@ export class MappingStore {
     await this.#acquireLock();
     try {
       await this.#cleanupResidue();
+      await this.#recoverInterruptedQuarantines();
       const names = (await readdir(this.#threadsDirectory)).filter((name) =>
         name.endsWith(".json"),
       );
@@ -1273,6 +1288,51 @@ export class MappingStore {
     }
   }
 
+  /** Restores moved sidecars; copied sidecars stay intact for the normal quarantine retry. */
+  async #recoverInterruptedQuarantines(): Promise<void> {
+    const names = await readdir(this.#quarantineDirectory);
+    const orphanMetadata = names.filter((name) => name.endsWith(".invalid.metadata"));
+    for (const metadataName of orphanMetadata) {
+      const recordName = metadataName.slice(0, -".metadata".length);
+      if (names.includes(recordName)) continue; // pair already complete
+      // recordName is `<id>.json.<ms>.invalid`
+      if (!recordName.endsWith(".invalid")) continue;
+      const withoutInvalid = recordName.slice(0, -".invalid".length);
+      // withoutInvalid is `<id>.json.<ms>`
+      const jsonIdx = withoutInvalid.indexOf(".json.");
+      if (jsonIdx < 0) continue;
+      const threadFileName = withoutInvalid.slice(0, jsonIdx + ".json".length); // `<id>.json`
+      const primary = path.join(this.#threadsDirectory, threadFileName);
+      const metadataQuarantine = path.join(this.#quarantineDirectory, metadataName);
+      const recordQuarantine = path.join(this.#quarantineDirectory, recordName);
+      const metadataLive = path.join(this.#metadataDirectory, threadFileName);
+      // A non-file at the orphan name (e.g. a directory used to block a rename) is not a real quarantine marker.
+      const orphanStat = await stat(metadataQuarantine).catch(() => null);
+      if (!orphanStat?.isFile()) continue;
+      // A live sidecar means the archive may be an incomplete copy, not a moved original.
+      if (await exists(metadataLive)) continue;
+
+      let recordReadable = false;
+      try {
+        await this.#readRecord(primary, threadFileName);
+        recordReadable = true;
+      } catch {
+        // missing or still invalid — finish quarantine when the primary exists
+      }
+
+      if (recordReadable) {
+        // User repaired the record; put metadata back so initialize can load the pair.
+        await rename(metadataQuarantine, metadataLive).catch(() => undefined);
+        continue;
+      }
+
+      if (await exists(primary)) {
+        await rename(primary, recordQuarantine).catch(() => undefined);
+      }
+      // If the primary is already gone, leave the orphan metadata in quarantine.
+    }
+  }
+
   /** Reads a Thread's metadata file; an invalid file is quarantined rather than blocking the Thread. */
   async #readMetadata(hostThreadId: HostThreadId): Promise<StoredThreadMetadataV1 | null> {
     const file = this.#metadataPath(hostThreadId);
@@ -1374,6 +1434,7 @@ export class MappingStore {
         startedAt: this.#now().toISOString(),
         executablePath: process.execPath,
         processStartedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        ...(this.#ownerRole ? { role: this.#ownerRole } : {}),
       };
       await handle.writeFile(`${JSON.stringify(lock)}\n`, "utf8");
       await handle.sync();
@@ -1392,7 +1453,10 @@ export class MappingStore {
       // An invalid lock cannot prove a live owner and is treated as stale.
     }
     if (typeof existing.pid === "number" && lockOwnerIsLive(existing)) {
-      throw new MappingStoreError("STORE_LOCKED", "Another codexhost process owns Mapping Store");
+      throw new MappingStoreError(
+        "STORE_LOCKED",
+        `Another codexhost process owns Mapping Store at ${this.#directory} (${lockOwnerDescription(existing)})`,
+      );
     }
     await rename(this.#lockPath, `${this.#lockPath}.stale-${this.#now().getTime()}`).catch(
       () => undefined,

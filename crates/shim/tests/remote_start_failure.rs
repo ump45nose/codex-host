@@ -48,6 +48,7 @@ while True:
             .args(["app-server", "--listen", "unix://"])
             .env("CODEXHOST_STOCK_CODEX_PATH", self.directory.join("codex"))
             .env("CODEXHOST_REMOTE_SSH_MANAGED", "1")
+            .env("CODEXHOST_DATA_DIR", self.directory.join("data"))
             .env("CODEX_HOME", &self.directory)
             .env("FAILURE_READY", self.directory.join("ready"))
             .env_remove("CODEXHOST_LAUNCHER_PID")

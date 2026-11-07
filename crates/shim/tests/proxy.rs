@@ -1024,6 +1024,47 @@ fn managed_remote_listener_refuses_a_local_launcher_session_or_missing_data_dire
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn managed_remote_listener_child_refuses_an_inherited_launcher_session() {
+    static NEXT_CHILD_GUARD_DIRECTORY_ID: AtomicU64 = AtomicU64::new(0);
+
+    // The detached listener child must not strip CODEXHOST_DATA_DIR and fall back to
+    // the local Desktop's Mapping Store when a Launcher session leaked into it.
+    let directory = PathBuf::from("/tmp").join(format!(
+        "codexhost-remote-child-guard-{}-{}",
+        process::id(),
+        NEXT_CHILD_GUARD_DIRECTORY_ID.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::create_dir(&directory).expect("create remote listener child guard fixture");
+    let ready = directory.join("ready");
+    let output = Command::new(shim_path())
+        .args(["app-server", "--listen", "unix://"])
+        .env_remove("CODEXHOST_LAUNCHER_EXECUTABLE")
+        .env(STOCK_CODEX_PATH_ENV, fake_codex_path())
+        .env(HOST_NODE_PATH_ENV, fake_codex_path())
+        .env(HOST_RUNTIME_PATH_ENV, fake_codex_path())
+        .env(REMOTE_SSH_MANAGED_ENV, "1")
+        .env("CODEXHOST_REMOTE_LISTENER_CHILD", "1")
+        .env("CODEXHOST_LAUNCHER_PID", process::id().to_string())
+        .env("CODEXHOST_DATA_DIR", directory.join("data"))
+        .env("CODEX_HOME", directory.join("home"))
+        .env("FAKE_CODEX_READY_PATH", &ready)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run guarded remote listener child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("managed remote listener inherited a local codexhost Launcher session"),
+        "{stderr}"
+    );
+    assert!(!ready.exists(), "no Host Runtime may start: {stderr}");
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn rejects_missing_stock_cli_without_a_cli_override() {
     let output = Command::new(shim_path())

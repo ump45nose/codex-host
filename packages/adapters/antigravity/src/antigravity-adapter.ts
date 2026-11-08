@@ -78,8 +78,12 @@ import {
 } from "@codexhost/shared-contracts";
 
 import { resolveAntigravityExecutable } from "./command.js";
-import { forkAntigravitySession, nativeConversationDbPath } from "./fork.js";
-import { AntigravityHistory, antigravityHookDirectory } from "./history.js";
+import {
+  ensureNativeConversationDb,
+  forkAntigravitySession,
+  nativeConversationDbPath,
+} from "./fork.js";
+import { AntigravityHistory, antigravityHookDirectory, type AntigravityTurn } from "./history.js";
 import {
   antigravityAvailableThinkingOptions,
   antigravityModelArguments,
@@ -336,6 +340,32 @@ export const ANTIGRAVITY_WORKSPACE_FILE_INSTRUCTION =
  */
 function antigravityWorkingDirectoryInstruction(cwd: string): string {
   return `[System Instruction: The project working directory is ${JSON.stringify(cwd)}. Run terminal commands and resolve relative file paths in this directory unless the task requires another one.]\n\n`;
+}
+
+export function formatRecoveredHistoryContext(turns: readonly AntigravityTurn[]): string {
+  if (turns.length === 0) return "";
+  const formattedTurns: string[] = [];
+  for (const [index, turn] of turns.entries()) {
+    const userText = turn.input
+      .map((part) => part.text.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    const assistantText = turn.items
+      .flatMap(({ item }) =>
+        item.type === "agentMessage" && item.text.trim() ? [item.text.trim()] : [],
+      )
+      .join("\n\n");
+    if (!userText && !assistantText) continue;
+    const sections = [`Turn ${index + 1}:`];
+    if (userText) sections.push(`User:\n${userText}`);
+    if (assistantText) sections.push(`Assistant:\n${assistantText}`);
+    formattedTurns.push(sections.join("\n"));
+  }
+  if (formattedTurns.length === 0) return "";
+  return (
+    "[System Instruction: The native Antigravity trajectory database for this Conversation was reconstructed from CodexHost history. Use the prior Conversation history below as context for the current user message.]\n\n" +
+    `<prior_conversation_history>\n${formattedTurns.join("\n\n---\n\n")}\n</prior_conversation_history>\n\n`
+  );
 }
 
 export function formatAntigravityTurnPrompt(text: string, cwd?: string): string {
@@ -870,6 +900,8 @@ class AntigravitySession implements HarnessSession {
       return { ok: false, error: invalidState("Antigravity Session is closed") };
     }
     const environment = { ...this.#environment, ...questions.environment };
+    const homedir = antigravityHome(environment);
+    let includeRecoveredHistory = false;
     const logPath = path.join(os.tmpdir(), `codexhost-antigravity-${randomUUID()}.log`);
     const arguments_ = [
       "--input-format",
@@ -879,7 +911,16 @@ class AntigravitySession implements HarnessSession {
       "--print-timeout",
       this.#printTimeout,
     ];
-    if (this.#nativeRef) arguments_.unshift("--conversation", this.#nativeRef.nativeSessionId);
+    if (this.#nativeRef) {
+      const priorTurns = this.#history.snapshot();
+      const ensured = await ensureNativeConversationDb(
+        this.#nativeRef.nativeSessionId,
+        homedir,
+        priorTurns.length > 0,
+      );
+      includeRecoveredHistory = ensured.emptySteps && priorTurns.length > 0;
+      arguments_.unshift("--conversation", this.#nativeRef.nativeSessionId);
+    }
     arguments_.push(...antigravityModelArguments(this.#model, this.#thinkingOptionId));
     arguments_.push("--dangerously-skip-permissions");
     arguments_.push("--add-dir", this.#cwd);
@@ -1000,7 +1041,11 @@ class AntigravitySession implements HarnessSession {
       });
     });
     try {
-      const turnPrompt = formatAntigravityTurnPrompt(text, this.#cwd);
+      const promptBody =
+        includeRecoveredHistory && !text.startsWith("/")
+          ? `${formatRecoveredHistoryContext(this.#history.snapshot())}${text}`
+          : text;
+      const turnPrompt = formatAntigravityTurnPrompt(promptBody, this.#cwd);
       if (child.stdin.writable) {
         child.stdin.write(
           `${JSON.stringify({ event: "user", message: { content: turnPrompt } })}\n`,

@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import type { JsonObject } from "@codexhost/protocol-core";
 import {
   DEFAULT_DELEGATION_CAPACITY_SETTINGS,
   delegationCapacitySettingsSchema,
@@ -89,6 +90,37 @@ function inputOf(record: PersistedQueuedDelegation): DelegationStartInput {
     ...(record.requestId !== undefined ? { requestId: record.requestId } : {}),
     ...(record.model ? { model: record.model } : {}),
     ...(record.thinkingOptionId ? { thinkingOptionId: record.thinkingOptionId } : {}),
+  };
+}
+
+function syntheticQueueTurn(
+  record: PersistedQueuedDelegation,
+  status: "inProgress" | "interrupted" | "failed",
+  message: string,
+): JsonObject {
+  const turnId = `queued-${record.delegationId}`;
+  const seconds = Math.floor(record.queuedAt / 1000);
+  return {
+    id: turnId,
+    status,
+    items: [
+      {
+        id: `${turnId}-user`,
+        type: "userMessage",
+        clientId: null,
+        content: [{ type: "text", text: record.task, text_elements: [] }],
+      },
+      {
+        id: `${turnId}-agent`,
+        type: "agentMessage",
+        text: message,
+        phase: "commentary",
+      },
+    ],
+    error: status === "failed" ? { message } : null,
+    startedAt: seconds,
+    completedAt: status === "inProgress" ? null : seconds,
+    durationMs: status === "inProgress" ? null : 0,
   };
 }
 
@@ -304,6 +336,24 @@ export class DelegationCapacityQueue implements DelegationCapacityGate {
       status: finished.status,
       result: { availability: "unavailable", message: finished.message },
     };
+  }
+
+  /** Synthetic Turn for a queued or unstarted native Thread so Desktop does not render an empty page. */
+  previewTurn(threadId: string): JsonObject | undefined {
+    const entry = this.#entry(threadId);
+    if (entry) {
+      const position = this.#position(entry);
+      const message =
+        entry.state === "starting"
+          ? "Starting delegated session from the capacity queue…"
+          : position
+            ? `Queued waiting for delegation capacity (position ${position}).`
+            : "Queued waiting for delegation capacity.";
+      return syntheticQueueTurn(entry.record, "inProgress", message);
+    }
+    const finished = this.#finished.get(threadId);
+    if (!finished) return undefined;
+    return syntheticQueueTurn(finished.record, finished.status, finished.message);
   }
 
   /** Resolves true once the Thread has left the queue, or false when the timeout passes first. */

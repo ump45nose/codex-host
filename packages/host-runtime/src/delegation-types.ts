@@ -1,4 +1,4 @@
-import type { RoutedHarnessId } from "@codexhost/protocol-core";
+import type { JsonObject, RoutedHarnessId } from "@codexhost/protocol-core";
 import type {
   HarnessInspection,
   HarnessModelRef,
@@ -186,6 +186,11 @@ export interface DelegationCapacityGate {
   configure(settings: DelegationCapacitySettings): DelegationCapacitySettings;
   /** Holds a waiting start of this Harness for its session to start now; undefined when none waits. */
   claim(threadId: string, harnessId: string): Promise<DelegationQueueClaim | undefined>;
+  peek?(
+    threadId: string,
+  ): Promise<{ status: "queued" | "creating"; position?: number } | undefined>;
+  finished?(input: ThreadReadInput): Promise<DelegationThreadSnapshot | undefined>;
+  previewTurn?(threadId: string): JsonObject | undefined;
 }
 
 export interface ThreadSendInput {

@@ -148,6 +148,13 @@ describe("AppServerHost native delegation capacity", () => {
         status: "queued",
         queue: { position: 1 },
       });
+      expect(
+        await fixture.mappingStore.getDelegationByChild("queued-native" as never),
+      ).toMatchObject({
+        parentHostThreadId: "native-top",
+        childHostThreadId: "queued-native",
+        status: "creating",
+      });
       expect(backend.calls("thread/name/set", "queued-native")).toHaveLength(1);
       const second = await registry.start({
         harnessId: "codex",
@@ -184,6 +191,41 @@ describe("AppServerHost native delegation capacity", () => {
       expect(backend.seen.some((entry) => entry.method === "thread/delete")).toBe(false);
       expect(await registry.read({ threadId: "second-native", view: "result" })).toMatchObject({
         status: "interrupted",
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 910,
+        method: "thread/resume",
+        params: {
+          threadId: "second-native",
+          initialTurnsPage: { limit: 10, itemsView: "full" },
+        },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 910))).toMatchObject({
+        result: {
+          thread: {
+            id: "second-native",
+            turns: [
+              {
+                status: "interrupted",
+                items: [
+                  { type: "userMessage", content: [{ text: "second native work" }] },
+                  { type: "agentMessage" },
+                ],
+              },
+            ],
+          },
+          initialTurnsPage: {
+            data: [
+              {
+                status: "interrupted",
+                items: [
+                  { type: "userMessage", content: [{ text: "second native work" }] },
+                  { type: "agentMessage" },
+                ],
+              },
+            ],
+          },
+        },
       });
 
       official(fixture, "turn/completed", {

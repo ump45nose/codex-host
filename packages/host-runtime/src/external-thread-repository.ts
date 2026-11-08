@@ -115,6 +115,8 @@ export function createProductionExternalThreadStore(
 }
 
 export class ExternalThreadRepository {
+  readonly #pendingDelegationsByChild = new Map<HostThreadId, StoredDelegationRecordV1>();
+
   constructor(private readonly store: ExternalThreadStore) {}
 
   initialize(): Promise<void> {
@@ -161,8 +163,14 @@ export class ExternalThreadRepository {
     return this.store.getDelegation(delegationId);
   }
 
-  getDelegationByChild(childHostThreadId: HostThreadId): Promise<StoredDelegationRecordV1 | null> {
-    return this.store.getDelegationByChild(childHostThreadId);
+  async getDelegationByChild(
+    childHostThreadId: HostThreadId,
+  ): Promise<StoredDelegationRecordV1 | null> {
+    return (
+      (await this.store.getDelegationByChild(childHostThreadId)) ??
+      this.#pendingDelegationsByChild.get(childHostThreadId) ??
+      null
+    );
   }
 
   findDelegationByRequest(requestId: string): Promise<StoredDelegationRecordV1 | null> {
@@ -177,8 +185,21 @@ export class ExternalThreadRepository {
     return this.store.listDelegations(parentHostThreadId);
   }
 
-  createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
-    return this.store.createDelegation(input);
+  async createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
+    const timestamp = new Date().toISOString();
+    this.#pendingDelegationsByChild.set(input.childHostThreadId, {
+      formatVersion: 1,
+      revision: 1,
+      ...input,
+      status: input.status ?? "creating",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    try {
+      return await this.store.createDelegation(input);
+    } finally {
+      this.#pendingDelegationsByChild.delete(input.childHostThreadId);
+    }
   }
 
   setDelegationStatus(

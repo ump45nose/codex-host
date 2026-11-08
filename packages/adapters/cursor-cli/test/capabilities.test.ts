@@ -412,15 +412,60 @@ describe("Cursor catalog parameter defaults", () => {
     ],
   };
 
-  it("pins parameters only for the live model and offers other models bare", () => {
+  it("pins parameters only for the live model and pairs every model with its Fast variant", () => {
     const catalog = cursorCatalog(liveInfo);
     expect(catalog.defaultModel).toEqual(cursorModelRef("alpha[context=200k,fast=false]"));
-    expect(catalog.models.map(({ ref }) => ref)).toEqual([
-      cursorModelRef("alpha[context=200k,fast=false]"),
-      cursorModelRef("grok"),
+    expect(catalog.models.map(({ ref, fastModel }) => [ref, fastModel])).toEqual([
+      [
+        cursorModelRef("alpha[context=200k,fast=false]"),
+        cursorModelRef("alpha[context=200k,fast=true]"),
+      ],
+      [cursorModelRef("grok[fast=false]"), cursorModelRef("grok[fast=true]")],
     ]);
     expect(catalog.models[1]?.supportedThinkingOptionIds).toHaveLength(2);
-    expect(cursorModelSelection(liveInfo, cursorModelRef("grok").id)).toEqual([["model", "grok"]]);
+    expect(cursorModelSelection(liveInfo, cursorModelRef("grok[fast=true]").id)).toEqual([
+      ["model", "grok"],
+      ["fast", "true"],
+    ]);
+  });
+
+  it("offers no Fast variant for models without a Fast parameter", () => {
+    const info: CursorSessionInfo = {
+      ...liveInfo,
+      configOptions: [liveModel, effort, context],
+      nativeModels: [{ value: "alpha", name: "Alpha", configOptions: [effort, context] }],
+    };
+    expect(cursorCatalog(info).models).toEqual([
+      expect.not.objectContaining({ fastModel: expect.anything() }),
+      expect.objectContaining({ ref: cursorModelRef("grok") }),
+    ]);
+  });
+
+  it("switches the live model to Fast and reports the Fast variant as effective", async () => {
+    const transport = new CursorTransport({ cwd: process.cwd(), environment: {} });
+    transport.sessionId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const configure = vi.spyOn(transport, "configure").mockImplementation(async (id, value) => {
+      if (id !== "fast" || value !== "true") throw new Error(`unexpected ${id}=${value}`);
+      return { configOptions: [liveModel, effort, context, fast("true")] };
+    });
+    vi.spyOn(transport, "close").mockResolvedValue();
+    const session = new CursorSession(transport, structuredClone(liveInfo), () => {});
+    const done = (async () => {
+      for await (const output of session.outputs) void output;
+    })();
+    try {
+      const alpha = required(cursorCatalog(liveInfo).models[0]?.fastModel);
+      expect(await session.execute({ type: "model.select", model: alpha })).toEqual({
+        ok: true,
+        value: { completed: true },
+      });
+      expect(configure).toHaveBeenCalledTimes(1);
+      expect(session.initialState.effectiveModel).toEqual(alpha);
+      expect(cursorCatalog(session.info).models[0]?.fastModel).toEqual(alpha);
+    } finally {
+      await session.close();
+      await done;
+    }
   });
 
   it("keeps the user's remembered parameters when switching to another catalog model", async () => {

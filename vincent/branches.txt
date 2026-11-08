@@ -27,3 +27,4 @@ fix/mapping-store-lock-coordination          # PR #766 (Fixes #765 Desktop Host 
 fix/host-chain-npm-node                     # PR #752 (Fixes #749 npm Host chain ready)
 fix/console-shutdown-on-exit                 # PR #753 (Fixes #750 stale console on 4399)
 feat/harness-subagent-codex-items            # PR #768
+fix/antigravity-resume-mismatch              # PR #775 (Fixes #774 agy resume into a lost Conversation); cherry-picked onto v0.17.3 lines

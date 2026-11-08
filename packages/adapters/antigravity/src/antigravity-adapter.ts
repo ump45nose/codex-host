@@ -5,7 +5,7 @@ import {
 } from "@codexhost/harness-adapter";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, unlink } from "node:fs/promises";
+import { access, readFile, unlink } from "node:fs/promises";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -78,7 +78,7 @@ import {
 } from "@codexhost/shared-contracts";
 
 import { resolveAntigravityExecutable } from "./command.js";
-import { forkAntigravitySession } from "./fork.js";
+import { forkAntigravitySession, nativeConversationDbPath } from "./fork.js";
 import { AntigravityHistory, antigravityHookDirectory } from "./history.js";
 import {
   antigravityAvailableThinkingOptions,
@@ -559,6 +559,41 @@ function normalizedProcessError(
   };
 }
 
+/**
+ * agy silently starts a new Conversation when `--conversation` names one it no longer has
+ * (for example after its `conversations/` store was cleaned outside CodexHost). Name both IDs
+ * and, when the original store entry is gone, say so instead of a bare mismatch.
+ */
+export async function antigravityResumeMismatchError(
+  expectedConversationId: string,
+  receivedConversationId: string,
+  homedir: string,
+): Promise<HarnessError> {
+  const dbPath = nativeConversationDbPath(expectedConversationId, homedir);
+  const missing = await access(dbPath).then(
+    () => false,
+    (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === "ENOENT",
+  );
+  const diagnostic = `expected=${expectedConversationId} received=${receivedConversationId} store=${dbPath} storeEntry=${missing ? "missing" : "present"}`;
+  if (missing) {
+    return {
+      code: "sessionNotFound",
+      message:
+        `Antigravity Conversation ${expectedConversationId} no longer exists (${dbPath} is missing), ` +
+        `so agy started a new Conversation ${receivedConversationId} instead of resuming it. ` +
+        "Its native history was removed outside CodexHost; start a new Thread to continue.",
+      retryable: false,
+      diagnostic,
+    };
+  }
+  return {
+    code: "sessionNotFound",
+    message: `Antigravity resumed a different Conversation: expected ${expectedConversationId}, agy started ${receivedConversationId}`,
+    retryable: false,
+    diagnostic,
+  };
+}
+
 async function runBuffered(
   executable: string,
   arguments_: string[],
@@ -1029,15 +1064,14 @@ class AntigravitySession implements HarnessSession {
     if (event.event === "init") {
       active.nativePermissionMode = event.init?.permission_mode ?? null;
       if (this.#nativeRef && this.#nativeRef.nativeSessionId !== event.conversation_id) {
-        this.#completeTurn(active, {
-          status: "failed",
-          error: {
-            code: "sessionNotFound",
-            message: "Antigravity resumed a different Conversation",
-            retryable: false,
-          },
-        });
+        // Stop agy before it records the prompt in the Conversation it just created.
         active.process.kill();
+        const error = await antigravityResumeMismatchError(
+          this.#nativeRef.nativeSessionId,
+          event.conversation_id,
+          antigravityHome(this.#environment),
+        );
+        this.#completeTurn(active, { status: "failed", error });
         return;
       }
       this.#nativeRef = nativeSessionRefSchema.parse({

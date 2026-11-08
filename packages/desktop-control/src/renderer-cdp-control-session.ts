@@ -11,6 +11,7 @@ import {
   type RendererDraftPrewarmPolicyStatus,
 } from "./renderer-draft-prewarm-policy.js";
 
+import { syncMacOsOpenPanelDefaultDirectory } from "./macos-open-panel-default-dir.js";
 import {
   installRendererLoadedModules,
   type RendererModuleCdpClient,
@@ -387,6 +388,7 @@ const defaultOperations: RendererCdpControlOperations = {
     const status = await installRendererDraftPrewarmPolicyDirect(renderer);
     await installNativeRpcRemoteControlDirect(renderer);
     await installRendererRpcSteeringDirect(renderer);
+    await syncMacOsOpenPanelDefaultDirectory(renderer);
     return status;
   },
 };

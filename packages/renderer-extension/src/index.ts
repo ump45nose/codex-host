@@ -1,6 +1,21 @@
 import { WORKSPACE_CONTRACT_VERSION } from "@codexhost/shared-contracts/version";
 
 export { readCodexLocaleSettings, setCodexLocaleOverride } from "./codex-locale-adapter.js";
+export {
+  DEFAULT_PROJECT_PERSONAL_REPOS_SUBPATH,
+  installCodexProjectDefaultDirectory,
+  isNativeWorkspaceFilesServices,
+  resolvePreferredProjectParentDirectory,
+  wrapWorkspaceFilesWithDefaultDirectory,
+} from "./codex-project-default-directory.js";
+export type {
+  BrowseDirectoryRequest,
+  BrowseDirectoryResponse,
+  CodexProjectDefaultDirectoryHandle,
+  NativeDisposablePromise,
+  NativeWorkspaceFiles,
+  NativeWorkspaceFilesServices,
+} from "./codex-project-default-directory.js";
 export type {
   CodexLocaleMode,
   CodexLocaleOverride,

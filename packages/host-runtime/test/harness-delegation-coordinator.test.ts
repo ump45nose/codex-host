@@ -820,7 +820,7 @@ describe("HarnessDelegationCoordinator", () => {
     }
   });
 
-  it("returns a queued external start with its identity and creates nothing yet", async () => {
+  it("returns a queued external start for a top-level client origin and starts session-parented child delegations immediately", async () => {
     const admitDelegation = vi.fn(async (request: DelegationAdmissionRequest) => ({
       state: "queued" as const,
       identity: request.identity,
@@ -842,7 +842,8 @@ describe("HarnessDelegationCoordinator", () => {
         harnessId: "pi",
         task: "Full task",
         taskName: "Review",
-        parentThreadId: "parent-thread",
+        cwd: "/parent-workspace",
+        parentThreadId: "client:claude-desktop",
         requestId: "queued-request",
       });
       const request = admitDelegation.mock.calls[0]?.[0];
@@ -851,11 +852,11 @@ describe("HarnessDelegationCoordinator", () => {
           harnessId: "pi",
           task: "Full task",
           taskName: "Review",
-          parentThreadId: "parent-thread",
+          parentThreadId: "client:claude-desktop",
           cwd: path.resolve("/parent-workspace"),
           requestId: "queued-request",
         },
-        title: "Review · Main project",
+        title: "Review · claude-desktop",
         taskDigest: expect.any(String),
       });
       expect(result).toEqual({
@@ -865,12 +866,22 @@ describe("HarnessDelegationCoordinator", () => {
         status: "queued",
         queue: { position: 2 },
         cwd: path.resolve("/parent-workspace"),
-        title: "Review · Main project",
-        parentThreadId: "parent-thread",
+        title: "Review · claude-desktop",
+        parentThreadId: "client:claude-desktop",
         next: expect.any(Object),
       });
       expect(value.adapter.sessions).toHaveLength(0);
       expect(await value.repository.list()).toEqual([]);
+
+      // A session-parented child delegation bypasses the top-level queue.
+      const child = await value.coordinator.start({
+        harnessId: "pi",
+        task: "Child task",
+        parentThreadId: "parent-thread",
+      });
+      expect(child).toMatchObject({ status: "running", parentThreadId: "parent-thread" });
+      expect(admitDelegation).toHaveBeenCalledOnce();
+      expect(value.adapter.sessions).toHaveLength(1);
     } finally {
       await value.close();
     }
@@ -889,7 +900,7 @@ describe("HarnessDelegationCoordinator", () => {
         harnessId: "pi",
         task: "Now",
         cwd: "/synthetic",
-        parentThreadId: "parent-thread",
+        parentThreadId: "client:claude-desktop",
       });
       expect(result).toMatchObject({
         ...admitDelegation.mock.calls[0]?.[0].identity,
@@ -913,7 +924,7 @@ describe("HarnessDelegationCoordinator", () => {
         harnessId: "pi" as const,
         task: "Same task",
         cwd: "/synthetic",
-        parentThreadId: "parent-thread",
+        parentThreadId: "client:claude-desktop",
       };
       const earlier = await value.coordinator.start(input);
       admitDelegation.mockClear();

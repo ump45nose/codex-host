@@ -4,7 +4,6 @@ import type { JsonObject } from "@codexhost/protocol-core";
 import { DelegationControlRegistry } from "../src/delegation-control-registry.js";
 import type { DelegationControlRegistration } from "../src/delegation-types.js";
 import {
-  answerOfficialParentCwd,
   createFixture,
   requestId,
   startPiThread,
@@ -33,9 +32,15 @@ describe("AppServerHost delegation capacity", () => {
     }
   });
 
-  it("queues a delegated start while a manually opened Thread runs, and starts it when that Turn ends", async () => {
+  it("queues a top-level client delegation while a manually opened Thread runs, and starts session-parented child delegations immediately", async () => {
     const registry = new DelegationControlRegistry({ capacity: { pollIntervalMs: 10 } });
-    const fixture = createFixture({ onDelegationApi: (api) => registry.register(api) });
+    let registration: DelegationControlRegistration | undefined;
+    const fixture = createFixture({
+      onDelegationApi: (api) => {
+        registration = api;
+        return registry.register(api);
+      },
+    });
     try {
       await fixture.ready;
       writeRequest(fixture.desktopInput, {
@@ -60,14 +65,25 @@ describe("AppServerHost delegation capacity", () => {
       const manualTurn = await startPiTurn(fixture, manual);
       await fixture.collector.waitFor((message) => turnEvent(message, "turn/started", manualTurn));
 
+      // A child session spawned by an existing session bypasses the top-level queue and does not count as top-level.
+      const child = await registry.start({
+        harnessId: "pi",
+        task: "child work",
+        cwd: "/synthetic",
+        parentThreadId: manual,
+      });
+      expect(child).toMatchObject({ harnessId: "pi", status: "running", parentThreadId: manual });
+      expect(fixture.adapter.sessions).toHaveLength(2);
+      expect(registration?.runningThreadIds?.()).toEqual([manual]);
+
       const queued = await registry.start({
         harnessId: "pi",
         task: "queued work",
         cwd: "/synthetic",
-        parentThreadId: manual,
+        parentThreadId: "client:claude-desktop",
       });
       expect(queued).toMatchObject({ harnessId: "pi", status: "queued", queue: { position: 1 } });
-      expect(fixture.adapter.sessions).toHaveLength(1);
+      expect(fixture.adapter.sessions).toHaveLength(2);
       expect(await registry.read({ threadId: queued.threadId, view: "result" })).toMatchObject({
         status: "queued",
         queue: { position: 1 },
@@ -79,13 +95,15 @@ describe("AppServerHost delegation capacity", () => {
       await fixture.collector.waitFor((message) =>
         turnEvent(message, "turn/completed", manualTurn),
       );
-      await vi.waitFor(() => expect(fixture.adapter.sessions).toHaveLength(2), { timeout: 5_000 });
+      // Even while `child` is still running, ending `manual` frees the top-level slot for `queued`.
+      await vi.waitFor(() => expect(fixture.adapter.sessions).toHaveLength(3), { timeout: 5_000 });
       await vi.waitFor(async () =>
         expect(await registry.read({ threadId: queued.threadId, view: "result" })).toMatchObject({
           threadId: queued.threadId,
           status: "running",
         }),
       );
+      expect(registration?.runningThreadIds?.()).toEqual([queued.threadId]);
       expect(await fixture.mappingStore.getThread(queued.threadId as never)).toMatchObject({
         hostThreadId: queued.threadId,
       });
@@ -97,7 +115,7 @@ describe("AppServerHost delegation capacity", () => {
         harnessId: "pi",
         task: "next work",
         cwd: "/synthetic",
-        parentThreadId: manual,
+        parentThreadId: "client:claude-desktop",
       });
       expect(next).toMatchObject({ status: "queued", queue: { position: 1 } });
       expect(await registry.cancel({ threadId: next.threadId })).toMatchObject({ cancelled: true });
@@ -108,16 +126,20 @@ describe("AppServerHost delegation capacity", () => {
       );
       fixture.adapter.sessions[1]?.succeedTurn();
       await fixture.collector.waitFor((message) =>
+        turnEvent(message, "turn/completed", child.turnId),
+      );
+      fixture.adapter.sessions[2]?.succeedTurn();
+      await fixture.collector.waitFor((message) =>
         turnEvent(message, "turn/completed", queued.turnId),
       );
-      expect(fixture.adapter.sessions).toHaveLength(2);
+      expect(fixture.adapter.sessions).toHaveLength(3);
     } finally {
       registry.close();
       await stopFixture(fixture);
     }
   });
 
-  it("counts running native top-level Threads but not native subagents", async () => {
+  it("counts running native top-level Threads but not native subagents or Fork children", async () => {
     const registry = new DelegationControlRegistry({ capacity: { pollIntervalMs: 10 } });
     let registration: DelegationControlRegistration | undefined;
     const fixture = createFixture({
@@ -142,26 +164,31 @@ describe("AppServerHost delegation capacity", () => {
           source: { subAgent: { thread_spawn: { parent_thread_id: "native-top", depth: 1 } } },
         },
       });
+      official("thread/started", {
+        thread: {
+          id: "native-fork",
+          forkedFromId: "native-top",
+        },
+      });
       official("turn/started", { threadId: "native-sub", turn: { id: "sub-turn" } });
+      official("turn/started", { threadId: "native-fork", turn: { id: "fork-turn" } });
       official("turn/started", { threadId: "native-top", turn: { id: "top-turn" } });
       await vi.waitFor(() => expect(registration?.runningThreadIds?.()).toEqual(["native-top"]));
 
-      const pending = registry.start({
+      const queued = await registry.start({
         harnessId: "pi",
         task: "queued work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
-      await answerOfficialParentCwd(fixture, "native-top");
-      const queued = await pending;
       expect(queued).toMatchObject({ status: "queued", queue: { position: 1 } });
       expect(fixture.adapter.sessions).toHaveLength(0);
 
-      // Only the subagent keeps running, and it does not hold the slot.
+      // Only the subagent and Fork child keep running, and neither holds the top-level slot.
       official("turn/completed", {
         threadId: "native-top",
         turn: { id: "top-turn", status: "completed" },
       });
-      await answerOfficialParentCwd(fixture, "native-top");
       await vi.waitFor(() => expect(fixture.adapter.sessions).toHaveLength(1), { timeout: 5_000 });
       await vi.waitFor(async () =>
         expect(await registry.read({ threadId: queued.threadId, view: "result" })).toMatchObject({

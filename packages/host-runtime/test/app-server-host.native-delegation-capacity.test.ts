@@ -127,19 +127,41 @@ function setup(store?: {
 }
 
 describe("AppServerHost native delegation capacity", () => {
-  it("queues native Codex starts in Threads created up front and starts them in order", async () => {
+  it("queues top-level native Codex starts in Threads created up front, while starting session-parented child delegations immediately", async () => {
     const { registry, fixture, running } = setup();
-    const backend = serveOfficial(fixture, ["queued-native", "second-native", "third-native"]);
+    const backend = serveOfficial(fixture, [
+      "child-native",
+      "queued-native",
+      "second-native",
+      "third-native",
+    ]);
     try {
       await fixture.ready;
       await limit(fixture, 1);
       official(fixture, "turn/started", { threadId: "native-top", turn: { id: "top-turn" } });
       await vi.waitFor(() => expect(running()).toEqual(["native-top"]));
 
+      // A session-parented native child delegation bypasses the top-level queue and does not count toward running().
+      const child = await registry.start({
+        harnessId: "codex",
+        task: "child native work",
+        cwd: "/synthetic",
+        parentThreadId: "native-top",
+      });
+      expect(child).toMatchObject({
+        threadId: "child-native",
+        harnessId: "codex",
+        status: "running",
+        parentThreadId: "native-top",
+      });
+      official(fixture, "turn/started", { threadId: "child-native", turn: { id: "child-turn" } });
+      expect(running()).toEqual(["native-top"]);
+
       const first = await registry.start({
         harnessId: "codex",
         task: "queued native work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       expect(first).toMatchObject({
         threadId: "queued-native",
@@ -151,7 +173,7 @@ describe("AppServerHost native delegation capacity", () => {
       expect(
         await fixture.mappingStore.getDelegationByChild("queued-native" as never),
       ).toMatchObject({
-        parentHostThreadId: "native-top",
+        parentHostThreadId: "client:claude-desktop",
         childHostThreadId: "queued-native",
         status: "creating",
       });
@@ -159,7 +181,8 @@ describe("AppServerHost native delegation capacity", () => {
       const second = await registry.start({
         harnessId: "codex",
         task: "second native work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       expect(second).toMatchObject({ threadId: "second-native", queue: { position: 2 } });
       // A retry of a waiting start returns it without creating another Thread.
@@ -167,11 +190,13 @@ describe("AppServerHost native delegation capacity", () => {
         await registry.start({
           harnessId: "codex",
           task: "second native work",
-          parentThreadId: "native-top",
+          cwd: "/synthetic",
+          parentThreadId: "client:claude-desktop",
         }),
       ).toMatchObject({ threadId: "second-native", status: "queued", queue: { position: 2 } });
-      expect(backend.seen.filter((entry) => entry.method === "thread/start")).toHaveLength(2);
-      expect(backend.seen.some((entry) => entry.method === "turn/start")).toBe(false);
+      expect(backend.seen.filter((entry) => entry.method === "thread/start")).toHaveLength(3);
+      expect(backend.calls("turn/start", "queued-native")).toHaveLength(0);
+      expect(backend.calls("turn/start", "second-native")).toHaveLength(0);
 
       expect(await registry.read({ threadId: "queued-native", view: "result" })).toMatchObject({
         status: "queued",
@@ -252,11 +277,12 @@ describe("AppServerHost native delegation capacity", () => {
       );
       expect(await registry.capacity.claim("queued-native", "codex")).toBeUndefined();
 
-      // The slot is taken again; the next native start waits behind it.
+      // The slot is taken again; the next top-level native start waits behind it.
       const third = await registry.start({
         harnessId: "codex",
         task: "third native work",
-        parentThreadId: "queued-native",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       expect(third).toMatchObject({ threadId: "third-native", status: "queued" });
     } finally {
@@ -277,7 +303,8 @@ describe("AppServerHost native delegation capacity", () => {
       const queued = await registry.start({
         harnessId: "codex",
         task: "queued native work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       expect(queued).toMatchObject({ threadId: "claimed-native", status: "queued" });
 
@@ -325,7 +352,8 @@ describe("AppServerHost native delegation capacity", () => {
       await registry.start({
         harnessId: "codex",
         task: "queued native work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       backend.refuse.add("refused-native");
       writeRequest(fixture.desktopInput, {
@@ -378,7 +406,8 @@ describe("AppServerHost native delegation capacity", () => {
       await registry.start({
         harnessId: "codex",
         task: "queued native work",
-        parentThreadId: "native-top",
+        cwd: "/synthetic",
+        parentThreadId: "client:claude-desktop",
       });
       gate.block = true;
       const cancelling = registry.cancel({ threadId: "crossed-native" });
@@ -513,7 +542,7 @@ function stored(threadId: string, task: string, starting?: boolean): PersistedQu
     harnessId: "codex",
     task,
     cwd: "/synthetic",
-    parentThreadId: "native-top",
+    parentThreadId: "client:claude-desktop",
     title: task,
     taskDigest: createHash("sha256").update(task).digest("hex"),
     queuedAt: Date.now(),

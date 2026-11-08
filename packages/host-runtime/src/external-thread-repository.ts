@@ -33,6 +33,7 @@ import {
   materializeExternalSubagent,
   projectExternalSnapshot,
 } from "./external-subagent-threads.js";
+import { originClientName } from "./external-client-origin.js";
 
 export interface ExternalThreadStore {
   initialize(): Promise<void>;
@@ -115,12 +116,16 @@ export function createProductionExternalThreadStore(
 }
 
 export class ExternalThreadRepository {
+  readonly #delegationsByChild = new Map<HostThreadId, StoredDelegationRecordV1>();
   readonly #pendingDelegationsByChild = new Map<HostThreadId, StoredDelegationRecordV1>();
 
   constructor(private readonly store: ExternalThreadStore) {}
 
-  initialize(): Promise<void> {
-    return this.store.initialize();
+  async initialize(): Promise<void> {
+    await this.store.initialize();
+    for (const record of await this.store.listDelegations()) {
+      this.#delegationsByChild.set(record.childHostThreadId, record);
+    }
   }
 
   close(): Promise<void> {
@@ -166,10 +171,22 @@ export class ExternalThreadRepository {
   async getDelegationByChild(
     childHostThreadId: HostThreadId,
   ): Promise<StoredDelegationRecordV1 | null> {
+    const stored = await this.store.getDelegationByChild(childHostThreadId);
+    if (stored) {
+      this.#delegationsByChild.set(childHostThreadId, stored);
+      return stored;
+    }
+    return this.#pendingDelegationsByChild.get(childHostThreadId) ?? null;
+  }
+
+  /** Whether this Thread is a Delegation child of a session Thread rather than a top-level client start. */
+  hasSessionDelegationParent(threadId: string): boolean {
+    const delegation =
+      this.#delegationsByChild.get(threadId as HostThreadId) ??
+      this.#pendingDelegationsByChild.get(threadId as HostThreadId);
+    if (!delegation) return false;
     return (
-      (await this.store.getDelegationByChild(childHostThreadId)) ??
-      this.#pendingDelegationsByChild.get(childHostThreadId) ??
-      null
+      delegation.parentHostThreadId !== threadId && !originClientName(delegation.parentHostThreadId)
     );
   }
 
@@ -187,30 +204,40 @@ export class ExternalThreadRepository {
 
   async createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
     const timestamp = new Date().toISOString();
-    this.#pendingDelegationsByChild.set(input.childHostThreadId, {
+    const provisional: StoredDelegationRecordV1 = {
       formatVersion: 1,
       revision: 1,
       ...input,
       status: input.status ?? "creating",
       createdAt: timestamp,
       updatedAt: timestamp,
-    });
+    };
+    this.#pendingDelegationsByChild.set(input.childHostThreadId, provisional);
     try {
-      return await this.store.createDelegation(input);
+      const created = await this.store.createDelegation(input);
+      this.#delegationsByChild.set(created.childHostThreadId, created);
+      return created;
     } finally {
       this.#pendingDelegationsByChild.delete(input.childHostThreadId);
     }
   }
 
-  setDelegationStatus(
+  async setDelegationStatus(
     delegationId: HostThreadId,
     status: DelegationStatus,
   ): Promise<StoredDelegationRecordV1> {
-    return this.store.setDelegationStatus(delegationId, status);
+    const updated = await this.store.setDelegationStatus(delegationId, status);
+    this.#delegationsByChild.set(updated.childHostThreadId, updated);
+    return updated;
   }
 
-  removeDelegation(delegationId: HostThreadId): Promise<void> {
-    return this.store.removeDelegation(delegationId);
+  async removeDelegation(delegationId: HostThreadId): Promise<void> {
+    for (const [childId, record] of this.#delegationsByChild) {
+      if (record.delegationId === delegationId) {
+        this.#delegationsByChild.delete(childId);
+      }
+    }
+    await this.store.removeDelegation(delegationId);
   }
 
   createProvisional(input: CreateProvisionalThreadInput): Promise<StoredThreadRecordV1> {

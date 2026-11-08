@@ -1085,6 +1085,93 @@ if (${keepAlive}) {
       },
     );
 
+    it.each([
+      ["missing", false],
+      ["present", true],
+    ] as const)(
+      "names both Conversations when agy resumes into a new one (store entry %s)",
+      async (_label, storeEntryExists) => {
+        const expectedId = "conv-expected";
+        const receivedId = "conv-stray";
+        const { command, cwd, cleanup } = await fakeStreamingAgy([
+          JSON.stringify({ event: "init", conversation_id: receivedId }),
+          JSON.stringify({
+            event: "result",
+            result: { conversation_id: receivedId, status: "SUCCESS", response: "stray reply" },
+          }),
+        ]);
+        const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-agy-home-"));
+        const dbPath = path.join(
+          home,
+          ".gemini",
+          "antigravity-cli",
+          "conversations",
+          `${expectedId}.db`,
+        );
+        if (storeEntryExists) {
+          await mkdir(path.dirname(dbPath), { recursive: true });
+          await writeFile(dbPath, "");
+        }
+        const adapter = new AntigravityAdapter({
+          command,
+          environment: { ...process.env, HOME: home, USERPROFILE: home, CODEXHOST_DATA_DIR: cwd },
+        });
+        try {
+          const opened = await adapter.open({
+            kind: "resume",
+            cwd,
+            nativeRef: nativeSessionRefSchema.parse({
+              harnessId: "antigravity",
+              nativeSessionId: expectedId,
+              formatVersion: 1,
+            }),
+          });
+          if (!opened.ok) throw new Error(opened.error.message);
+          const session = opened.value;
+          const iterator = session.outputs[Symbol.asyncIterator]();
+          await session.execute({
+            type: "turn.start",
+            turnId: hostTurnIdSchema.parse("turn-resume-mismatch"),
+            input: [{ type: "text", text: "Continue this Conversation" }],
+          });
+          let event: HostEvent;
+          do {
+            event = await nextEvent(iterator);
+          } while (event.type !== "turn.completed");
+          expect(event).toMatchObject({
+            outcome: {
+              status: "failed",
+              error: {
+                code: "sessionNotFound",
+                retryable: false,
+                message: storeEntryExists
+                  ? `Antigravity resumed a different Conversation: expected ${expectedId}, agy started ${receivedId}`
+                  : expect.stringContaining(
+                      `Antigravity Conversation ${expectedId} no longer exists`,
+                    ),
+                diagnostic: `expected=${expectedId} received=${receivedId} store=${dbPath} storeEntry=${storeEntryExists ? "present" : "missing"}`,
+              },
+            },
+          });
+          if (
+            !storeEntryExists &&
+            event.type === "turn.completed" &&
+            event.outcome.status === "failed"
+          ) {
+            expect(event.outcome.error.message).toContain(`new Conversation ${receivedId}`);
+          }
+          expect(event).not.toHaveProperty("nativeTurnRef");
+          const snapshot = await session.readSnapshot();
+          if (!snapshot.ok) throw new Error(snapshot.error.message);
+          expect(snapshot.value.state?.nativeRef?.nativeSessionId).toBe(expectedId);
+        } finally {
+          await adapter.close();
+          await cleanup();
+          await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        }
+      },
+    );
+
     it.each(["conv-success", ""])(
       "does not turn a successful result for %s into an error based on its text",
       async (resultConversationId) => {

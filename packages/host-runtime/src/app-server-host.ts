@@ -190,6 +190,7 @@ import {
   listExternalItems,
   listExternalTurns,
 } from "./external-thread-history.js";
+import { originClientName } from "./external-client-origin.js";
 import { executeExternalThreadRollback } from "./external-thread-rollback.js";
 import {
   createExternalThreadRecordInput,
@@ -753,6 +754,7 @@ export class AppServerHost {
   #nextConsoleRequest = 0;
   #subagentThreadStatuses = new Map<string, "active" | "idle">();
   readonly #threadActivity = new ThreadActivity();
+  readonly #officialForkChildren = new Set<string>();
   #runningSubagentsByParent = new Map<string, Set<string>>();
   #pendingExternalCommandRequests = new Set<string>();
   #manualCompactionTurns = new WeakMap<ExternalThread, HostTurnId>();
@@ -837,6 +839,7 @@ export class AppServerHost {
         this.#abandonQueuedClaims();
         this.#activeOfficialTurns.clear();
         this.#threadActivity.clear();
+        this.#officialForkChildren.clear();
         this.#signalActiveWorkChanged();
       },
       output: async (output) =>
@@ -2520,6 +2523,7 @@ export class AppServerHost {
     value: JsonValue;
   }): Promise<void> {
     this.#threadActivity.observeOfficial(input.value);
+    this.#observeOfficialForkLineage(input.value);
     if (this.#options.externalOnly) {
       // Native children created through Delegation still have a native owner
       // and lifecycle. Their rendering stays on the GUI's native connection.
@@ -2672,18 +2676,46 @@ export class AppServerHost {
     }
   }
 
-  /** Delegated and manually opened Threads alike; Harness and native subagents are excluded. */
+  #observeOfficialForkLineage(value: JsonValue): void {
+    if (!isRecord(value)) return;
+    const noteThread = (thread: unknown): void => {
+      if (!isRecord(thread) || typeof thread.id !== "string" || !thread.id) return;
+      const forkedFromId =
+        typeof thread.forkedFromId === "string" && thread.forkedFromId
+          ? thread.forkedFromId
+          : isRecord(thread.history_base) && typeof thread.history_base.thread_id === "string"
+            ? thread.history_base.thread_id
+            : undefined;
+      if (forkedFromId && forkedFromId !== thread.id) {
+        this.#officialForkChildren.add(thread.id);
+      }
+    };
+    if (isRecord(value.params)) noteThread(value.params.thread);
+    if (isRecord(value.result)) {
+      noteThread(value.result.thread);
+      if (Array.isArray(value.result.data)) {
+        for (const entry of value.result.data) noteThread(entry);
+      }
+    }
+  }
+
+  /** Running top-level Threads; Subagents, Fork children, and session-parented Delegation children are excluded. */
   #runningTopLevelThreadIds(): string[] {
     const external = this.#externalRuntime
       .values()
       .filter(
         (thread) =>
           !thread.record.subagent &&
+          !thread.record.forkSource &&
+          !this.#repository.hasSessionDelegationParent(thread.id) &&
           (this.#externalThreadBusy(thread) || thread.activeTurnId !== null),
       )
       .map((thread) => thread.id);
     const native = [...this.#activeOfficialTurns.keys()].filter(
-      (threadId) => !this.#threadActivity.isSubagent(threadId),
+      (threadId) =>
+        !this.#threadActivity.isSubagent(threadId) &&
+        !this.#officialForkChildren.has(threadId) &&
+        !this.#repository.hasSessionDelegationParent(threadId),
     );
     return [...external, ...native];
   }
@@ -2926,23 +2958,24 @@ export class AppServerHost {
       }
     }
     // A queued native start waits in a Thread without Turns, so its identity is final.
-    const admission = admitted
-      ? undefined
-      : await this.#delegationCapacity?.admit({
-          input,
-          title: input.title,
-          taskDigest: digest,
-          identity: { delegationId, threadId: delegationId, turnId: "pending" },
-          prepare: async () => {
-            opened = await this.#openOfficialDelegationThread({
-              input,
-              delegationId,
-              digest,
-              nativeModelId,
-            });
-            return { delegationId, threadId: opened.threadId, turnId: "pending" };
-          },
-        });
+    const admission =
+      admitted || !originClientName(input.parentThreadId)
+        ? undefined
+        : await this.#delegationCapacity?.admit({
+            input,
+            title: input.title,
+            taskDigest: digest,
+            identity: { delegationId, threadId: delegationId, turnId: "pending" },
+            prepare: async () => {
+              opened = await this.#openOfficialDelegationThread({
+                input,
+                delegationId,
+                digest,
+                nativeModelId,
+              });
+              return { delegationId, threadId: opened.threadId, turnId: "pending" };
+            },
+          });
     if (admission?.state === "queued") return this.#queuedOfficialResult(admission);
     try {
       return await this.#beginOfficialDelegation({

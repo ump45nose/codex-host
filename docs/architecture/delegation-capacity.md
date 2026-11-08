@@ -12,15 +12,18 @@ Host 可以限制本机同时运行的顶层 Thread 数量。开启后，`delega
 
 占用名额的是本 Host Runtime 中正在运行（有活跃 Turn）的顶层 Thread：
 
-- 委派创建的和用户手动打开的 Thread 都算，外部 Harness 与原生 Codex 都算；
-- 外部 Harness 的子代理 Thread 不算；原生 Codex 子代理按 `thread/started` 中的子代理来源或 `spawnAgent` 的接收方识别，也不算；
-- 已放行、正在创建、尚未报告为运行的启动先占一个名额，避免多个并发启动一起越过上限。
+- 用户手动打开的顶层 Thread、以及外部客户端（`client:*`）通过委派创建的顶层 Thread 都算，外部 Harness 与原生 Codex 都算；
+- 全部三类子会话均不计入顶层运行数：
+  1. 原生与外部 Harness 的 Subagent（外部 `record.subagent`，原生 `thread/started` 中的子代理来源或 `spawnAgent` 的接收方）；
+  2. Fork 派生的子会话（外部 `record.forkSource`，原生 `forkedFromId` / `history_base.thread_id`）；
+  3. 由已有会话通过 `delegate start` 派生的子会话（存在 `DelegationRecord` 且 `parentHostThreadId` 不是 `client:*`）；
+- 已放行、正在创建、尚未报告为运行的顶层启动先占一个名额，避免多个并发启动一起越过上限。
 
-原生 Codex Thread 依据 Host 观察到的 Turn 开始与结束事件计数。Host Runtime 重启前已经在运行的原生 Turn，要等到新的事件才会重新计入；Host 没有观察到子代理身份的原生子代理，按顶层 Thread 计入。
+原生 Codex Thread 依据 Host 观察到的 Turn 开始与结束事件计数。Host Runtime 重启前已经在运行的原生 Turn，要等到新的事件才会重新计入；Host 没有观察到子代理或 Fork 身份的原生 Thread，按顶层 Thread 计入。
 
 ## 哪些请求会排队
 
-- 只有 `delegate start` 会排队，外部 Harness 与 `--harness codex` 都一样，CLI、外部客户端的 MCP `delegate_start` 以及带 `--watch true` 的启动也都一样。
+- 只有外部客户端（`client:*`）发起的顶层 `delegate start` 会受顶层并发上限约束并排队（外部 Harness 与 `--harness codex` 都一样，CLI、MCP `delegate_start` 以及带 `--watch true` 的启动也都一样）；由已有会话派生的子会话属于该父会话的内部子任务，直接放行，不进入顶层队列。
 - `thread send`、用户在 Desktop 中发送的消息，以及对已有 Thread 的后续消息，从不排队，也不会因上限失败，即使运行数已经超过上限。
 - 参数、父 Thread、工作区与 Model 配置的校验，以及幂等去重，都在排队前完成：无效请求直接报错，不进入队列。相同 Request ID，或 30 秒内同一父 Thread、目标与任务的重复请求，返回同一个排队中的 Thread；Request ID 相同而配置不同时返回 `INVALID_ARGUMENT`。
 - 已经有启动在排队时，新的启动排在后面，即使此刻有空位；空位总是先给队首。

@@ -322,14 +322,15 @@ export class HarnessDelegationCoordinator {
     const delegationId = hostThreadIdSchema.parse(admitted?.delegationId ?? randomUUID());
     const childThreadId = hostThreadIdSchema.parse(admitted?.threadId ?? randomUUID());
     const turnId = hostTurnIdSchema.parse(admitted?.turnId ?? randomUUID());
-    const admission = admitted
-      ? undefined
-      : await this.#admitDelegation?.({
-          input: startInput,
-          title,
-          taskDigest: digest,
-          identity: { delegationId, threadId: childThreadId, turnId },
-        });
+    const admission =
+      admitted || !originClientName(parentThreadId)
+        ? undefined
+        : await this.#admitDelegation?.({
+            input: startInput,
+            title,
+            taskDigest: digest,
+            identity: { delegationId, threadId: childThreadId, turnId },
+          });
     if (admission?.state === "queued") {
       const { identity } = admission;
       return {

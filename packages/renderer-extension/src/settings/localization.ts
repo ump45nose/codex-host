@@ -82,6 +82,13 @@ export interface RendererSettingsMessages {
   readonly archiveChildrenNever: string;
   readonly sidebarStashTitle: string;
   readonly sidebarStashDescription: string;
+  readonly sidebarOverlayModeTitle: string;
+  readonly sidebarOverlayModeDescription: string;
+  readonly sidebarOverlayModeAuto: string;
+  readonly sidebarOverlayModeOverlay: string;
+  readonly sidebarOverlayModeDocked: string;
+  readonly topTabsTitle: string;
+  readonly topTabsDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -361,6 +368,15 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sidebarStashTitle: "Stash (收纳箱)",
   sidebarStashDescription:
     "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
+  sidebarOverlayModeTitle: "Sidebar layout mode",
+  sidebarOverlayModeDescription:
+    "Floating overlay drawer keeps main content width fixed without reflow. Auto switches to floating drawer when window width is under 1080px.",
+  sidebarOverlayModeAuto: "Auto (< 1080px floating drawer)",
+  sidebarOverlayModeOverlay: "Always floating drawer",
+  sidebarOverlayModeDocked: "Always docked",
+  topTabsTitle: "Top session capsule tabs",
+  topTabsDescription:
+    "Show 3–5 stable working-set session capsules in the top toolbar with aggregated child status and overflow menu.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -682,6 +698,15 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sidebarStashTitle: "收纳箱",
   sidebarStashDescription:
     "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
+  sidebarOverlayModeTitle: "侧边栏布局模式",
+  sidebarOverlayModeDescription:
+    "悬浮抽屉展开时不挤压正文宽度，消除竖屏代码重排。自动模式在窗口宽度小于 1080px 时切换为悬浮抽屉。",
+  sidebarOverlayModeAuto: "自动（窄屏 < 1080px 悬浮抽屉）",
+  sidebarOverlayModeOverlay: "始终悬浮抽屉",
+  sidebarOverlayModeDocked: "始终固定常驻",
+  topTabsTitle: "顶部胶囊工作标签栏",
+  topTabsDescription:
+    "在主工具栏显示 3～5 个顺序稳定的工作会话胶囊，聚合子会话状态并提供超出会话「更多」菜单。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

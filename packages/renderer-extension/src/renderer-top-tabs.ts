@@ -1,0 +1,36 @@
+export {
+  TOP_TABS_MENU_ATTRIBUTE,
+  TOP_TABS_MORE_ATTRIBUTE,
+  TOP_TABS_ROOT_ATTRIBUTE,
+  TOP_TAB_ATTRIBUTE,
+  collectSidebarThreads,
+  installRendererTopTabs,
+  rollupTopTabStatus,
+  type InstallRendererTopTabsOptions,
+  type RendererTopTabsHandle,
+  type SidebarThreadSnapshot,
+  type TopTabStatus,
+} from "./renderer-top-tabs/index.js";
+export {
+  DEFAULT_TOP_TABS_ENABLED,
+  DEFAULT_TOP_TABS_MAX_VISIBLE,
+  TOP_TABS_ENABLED_STORAGE_KEY,
+  TOP_TABS_MAX_VISIBLE_STORAGE_KEY,
+  TOP_TABS_PREFERENCE_CHANGE_EVENT,
+  TOP_TABS_STATE_STORAGE_KEY,
+  readTopTabsEnabledPreference,
+  readTopTabsMaxVisible,
+  readTopTabsPersistedState,
+  setTopTabsEnabledPreference,
+  subscribeTopTabsPreference,
+  writeTopTabsEnabledPreference,
+  writeTopTabsMaxVisible,
+  writeTopTabsPersistedState,
+  type TopTabPersistedItem,
+  type TopTabsPersistedState,
+} from "./renderer-top-tabs/preference.js";
+export {
+  TOP_TABS_STYLE_ID,
+  buildTopTabsCss,
+  ensureTopTabsStyles,
+} from "./renderer-top-tabs/style.js";

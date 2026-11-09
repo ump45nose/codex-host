@@ -100,6 +100,18 @@ import {
   SIDEBAR_THREAD_ROW_SELECTOR,
 } from "./renderer-sidebar-agent-icons.js";
 import {
+  installRendererSidebarArchiveChildren,
+  type RendererSidebarArchiveChildren,
+} from "./renderer-sidebar-archive-children.js";
+import { installRendererSidebarThreadTree } from "./renderer-sidebar-thread-tree.js";
+import {
+  emitCodexHostUserMessage,
+  installRendererSidebarStash,
+  readSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+  type RendererSidebarStashHandle,
+} from "./renderer-sidebar-stash.js";
+import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
@@ -836,6 +848,12 @@ export function installRendererBindingProbe(
     },
     getLocalAgent: localAgentForSidebarThread,
   });
+  // Installed after the settings lifecycle, which owns the locale its dialog uses.
+  let sidebarArchiveChildren: RendererSidebarArchiveChildren | null = null;
+  const sidebarThreadTree = installRendererSidebarThreadTree({
+    getClient: (hostId) => modelClientForHost(hostId),
+    onHosts: (hostIds) => sidebarArchiveChildren?.observeHosts(hostIds),
+  });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const remoteConnections = createRemoteConnectionsControl(window, modelClientForHost);
   const usageStatistics = createRendererUsageStatisticsSource({
@@ -874,6 +892,54 @@ export function installRendererBindingProbe(
     onLocaleChange() {
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
     },
+  });
+  sidebarArchiveChildren = installRendererSidebarArchiveChildren({
+    ownerWindow: window,
+    tree: sidebarThreadTree,
+    getClient: (hostId) => modelClientForHost(hostId),
+    locale: () => settingsLifecycle.locale,
+  });
+  let sidebarStash: RendererSidebarStashHandle | null = null;
+  const mountSidebarStash = (): void => {
+    sidebarStash?.dispose();
+    sidebarStash = null;
+    if (!readSidebarStashEnabledPreference(window)) return;
+    try {
+      sidebarStash = installRendererSidebarStash({
+        document,
+        window,
+        getLocale: () => settingsLifecycle.locale,
+        getEnabled: () => readSidebarStashEnabledPreference(window),
+        logger: console,
+        loadExternalFile: async () => {
+          const client = modelClientForHost("local");
+          const read = client?.readSidebarStashLegacyFile;
+          if (!read) return undefined;
+          try {
+            const result = await read();
+            if (result.error) {
+              console.warn(
+                "[codexhost-sidebar-stash] legacy file read error",
+                result.path,
+                result.error,
+              );
+            }
+            // null document with no error (ENOENT) still completes one-time migration.
+            return result.document;
+          } catch (error) {
+            console.warn("[codexhost-sidebar-stash] Host RPC legacy-file failed", error);
+            return undefined;
+          }
+        },
+      });
+    } catch (error) {
+      console.warn("[codexhost-sidebar-stash] install failed", error);
+      sidebarStash = null;
+    }
+  };
+  mountSidebarStash();
+  const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
+    mountSidebarStash();
   });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
@@ -1009,6 +1075,10 @@ export function installRendererBindingProbe(
         },
       }),
     );
+    // Auto-unstash for Codex and Harness sessions alike: stash listens on this event.
+    const mounted = mountedByComposer.get(composer);
+    const submittedThreadId = mounted ? threadIdFromComposerModelTarget(mounted.modelTarget) : null;
+    emitCodexHostUserMessage(submittedThreadId, window);
   };
 
   const showCodexUsageGateStatus = (
@@ -1477,6 +1547,7 @@ export function installRendererBindingProbe(
         renderMounted(mounted);
         if (mounted.ownershipStatus !== "error") void refreshCommands(mounted);
         sidebarAgentIcons.refresh();
+        sidebarThreadTree.refresh();
         // Ownership can already contain Usage, but only usage inspection tells
         // us whether this (possibly unknown) plugin also supplies account quota.
         if (mounted.ownershipStatus !== "error") void refreshThreadUsage(mounted);
@@ -1535,6 +1606,7 @@ export function installRendererBindingProbe(
       void loadThreadOwnership(mounted);
     }
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     return true;
   };
 
@@ -2286,6 +2358,7 @@ export function installRendererBindingProbe(
         void refreshCommands(mounted);
       }
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
       return switched;
     } catch {
       adapterStatus = {
@@ -2448,6 +2521,7 @@ export function installRendererBindingProbe(
           );
           controller.setEnabledAgents(enabledAgents);
           sidebarAgentIcons.refresh();
+          sidebarThreadTree.refresh();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -2612,7 +2686,10 @@ export function installRendererBindingProbe(
       renderMounted(mounted);
       void loadThreadOwnership(mounted);
     }
-    if (changed) sidebarAgentIcons.refresh();
+    if (changed) {
+      sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+    }
   };
 
   function reconcileHarnessAvailabilityHost(retryDraftUsage = false): void {
@@ -2662,7 +2739,10 @@ export function installRendererBindingProbe(
       }
     }
     // A reconnect can replace the client without changing the Composer's Host ID.
-    if (connectionsChanged) sidebarAgentIcons.refresh();
+    if (connectionsChanged) {
+      sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+    }
     const hostId = activeModelHostId();
     if (
       !hostId ||
@@ -2887,6 +2967,7 @@ export function installRendererBindingProbe(
     }
     renderMounted(mounted);
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     if (threadIdFromComposerModelTarget(modelTarget) && !inherited) {
       void loadThreadOwnership(mounted);
     } else if (
@@ -3187,6 +3268,7 @@ export function installRendererBindingProbe(
       }
     }
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     reconcileHarnessAvailabilityHost();
     void loadCodexAccounts();
     void refreshHarnessAvailability();
@@ -3207,6 +3289,7 @@ export function installRendererBindingProbe(
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3445,6 +3528,7 @@ export function installRendererBindingProbe(
       harnessAvailabilityByHost.clear();
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -3487,6 +3571,11 @@ export function installRendererBindingProbe(
       disposeReasoningSoftWrap();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
+      sidebarArchiveChildren?.dispose();
+      disposeSidebarStashPreference();
+      sidebarStash?.dispose();
+      sidebarStash = null;
+      sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);

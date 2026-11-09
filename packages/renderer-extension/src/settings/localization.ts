@@ -74,6 +74,14 @@ export interface RendererSettingsMessages {
   readonly idleReleaseFailed: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
+  readonly sidebarGroup: string;
+  readonly archiveChildrenTitle: string;
+  readonly archiveChildrenDescription: string;
+  readonly archiveChildrenAsk: string;
+  readonly archiveChildrenAlways: string;
+  readonly archiveChildrenNever: string;
+  readonly sidebarStashTitle: string;
+  readonly sidebarStashDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -343,6 +351,16 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleaseFailed: "Sync failed, try again",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
+  sidebarGroup: "Sidebar",
+  archiveChildrenTitle: "When archiving a parent thread",
+  archiveChildrenDescription:
+    "Child threads are unarchived Delegations and native forks nested under it in the sidebar. Official subagents are unaffected.",
+  archiveChildrenAsk: "Ask every time",
+  archiveChildrenAlways: "Always archive child threads",
+  archiveChildrenNever: "Never archive child threads",
+  sidebarStashTitle: "Stash (收纳箱)",
+  sidebarStashDescription:
+    "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -654,6 +672,16 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleaseFailed: "同步失败，请重试",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
+  sidebarGroup: "侧边栏",
+  archiveChildrenTitle: "归档父会话时",
+  archiveChildrenDescription:
+    "子会话指侧边栏中嵌套在其下、尚未归档的委派会话和原生 fork 会话，不影响官方子代理。",
+  archiveChildrenAsk: "每次询问",
+  archiveChildrenAlways: "总是归档子会话",
+  archiveChildrenNever: "从不归档子会话",
+  sidebarStashTitle: "收纳箱",
+  sidebarStashDescription:
+    "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

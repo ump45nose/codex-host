@@ -1,0 +1,13 @@
+CodexHost sidebar stash (收纳箱)
+================================
+
+Ported from ump45nose/codex-stash (MIT), Copyright (c) 2026 ump45nose.
+
+The TypeScript sources under this directory reimplement that extension's
+behavior for CodexHost's renderer-extension. No LaunchAgent or standalone
+userscript files from that repository are bundled here.
+
+Third-party ideas acknowledged by the upstream project (no source copied):
+- Codexion (MIT) — locator / idempotent install patterns
+- Codex App HUD (MIT) — active-thread probe attribute
+- Explodex — public note of data-app-action-sidebar-* attribute names

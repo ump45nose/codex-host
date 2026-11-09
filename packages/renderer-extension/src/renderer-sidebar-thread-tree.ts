@@ -331,6 +331,11 @@ export interface RendererSidebarThreadTree {
    * unarchived Thread, so archived intermediate parents do not break the chain.
    */
   liveDescendants(hostId: string, threadId: HostThreadId): HostThreadId[];
+  /**
+   * Highest unarchived ancestor of `threadId` currently listed in the Sidebar
+   * (or `threadId` itself when it is a root Thread or has no listed ancestor).
+   */
+  rootThread?(hostId: string, threadId: HostThreadId): HostThreadId;
   refresh(): void;
   dispose(): void;
 }
@@ -1224,6 +1229,36 @@ export function installRendererSidebarThreadTree(options: {
         const id = ids.get(key);
         return id ? [id] : [];
       });
+    },
+    rootThread(hostId, threadId) {
+      if (disposed) return threadId;
+      const liveIds = new Set<string>();
+      for (const list of dom.lists()) {
+        for (const item of list.items()) {
+          const thread = item.thread();
+          if (thread?.hostId === hostId) liveIds.add(thread.threadId);
+        }
+      }
+      let best: HostThreadId = threadId;
+      let current: string | null = threadId;
+      const seen = new Set<string>();
+      for (
+        let depth = 0;
+        current !== null && depth < SIDEBAR_THREAD_TREE_MAX_ANCESTRY;
+        depth += 1
+      ) {
+        if (seen.has(current)) break;
+        seen.add(current);
+        const key = threadKey(hostId, current);
+        const parent = hostRelations.get(key)?.parent ?? nativeForks.get(key) ?? null;
+        if (!parent || parent === current) break;
+        const parsed = hostThreadIdSchema.safeParse(parent);
+        if (parsed.success && liveIds.has(parsed.data)) {
+          best = parsed.data;
+        }
+        current = parent;
+      }
+      return best;
     },
     refresh() {
       if (disposed) return;

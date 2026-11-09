@@ -14,6 +14,17 @@ import {
   setSidebarStashEnabledPreference,
   subscribeSidebarStashEnabledPreference,
 } from "../renderer-sidebar-stash.js";
+import {
+  isSidebarOverlayMode,
+  readSidebarOverlayMode,
+  setSidebarOverlayMode,
+  subscribeSidebarOverlayPreference,
+} from "../renderer-sidebar-overlay.js";
+import {
+  readTopTabsEnabledPreference,
+  setTopTabsEnabledPreference,
+  subscribeTopTabsPreference,
+} from "../renderer-top-tabs.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
 import { mountDelegationCapacityControls } from "./delegation-capacity-controls.js";
@@ -112,6 +123,50 @@ export function createAppearanceSettingsPage(
       stashRow.item.append(stashToggle);
       sidebar.card.append(stashRow.item);
 
+      const overlayModeId = preferenceId("sidebar-overlay-mode");
+      const overlayModeRow = createPreferenceItem(document, {
+        title: messages.sidebarOverlayModeTitle,
+        description: messages.sidebarOverlayModeDescription,
+        controlId: overlayModeId,
+      });
+      const overlayModeSelect = createPreferenceSelect(document, {
+        id: overlayModeId,
+        describedBy: overlayModeRow.description.id,
+        options: [
+          { value: "auto", label: messages.sidebarOverlayModeAuto },
+          { value: "overlay", label: messages.sidebarOverlayModeOverlay },
+          { value: "docked", label: messages.sidebarOverlayModeDocked },
+        ],
+      });
+      overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
+      overlayModeSelect.addEventListener("change", () => {
+        if (isSidebarOverlayMode(overlayModeSelect.value)) {
+          setSidebarOverlayMode(ownerWindow, overlayModeSelect.value);
+        }
+      });
+      const disposeOverlayMode = subscribeSidebarOverlayPreference(ownerWindow, () => {
+        overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
+      });
+      overlayModeRow.item.append(overlayModeSelect);
+      sidebar.card.append(overlayModeRow.item);
+
+      const topTabsId = preferenceId("top-tabs-enabled");
+      const topTabsRow = createPreferenceItem(document, {
+        title: messages.topTabsTitle,
+        description: messages.topTabsDescription,
+        controlId: topTabsId,
+      });
+      const topTabsToggle = createPreferenceSwitch(document, topTabsId, topTabsRow.description.id);
+      topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      topTabsToggle.addEventListener("change", () => {
+        setTopTabsEnabledPreference(ownerWindow, topTabsToggle.checked);
+      });
+      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, () => {
+        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      });
+      topTabsRow.item.append(topTabsToggle);
+      sidebar.card.append(topTabsRow.item);
+
       context.content.append(heading, description, group, sidebar.group);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
@@ -128,6 +183,8 @@ export function createAppearanceSettingsPage(
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeArchiveChildren();
         disposeStashPref();
+        disposeOverlayMode();
+        disposeTopTabsPref();
         disposeIdleRelease();
         disposeDelegationCapacity();
         disposeUserInstructions();

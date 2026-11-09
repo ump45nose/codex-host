@@ -1,5 +1,6 @@
 import {
   CdpClient,
+  CdpConnectionClosedError,
   listCdpTargets,
   type CdpClientOptions,
   type CdpFetch,
@@ -141,6 +142,52 @@ export function selectPrimaryRendererTarget(
   return candidates.find((target) => target.id === preferredTargetId) ?? candidates.at(0) ?? null;
 }
 
+export function isAvatarOverlayRendererUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "app:" && url.hostname === "-" && url.pathname === "/avatar-overlay.html"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function selectAvatarOverlayRendererTargets(targets: readonly CdpTarget[]): CdpTarget[] {
+  return targets.filter(
+    (target) => target.type === "page" && isAvatarOverlayRendererUrl(target.url),
+  );
+}
+
+export async function installAvatarOverlayTargets(
+  targets: readonly CdpTarget[],
+  rendererSource: string,
+  connect: (webSocketDebuggerUrl: string) => Promise<RendererCdpClient>,
+): Promise<number> {
+  const overlays = selectAvatarOverlayRendererTargets(targets);
+  let installedCount = 0;
+  for (const overlay of overlays) {
+    let client: RendererCdpClient | null = null;
+    try {
+      client = await connect(overlay.webSocketDebuggerUrl);
+      const alreadyInstalled = await client.evaluate<boolean>(
+        'document.documentElement?.getAttribute("data-codexhost-avatar-overlay") === "true"',
+      );
+      if (!alreadyInstalled) {
+        await client.command("Page.enable");
+        await client.command("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
+        await evaluateSource(client, rendererSource);
+      }
+      installedCount += 1;
+    } catch {
+      // Best-effort injection for optional Pets overlay window
+    } finally {
+      client?.close();
+    }
+  }
+  return installedCount;
+}
+
 class RendererAdapterReadinessError extends Error {
   constructor(
     readonly state: string,
@@ -180,20 +227,26 @@ async function waitForPrimaryTarget(
   pollIntervalMs: number,
   preferredTargetId?: string,
   signal?: AbortSignal,
+  rendererSource?: string,
 ): Promise<CdpTarget> {
   const discovery = discoveryTimeoutSignal(timeoutMs, signal);
   let lastError: unknown;
   while (!discovery.aborted) {
     try {
-      const target = selectPrimaryRendererTarget(
-        await awaitWithSignal(
-          operations.listTargets(endpoint, discovery),
-          discovery,
-          "Renderer CDP target discovery timed out",
-        ),
-        preferredTargetId,
+      const targets = await awaitWithSignal(
+        operations.listTargets(endpoint, discovery),
+        discovery,
+        "Renderer CDP target discovery timed out",
       );
-      if (target) return target;
+      const target = selectPrimaryRendererTarget(targets, preferredTargetId);
+      if (target) {
+        if (rendererSource && selectAvatarOverlayRendererTargets(targets).length > 0) {
+          await installAvatarOverlayTargets(targets, rendererSource, operations.connect).catch(
+            () => undefined,
+          );
+        }
+        return target;
+      }
       lastError = new Error("Renderer CDP has no primary app://-/index.html page target");
     } catch (error) {
       lastError = error;
@@ -246,6 +299,7 @@ async function waitForBinding(
       if (value !== null) return validateBindingStatus(value, enabledAgents);
     } catch (error) {
       lastError = error;
+      if (error instanceof CdpConnectionClosedError) throw error;
       if (error instanceof RendererAdapterReadinessError && error.state !== "installing") {
         throw error;
       }
@@ -312,6 +366,8 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
       this.timeoutMs,
       this.pollIntervalMs,
       this.currentSnapshot.target.id,
+      undefined,
+      this.rendererSource,
     );
     if (target.id !== this.currentSnapshot.target.id) {
       const replacement = await installTarget(
@@ -407,6 +463,7 @@ export async function createRendererCdpControlSession(
     pollIntervalMs,
     undefined,
     options.signal,
+    options.rendererSource,
   );
   const installed = await installTarget(
     target,

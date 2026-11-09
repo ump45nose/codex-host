@@ -6,6 +6,7 @@ import {
   catalogModelForRef,
   decodeHarnessPluginRoute,
   harnessIdSchema,
+  hostThreadIdSchema,
   permissionModeFixedAtCreate,
   type HarnessCommandDescriptor,
   type HarnessPluginDescriptor,
@@ -120,6 +121,13 @@ import {
   subscribeSidebarStashEnabledPreference,
   type RendererSidebarStashHandle,
 } from "./renderer-sidebar-stash.js";
+import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
+import { collectSidebarThreads, installRendererTopTabs } from "./renderer-top-tabs.js";
+import {
+  PETS_OPEN_THREAD_REQUEST_STORAGE_KEY,
+  writePetsRemoteThreads,
+  type PetsOpenThreadRequest,
+} from "./renderer-avatar-overlay.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -968,6 +976,65 @@ export function installRendererBindingProbe(
   const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
     mountSidebarStash();
   });
+  const sidebarOverlay = installRendererSidebarOverlay({
+    document,
+    window,
+    getLocale: () => settingsLifecycle.locale,
+  });
+  const topTabs = installRendererTopTabs({
+    document,
+    window,
+    tree: sidebarThreadTree,
+    getLocale: () => settingsLifecycle.locale,
+    getActiveThread: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!isMountedComposer(mounted.composer)) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        const hostId = mounted.hostId ?? activeModelHostId(mounted.composer) ?? "local";
+        if (threadId) return { hostId, threadId };
+      }
+      return null;
+    },
+    getThreadAgent: (hostId, threadId) => {
+      const localAgent = localAgentForSidebarThread({ hostId, threadId, draftId: null });
+      if (!localAgent) return null;
+      const plugin = pluginForHost(hostId, localAgent);
+      return { agent: localAgent, ...(plugin ? { plugin } : {}) };
+    },
+  });
+  const syncPetsRemoteThreads = (): void => {
+    try {
+      const snapshots = collectSidebarThreads(document);
+      const remotes = [...snapshots.values()]
+        .filter((item) => item.hostId !== "local")
+        .slice(0, 12)
+        .map((item) => ({
+          hostId: item.hostId,
+          threadId: item.threadId,
+          title: item.title,
+          status: item.status,
+          agent: item.agent,
+        }));
+      writePetsRemoteThreads(remotes, window.localStorage);
+    } catch {
+      // Ignore storage sync errors
+    }
+  };
+  const onPetsOpenRequestStorage = (event: StorageEvent): void => {
+    if (event.key !== PETS_OPEN_THREAD_REQUEST_STORAGE_KEY || !event.newValue) return;
+    try {
+      const parsed: unknown = JSON.parse(event.newValue);
+      if (typeof parsed !== "object" || parsed === null) return;
+      const { hostId, threadId } = parsed as Partial<PetsOpenThreadRequest>;
+      const validThreadId = hostThreadIdSchema.safeParse(threadId);
+      if (typeof hostId === "string" && validThreadId.success) {
+        void openRendererThread(validThreadId.data, { hostId }).catch(() => undefined);
+      }
+    } catch {
+      // Ignore invalid payloads
+    }
+  };
+  window.addEventListener("storage", onPetsOpenRequestStorage);
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
@@ -3364,6 +3431,8 @@ export function installRendererBindingProbe(
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3613,6 +3682,8 @@ export function installRendererBindingProbe(
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -3659,6 +3730,9 @@ export function installRendererBindingProbe(
       disposeSidebarStashPreference();
       sidebarStash?.dispose();
       sidebarStash = null;
+      sidebarOverlay.dispose();
+      topTabs.dispose();
+      window.removeEventListener("storage", onPetsOpenRequestStorage);
       sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();

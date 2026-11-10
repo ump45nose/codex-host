@@ -57,7 +57,8 @@ function decodeVarint(
   let shift = 0;
   let offset = startOffset;
   while (offset < buffer.length) {
-    const byte = buffer[offset]!;
+    const byte = buffer[offset];
+    if (byte === undefined) return null;
     offset += 1;
     value += (byte & 0x7f) * 2 ** shift;
     if ((byte & 0x80) === 0) return [value, offset];
@@ -103,9 +104,14 @@ function updateTrajectoryMetadataCascadeId(
   blob: Uint8Array | null | undefined,
   cascadeId: string,
 ): Buffer {
-  if (!blob || blob.length === 0) {
-    return minimalTrajectoryMetadataBlob(cascadeId);
-  }
+  if (!blob || blob.length === 0) return minimalTrajectoryMetadataBlob(cascadeId);
+  return (
+    rewriteTrajectoryMetadataCascadeId(blob, cascadeId) ?? minimalTrajectoryMetadataBlob(cascadeId)
+  );
+}
+
+/** Like {@link updateTrajectoryMetadataCascadeId}, but returns null when `blob` cannot be parsed. */
+function rewriteTrajectoryMetadataCascadeId(blob: Uint8Array, cascadeId: string): Buffer | null {
   const chunks: Buffer[] = [];
   let offset = 0;
   let wroteCascadeId = false;
@@ -113,25 +119,25 @@ function updateTrajectoryMetadataCascadeId(
   while (offset < blob.length) {
     const fieldStart = offset;
     const tagParsed = decodeVarint(blob, offset);
-    if (!tagParsed) return minimalTrajectoryMetadataBlob(cascadeId);
+    if (!tagParsed) return null;
     const [tag, afterTag] = tagParsed;
     const fieldNumber = tag >>> 3;
     const wireType = tag & 0x07;
     offset = afterTag;
     if (wireType === 0) {
       const valParsed = decodeVarint(blob, offset);
-      if (!valParsed) return minimalTrajectoryMetadataBlob(cascadeId);
+      if (!valParsed) return null;
       offset = valParsed[1];
       chunks.push(Buffer.from(blob.subarray(fieldStart, offset)));
     } else if (wireType === 1) {
-      if (offset + 8 > blob.length) return minimalTrajectoryMetadataBlob(cascadeId);
+      if (offset + 8 > blob.length) return null;
       offset += 8;
       chunks.push(Buffer.from(blob.subarray(fieldStart, offset)));
     } else if (wireType === 2) {
       const lenParsed = decodeVarint(blob, offset);
-      if (!lenParsed) return minimalTrajectoryMetadataBlob(cascadeId);
+      if (!lenParsed) return null;
       const [length, afterLen] = lenParsed;
-      if (afterLen + length > blob.length) return minimalTrajectoryMetadataBlob(cascadeId);
+      if (afterLen + length > blob.length) return null;
       offset = afterLen + length;
       if (fieldNumber === 6) {
         if (!wroteCascadeId) {
@@ -143,11 +149,11 @@ function updateTrajectoryMetadataCascadeId(
         chunks.push(Buffer.from(blob.subarray(fieldStart, offset)));
       }
     } else if (wireType === 5) {
-      if (offset + 4 > blob.length) return minimalTrajectoryMetadataBlob(cascadeId);
+      if (offset + 4 > blob.length) return null;
       offset += 4;
       chunks.push(Buffer.from(blob.subarray(fieldStart, offset)));
     } else {
-      return minimalTrajectoryMetadataBlob(cascadeId);
+      return null;
     }
   }
   if (!wroteCascadeId) {
@@ -159,10 +165,14 @@ function updateTrajectoryMetadataCascadeId(
   return Buffer.concat(chunks);
 }
 
+/** Only a missing path is absent; other access errors (permissions, I/O) are rethrown. */
 async function pathExists(targetPath: string): Promise<boolean> {
   return access(targetPath).then(
     () => true,
-    () => false,
+    (error: unknown) => {
+      if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
+      throw error;
+    },
   );
 }
 
@@ -348,20 +358,24 @@ export async function seedNativeConversationDb(
     return false;
   }
 
-  const existingSummary =
-    templateSummaryRow ??
-    ((await pathExists(summariesDbPath))
-      ? readConversationSummaryRow(DatabaseSync, summariesDbPath, nativeSessionId)
-      : undefined);
-  upsertConversationSummaryRow(
-    DatabaseSync,
-    summariesDbPath,
-    nativeSessionId,
-    trajectoryId,
-    metadataBlob,
-    0,
-    existingSummary,
-  );
+  // The trajectory database is already written; a summary that cannot be read or written must
+  // not turn the seed into a failure.
+  try {
+    const existingSummary =
+      templateSummaryRow ??
+      ((await pathExists(summariesDbPath))
+        ? readConversationSummaryRow(DatabaseSync, summariesDbPath, nativeSessionId)
+        : undefined);
+    upsertConversationSummaryRow(
+      DatabaseSync,
+      summariesDbPath,
+      nativeSessionId,
+      trajectoryId,
+      metadataBlob,
+      0,
+      existingSummary,
+    );
+  } catch {}
   return true;
 }
 
@@ -377,7 +391,13 @@ export async function ensureNativeConversationDb(
   hasPriorHistory = false,
 ): Promise<{ seeded: boolean; emptySteps: boolean }> {
   const dbPath = nativeConversationDbPath(nativeSessionId, homedir);
-  const exists = await pathExists(dbPath);
+  let exists: boolean;
+  try {
+    exists = await pathExists(dbPath);
+  } catch {
+    // An unreadable database is not a missing one: never seed over it.
+    return { seeded: false, emptySteps: false };
+  }
   if (exists) {
     try {
       const { DatabaseSync } = await import("node:sqlite");
@@ -401,10 +421,17 @@ export async function ensureNativeConversationDb(
           const blobRow = db
             .prepare("SELECT data FROM trajectory_metadata_blob WHERE id = 'main'")
             .get() as { data?: Uint8Array } | undefined;
-          metadataBlob = updateTrajectoryMetadataCascadeId(blobRow?.data, nativeSessionId);
-          db.prepare(
-            "INSERT OR REPLACE INTO trajectory_metadata_blob (id, data) VALUES ('main', ?)",
-          ).run(metadataBlob);
+          const current = blobRow?.data?.length ? Buffer.from(blobRow.data) : null;
+          // Keep a native blob this parser cannot read instead of replacing it with a minimal one.
+          const updated = current
+            ? rewriteTrajectoryMetadataCascadeId(current, nativeSessionId)
+            : minimalTrajectoryMetadataBlob(nativeSessionId);
+          metadataBlob = updated ?? current;
+          if (updated && !current?.equals(updated)) {
+            db.prepare(
+              "INSERT OR REPLACE INTO trajectory_metadata_blob (id, data) VALUES ('main', ?)",
+            ).run(updated);
+          }
         } catch {}
         const countRow = db.prepare("SELECT count(*) as c FROM steps").get() as
           { c: number } | undefined;
@@ -413,13 +440,13 @@ export async function ensureNativeConversationDb(
         db.close();
       }
       if (validTrajectory) {
-        const summariesDbPath = nativeConversationSummariesDbPath(homedir);
-        if (await pathExists(summariesDbPath)) {
-          const existingRow = readConversationSummaryRow(
-            DatabaseSync,
-            summariesDbPath,
-            nativeSessionId,
-          );
+        // Register the summary even when the whole summaries database is missing, matching the
+        // seed path: without a usable raw_summary `agy --conversation <id>` may start afresh.
+        try {
+          const summariesDbPath = nativeConversationSummariesDbPath(homedir);
+          const existingRow = (await pathExists(summariesDbPath))
+            ? readConversationSummaryRow(DatabaseSync, summariesDbPath, nativeSessionId)
+            : undefined;
           if (!existingRow || !existingRow.raw_summary) {
             upsertConversationSummaryRow(
               DatabaseSync,
@@ -431,7 +458,7 @@ export async function ensureNativeConversationDb(
               existingRow,
             );
           }
-        }
+        } catch {}
         return { seeded: false, emptySteps: stepCount === 0 };
       }
     } catch {
@@ -450,10 +477,17 @@ export async function ensureNativeConversationDb(
     return { seeded: false, emptySteps: false };
   }
   const summariesDbPath = nativeConversationSummariesDbPath(homedir);
-  const existingSummary = (await pathExists(summariesDbPath))
-    ? readConversationSummaryRow(DatabaseSync, summariesDbPath, nativeSessionId)
-    : undefined;
-  const hasBrainDir = await pathExists(nativeBrainDirPath(nativeSessionId, homedir));
+  let existingSummary: ReturnType<typeof readConversationSummaryRow>;
+  let hasBrainDir: boolean;
+  try {
+    existingSummary = (await pathExists(summariesDbPath))
+      ? readConversationSummaryRow(DatabaseSync, summariesDbPath, nativeSessionId)
+      : undefined;
+    hasBrainDir = await pathExists(nativeBrainDirPath(nativeSessionId, homedir));
+  } catch {
+    // Unreadable evidence is no evidence: do not seed, and do not fail the Turn.
+    return { seeded: false, emptySteps: false };
+  }
   if (!hasPriorHistory && !existingSummary && !hasBrainDir) {
     return { seeded: false, emptySteps: false };
   }

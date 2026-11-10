@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { AntigravityAdapter } from "../src/index.js";
 import {
   copyNativeConversationDbIfExists,
+  ensureNativeConversationDb,
   nativeConversationDbPath,
   nativeConversationSummariesDbPath,
   seedNativeConversationDb,
@@ -449,6 +450,67 @@ describe("Antigravity Fork Session Branching", () => {
         } finally {
           sumDb.close();
         }
+      }
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a trajectory metadata blob it cannot parse when ensuring an existing db", async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "codexhost-fakehome-ensure-"));
+    const sessionId = "1559e960-0c3a-4c1e-9a64-2b6f4a3f6f10";
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      expect(await seedNativeConversationDb(sessionId, fakeHome)).toBe(true);
+      // Wire type 3 (start group) is not understood by the rewriter.
+      const unparseable = Buffer.from([0x1b, 0x01, 0x02, 0x03]);
+      const writer = new DatabaseSync(nativeConversationDbPath(sessionId, fakeHome));
+      try {
+        writer
+          .prepare("INSERT OR REPLACE INTO trajectory_metadata_blob (id, data) VALUES ('main', ?)")
+          .run(unparseable);
+      } finally {
+        writer.close();
+      }
+
+      await ensureNativeConversationDb(sessionId, fakeHome, true);
+
+      const reader = new DatabaseSync(nativeConversationDbPath(sessionId, fakeHome));
+      try {
+        const row = reader
+          .prepare("SELECT data FROM trajectory_metadata_blob WHERE id = 'main'")
+          .get() as { data: Uint8Array };
+        expect(Buffer.from(row.data).equals(unparseable)).toBe(true);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("registers the summary for an existing db when the summaries db was deleted", async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "codexhost-fakehome-ensure-"));
+    const sessionId = "2b6f4a3f-0c3a-4c1e-9a64-1559e9606f10";
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      expect(await seedNativeConversationDb(sessionId, fakeHome)).toBe(true);
+      const summariesDbPath = nativeConversationSummariesDbPath(fakeHome);
+      await rm(summariesDbPath, { force: true });
+
+      expect(await ensureNativeConversationDb(sessionId, fakeHome, true)).toEqual({
+        seeded: false,
+        emptySteps: true,
+      });
+
+      const reader = new DatabaseSync(summariesDbPath);
+      try {
+        const row = reader
+          .prepare("SELECT raw_summary FROM conversation_summaries WHERE conversation_id = ?")
+          .get(sessionId) as { raw_summary: Uint8Array } | undefined;
+        expect(Buffer.from(row?.raw_summary ?? []).toString("utf8")).toContain(sessionId);
+      } finally {
+        reader.close();
       }
     } finally {
       await rm(fakeHome, { recursive: true, force: true });

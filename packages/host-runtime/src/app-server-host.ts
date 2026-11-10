@@ -4063,6 +4063,8 @@ export class AppServerHost {
       }));
     const threadUsage =
       resolution.kind === "official" ? null : await this.#threadUsage(resolution.thread);
+    const sessionCatalog =
+      resolution.kind === "external" ? resolution.thread.session.modelCatalog?.() : undefined;
     const inspection = threadInspectionSchema.parse(
       resolution.kind === "official"
         ? {
@@ -4098,6 +4100,7 @@ export class AppServerHost {
                     resolution.thread.stateObserver.state.effectivePermissionModeId,
                 }
               : {}),
+            ...(sessionCatalog ? { catalog: sessionCatalog } : {}),
             history: resolution.thread.session.capabilities.history,
             ...(threadUsage ? { usage: threadUsage } : {}),
             locked: true,

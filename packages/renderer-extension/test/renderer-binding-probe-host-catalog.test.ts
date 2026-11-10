@@ -14,6 +14,8 @@ import {
 } from "../src/renderer-model-picker.js";
 import type { RendererRequestOptions } from "../src/renderer-request-sender.js";
 import type { installRendererSidebarAgentIcons } from "../src/renderer-sidebar-agent-icons.js";
+import type * as RendererSidebarStash from "../src/renderer-sidebar-stash.js";
+import type * as RendererTopTabs from "../src/renderer-top-tabs.js";
 import type { RendererConnectionDiagnostics } from "../src/settings/connections-page.js";
 import type { RendererSessionImportClient } from "../src/settings/session-import-page.js";
 import type * as VersionedRendererAdapter from "../src/versioned-renderer-adapter.js";
@@ -116,6 +118,20 @@ vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
 
 vi.mock("../src/renderer-sidebar-thread-tree.js", () => ({
   installRendererSidebarThreadTree: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-overlay/index.js", () => ({
+  installRendererSidebarOverlay: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-stash.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererSidebarStash>()),
+  installRendererSidebarStash: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-top-tabs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererTopTabs>()),
+  installRendererTopTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
 vi.mock("../src/renderer-settings-lifecycle.js", () => ({

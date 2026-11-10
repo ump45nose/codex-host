@@ -90,6 +90,7 @@
   - 未认证请求返回 `401` 与 `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource"`，并在公网入口提供 `/.well-known/oauth-protected-resource`、`/.well-known/oauth-authorization-server`、`/oauth/register`（动态客户端注册）、`/oauth/authorize`、`/oauth/token`。
   - 用户在本机运行 `codexhost client pair <name>` 生成 10 分钟有效、仅可使用一次的配对码（保存在 `<数据目录>/external-client-oauth.json`，仅存加盐 SHA-256 摘要）；授权页只包含配对码输入框，不显示任何客户端、Thread 或工作目录列表；连续 5 次配对失败会使当前配对码立即失效。
   - 授权成功后签发的访问令牌（1 小时）与刷新令牌（30 天，轮换制）均以哈希保存并绑定到对应客户端，继承其权限范围；执行 `codexhost client remove <name>` 会立即使该客户端的全部访问令牌与刷新令牌失效。
+  - 配对码与授权码的消费、刷新令牌轮换和撤销使用跨进程文件事务串行处理，CLI 与监听共用存储时不会覆盖彼此的修改。
 
 ## webhook 推送
 

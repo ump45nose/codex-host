@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +36,72 @@ describe("client scopes and networks", () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
     await rm(directory, { recursive: true, force: true });
   });
+
+  it("consumes pairing, authorization and refresh grants once across processes", async () => {
+    const clients = new ExternalClientRegistry(file);
+    await clients.add("concurrent", { scope: "dispatch", networks: ["public"] });
+    const oauthFile = path.join(directory, "oauth.json");
+    const oauth = new ExternalClientOAuthStore(oauthFile);
+    const { code: pairingCode } = await oauth.createPairingCode("concurrent");
+    const codeVerifier = "v".repeat(64);
+    const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+    const oauthModule = pathToFileURL(
+      path.resolve(import.meta.dirname, "../src/external-client-oauth.ts"),
+    ).href;
+    const clientsModule = pathToFileURL(
+      path.resolve(import.meta.dirname, "../src/external-clients.ts"),
+    ).href;
+    const source = `
+      import { ExternalClientOAuthStore } from ${JSON.stringify(oauthModule)};
+      import { ExternalClientRegistry } from ${JSON.stringify(clientsModule)};
+      const [oauthFile, clientsFile, operation, raw] = process.argv.slice(1);
+      const oauth = new ExternalClientOAuthStore(oauthFile);
+      const clients = new ExternalClientRegistry(clientsFile);
+      const input = JSON.parse(raw);
+      const result = operation === "pair"
+        ? await oauth.redeemPairingCode(input)
+        : operation === "code"
+          ? await oauth.exchangeAuthorizationCode({ ...input, clients })
+          : await oauth.exchangeRefreshToken({ ...input, clients });
+      process.stdout.write(JSON.stringify(result ?? null));
+    `;
+    const race = async (operation: string, input: Record<string, string>) => {
+      const results = await Promise.all(
+        Array.from({ length: 3 }, async () => {
+          const { stdout } = await promisify(execFile)(process.execPath, [
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "-e",
+            source,
+            oauthFile,
+            file,
+            operation,
+            JSON.stringify(input),
+          ]);
+          return JSON.parse(stdout) as
+            string | { accessToken: string; refreshToken: string } | null;
+        }),
+      );
+      const successful = results.filter((result) => result !== null);
+      expect(successful).toHaveLength(1);
+      return successful[0];
+    };
+    const binding = { oauthClientId: "concurrent-mcp", redirectUri: "http://127.0.0.1/callback" };
+    const code = await race("pair", { ...binding, pairingCode, codeChallenge });
+    expect(typeof code).toBe("string");
+    const tokens = await race("code", { ...binding, code: code as string, codeVerifier });
+    expect(tokens).toHaveProperty("refreshToken");
+    const original = tokens as { accessToken: string; refreshToken: string };
+    const rotated = await race("refresh", {
+      oauthClientId: binding.oauthClientId,
+      refreshToken: original.refreshToken,
+    });
+    expect(await oauth.authenticateAccessToken(original.accessToken, clients)).toBeUndefined();
+    expect(
+      await oauth.authenticateAccessToken((rotated as typeof original).accessToken, clients),
+    ).toMatchObject({ name: "concurrent" });
+  }, 20_000);
 
   it("keeps clients registered before scopes at dispatch on the local network", async () => {
     await writeFile(

@@ -33,3 +33,5 @@ aeb5211aed67920d6568a9d3b1c97ff7a8d404e2 # fix/console-shutdown-on-exit; PR #753
 3c61c5b4a72c1b1b01e580fbef25049912d404ec # fix/antigravity-resume-mismatch; PR #775 (Fixes #774 agy resume into a lost Conversation); cherry-picked onto v0.17.3 lines
 78ead772516edaa9387c8391d7a9956ae69cbee2 # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
 07250b6fd0b2866e1154a20e81ba500a38b269a2 # feat/vertical-screen-overlay-tabs-pets; local: sidebar overlay drawer, top capsule tabs, and pets remote/expanded view
+03db15009469e2efa64d55252c74b03b1dad771c # codex/remote-desktop-session; PR #790 (Fixes #789 desktop-session execution for remote macOS tasks)
+fb2b9f7545b500e26dc99d8506fed7adb7e05aed # fix/projects-and-shared-remote-threads; PR #791 (share external Thread Runtime, deduplicate projects, and resolve shared parent delegation)

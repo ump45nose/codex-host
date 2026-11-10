@@ -4,12 +4,14 @@ name: Follow upstream release
 #   upstream vX.Y.Z + vincent/branches.txt -> vincent/release(-vX.Y.Z) -> Release vX.Y.Z-vincent.N
 # Nothing is pushed or published unless the merge, typecheck, tests and every build succeed.
 # Scheduled runs only fire from the default branch, which is vincent/release on this fork.
+# Poll at an off-peak minute (UTC); upstream Release events do not trigger fork Actions.
+# Keep workflow_dispatch for manual recovery if GitHub drops scheduled events.
 # Upstream's own workflows (CI, Release packages, Repository maintenance) are disabled in
 # this fork's Actions settings; their files still merge from upstream unchanged.
 
 on:
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "41 */3 * * *"
   workflow_dispatch:
     inputs:
       tag:
@@ -72,6 +74,12 @@ jobs:
           scripts/vincent-ci.sh merge "$TAG"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git bundle create "$RUNNER_TEMP/merged.bundle" HEAD
+
+      - name: Verify release version
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: scripts/vincent-ci.sh verify-version "$TAG"
 
       - name: Upload conflict report
         if: failure() && steps.merge.outcome == 'failure'

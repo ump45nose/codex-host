@@ -48,17 +48,14 @@ import {
 } from "@codexhost/shared-contracts";
 import {
   DELEGATION_CAPACITY_SETTINGS_METHOD,
+  delegationCapacitySettingsSchema,
   DELEGATION_MENTION_PATH_PREFIX,
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
-  THREAD_MANUAL_COMPACTION_STARTED_METHOD,
-  delegationCapacitySettingsSchema,
-  idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import { HarnessDisplaySettingsStore } from "./harness-display-settings.js";
 import { isModelPriceOverridesMethod } from "./model-price-overrides-file.js";
-import { HARNESS_DISPLAY_CHANGED_METHOD } from "@codexhost/shared-contracts";
 import { HarnessUserInstructionsStore } from "./harness-user-instructions.js";
 import {
   isSidebarStashLegacyFileMethod,
@@ -66,6 +63,7 @@ import {
   readSidebarStashLegacyFile,
 } from "./sidebar-stash-legacy-file.js";
 import {
+  HARNESS_DISPLAY_CHANGED_METHOD,
   HARNESS_USER_INSTRUCTIONS_SETTINGS_GET_METHOD,
   HARNESS_USER_INSTRUCTIONS_SETTINGS_SET_METHOD,
   harnessUserInstructionsGetSchema,
@@ -286,7 +284,13 @@ import {
 } from "./external-turn-projection.js";
 import { DesktopControlRequests } from "./desktop-control-requests.js";
 import { DesktopThreadRouting } from "./desktop-thread-routing.js";
-import { errorMessage, rpcEnvelope, rpcError, routingParams, type HostRequestOrigin } from "./desktop-rpc.js";
+import {
+  errorMessage,
+  rpcEnvelope,
+  rpcError,
+  routingParams,
+  type HostRequestOrigin,
+} from "./desktop-rpc.js";
 import { ThreadListTiming } from "./thread-list-timing.js";
 import { allocateProjectlessWorkspace } from "./projectless-workspace.js";
 import {
@@ -393,7 +397,8 @@ export interface AppServerHostOptions {
   /** GUI connection to the single external-session owner. */
   sharedThreads?: SharedThreadBridge;
   /** In-process SSH fronts send external Delegations to the same owner as GUI requests. */
-  sharedDelegation?: DelegationControlRegistration;
+  sharedDelegation?:
+    DelegationControlRegistration | (() => DelegationControlRegistration | undefined);
   stockCodexPath: string;
   arguments: string[];
   environment?: NodeJS.ProcessEnv;
@@ -967,52 +972,53 @@ export class AppServerHost {
       options.runtimeMaintenance ? options.runtimeMaintenance.operation(run) : run();
     this.#delegationApi = sharedDelegationRegistration(
       {
-      subscribeActivity: (listener) => this.#threadActivity.subscribe(listener),
-      runningThreadIds: () => this.#runningTopLevelThreadIds(),
-      useCapacity: (capacity) => {
-        this.#delegationCapacity = capacity;
-      },
-      adoptQueued: async (queued) => {
-        if (queued.input.harnessId !== "codex" || this.#options.externalOnly) return undefined;
-        return this.#adoptQueuedOfficialStart(queued);
-      },
-      listHarnesses: () =>
-        this.#waitForPlugins().then(() => this.#delegationCoordinator.listHarnesses()),
-      inspect: (input) =>
-        this.#waitForPlugins().then(() => this.#delegationCoordinator.inspect(input)),
-      start: (input, admitted) =>
-        maintenanceOperation(async () => {
-          if (options.sharedDelegation && input.harnessId !== "codex") {
-            const active = [...this.#activeOfficialTurns.keys()];
-            const parentThreadId =
-              input.parentThreadId ?? (active.length === 1 ? active[0] : undefined);
-            return options.sharedDelegation.start(
-              {
-                ...input,
-                ...(parentThreadId ? { parentThreadId } : {}),
-              },
-              admitted,
+        subscribeActivity: (listener) => this.#threadActivity.subscribe(listener),
+        runningThreadIds: () => this.#runningTopLevelThreadIds(),
+        useCapacity: (capacity) => {
+          this.#delegationCapacity = capacity;
+        },
+        adoptQueued: async (queued) => {
+          if (queued.input.harnessId !== "codex" || this.#options.externalOnly) return undefined;
+          return this.#adoptQueuedOfficialStart(queued);
+        },
+        listHarnesses: () =>
+          this.#waitForPlugins().then(() => this.#delegationCoordinator.listHarnesses()),
+        inspect: (input) =>
+          this.#waitForPlugins().then(() => this.#delegationCoordinator.inspect(input)),
+        start: (input, admitted) =>
+          maintenanceOperation(async () => {
+            const sharedDelegation = this.#sharedDelegation();
+            if (sharedDelegation && input.harnessId !== "codex") {
+              const active = [...this.#activeOfficialTurns.keys()];
+              const parentThreadId =
+                input.parentThreadId ?? (active.length === 1 ? active[0] : undefined);
+              return sharedDelegation.start(
+                {
+                  ...input,
+                  ...(parentThreadId ? { parentThreadId } : {}),
+                },
+                admitted,
+              );
+            }
+            return this.#waitForPlugins().then(() =>
+              this.#delegationCoordinator.start(input, admitted),
             );
-          }
-          return this.#waitForPlugins().then(() =>
-            this.#delegationCoordinator.start(input, admitted),
-          );
-        }),
-      send: (input) =>
-        maintenanceOperation(() =>
-          this.#waitForPlugins().then(() => this.#delegationCoordinator.send(input)),
-        ),
-      cancel: (input) =>
-        this.#waitForPlugins().then(() => this.#delegationCoordinator.cancel(input)),
-      read: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.read(input)),
-      wait: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.wait(input)),
-      list: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.list(input)),
-      canHandleStart: (input) => this.#canHandleDelegationStart(input),
-      ownsThread: (threadId) => this.#ownsDelegationThread(threadId),
-      executionHostId: (threadId) => {
-        const thread = this.#externalRuntime.get(threadId);
-        return thread ? this.#executionHosts.get(thread) : undefined;
-      },
+          }),
+        send: (input) =>
+          maintenanceOperation(() =>
+            this.#waitForPlugins().then(() => this.#delegationCoordinator.send(input)),
+          ),
+        cancel: (input) =>
+          this.#waitForPlugins().then(() => this.#delegationCoordinator.cancel(input)),
+        read: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.read(input)),
+        wait: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.wait(input)),
+        list: (input) => this.#waitForPlugins().then(() => this.#delegationCoordinator.list(input)),
+        canHandleStart: (input) => this.#canHandleDelegationStart(input),
+        ownsThread: (threadId) => this.#ownsDelegationThread(threadId),
+        executionHostId: (threadId) => {
+          const thread = this.#externalRuntime.get(threadId);
+          return thread ? this.#executionHosts.get(thread) : undefined;
+        },
       },
       options.externalOnly ? options.sharedThreads : undefined,
     );
@@ -1115,6 +1121,10 @@ export class AppServerHost {
         this.#rollbackExternalThread(request, derived, rollback),
       listExternalHistory: (request, thread, params, historyFresh) =>
         this.#listExternalHistory(request, thread, params, historyFresh),
+      listQueuedOfficialHistory: (request, params) =>
+        this.#listQueuedOfficialHistory(request, params),
+      readOrResumeQueuedOfficialThread: (request, params) =>
+        this.#readOrResumeQueuedOfficialThread(request, params),
       startExternalTurn: (request, thread) => this.#startExternalTurn(request, thread),
       steerExternalTurn: (request, thread) => this.#steerExternalTurn(request, thread),
       interruptExternalTurn: (request, thread, requestedTurnId) =>
@@ -1283,7 +1293,8 @@ export class AppServerHost {
           .catch((error) => this.#diagnose(error));
       }
     } catch (error) {
-      this.#diagnose(`Host initialization failed: ${errorMessage(error)}`);
+      const failure = `Host initialization failed: ${errorMessage(error)}`;
+      this.#diagnose(failure);
       this.#pluginLoadAbort.abort();
       await this.#pluginLoading;
       await this.#closeAdapters();
@@ -1295,7 +1306,11 @@ export class AppServerHost {
         await this.#repository.close().catch((closeError) => this.#diagnose(closeError));
       }
       await this.#closeOfficialRuntime();
-      return this.#closeRequested ? 0 : 1;
+      if (this.#closeRequested) return 0;
+      // Desktop shows only the last stderr line of a failed app-server. Cleanup above may
+      // report secondary errors, so restate the cause that ends this Runtime.
+      this.#diagnose(`exiting: ${failure}`);
+      return 1;
     }
     try {
       if (!this.#options.externalOnly) await this.#officialRuntime.initialize();
@@ -1777,6 +1792,10 @@ export class AppServerHost {
       try {
         const reply = await this.#options.sharedThreads.route(request);
         if (reply) {
+          if (request.method === "thread/archive") {
+            const archivedId = routingParams(request).threadId;
+            if (typeof archivedId === "string") this.#options.onThreadArchived?.(archivedId);
+          }
           await this.#writer.json(reply);
           return;
         }
@@ -1835,6 +1854,20 @@ export class AppServerHost {
       }
       return;
     }
+    if (request.method === DELEGATION_CAPACITY_SETTINGS_METHOD) {
+      const parsed = delegationCapacitySettingsSchema.safeParse(request.params);
+      if (!this.#delegationCapacity) {
+        await this.#writer.json(
+          rpcError(request, -32601, "Delegation capacity is unavailable on this Host"),
+        );
+      } else if (!parsed.success) {
+        await this.#writer.json(rpcError(request, -32602, "Invalid delegation capacity settings"));
+      } else {
+        const settings = this.#delegationCapacity.configure(parsed.data);
+        await this.#writer.json(rpcEnvelope(request, { result: settings }));
+      }
+      return;
+    }
     if (await this.#desktopControl.handle(request)) return;
     if (
       request.method === "codexhost/thread/pins/list" ||
@@ -1881,10 +1914,6 @@ export class AppServerHost {
       }
       return;
     }
-    if (request.method === THREAD_RELATION_LIST_METHOD) {
-      await this.#listThreadRelations(request);
-      return;
-    }
     if (request.method === DELEGATION_CAPACITY_SETTINGS_METHOD) {
       const parsed = delegationCapacitySettingsSchema.safeParse(request.params);
       if (!this.#delegationCapacity) {
@@ -1899,15 +1928,9 @@ export class AppServerHost {
       }
       return;
     }
-    if (request.method === "thread/archive") {
-      const threadId = routingParams(request).threadId;
-      if (typeof threadId === "string") this.#options.onThreadArchived?.(threadId);
-    }
-    if (request.method === "thread/turns/list" || request.method === "thread/items/list") {
-      if (await this.#listQueuedOfficialHistory(request, routingParams(request))) return;
-    }
-    if (request.method === "thread/resume" || (request.method === "thread/read" && routingParams(request).includeTurns === true)) {
-      if (await this.#readOrResumeQueuedOfficialThread(request, routingParams(request))) return;
+    if (request.method === THREAD_RELATION_LIST_METHOD) {
+      await this.#listThreadRelations(request);
+      return;
     }
     if (await this.#threadRouting.handle(request, frame, origin)) return;
     await this.#forwardOfficialRequest(
@@ -2292,8 +2315,14 @@ export class AppServerHost {
     return [...external, ...native];
   }
 
+  #sharedDelegation(): DelegationControlRegistration | undefined {
+    const value = this.#options.sharedDelegation;
+    return typeof value === "function" ? value() : value;
+  }
+
   async #canHandleDelegationStart(input: DelegationStartInput): Promise<boolean> {
     if (input.parentThreadId) return this.#ownsDelegationThread(input.parentThreadId);
+    if (await this.#sharedDelegation()?.canHandleStart(input)) return false;
     const externalActive = this.#externalRuntime.values().some((thread) => thread.running);
     return externalActive || this.#activeOfficialTurns.size > 0;
   }
@@ -2312,7 +2341,7 @@ export class AppServerHost {
   }
 
   async #ownsDelegationThread(threadId: string): Promise<boolean> {
-    if (await this.#options.sharedDelegation?.ownsThread(threadId)) return false;
+    if (await this.#sharedDelegation()?.ownsThread(threadId)) return false;
     if (
       this.#options.sharedThreads?.options.delegateCreates &&
       (await this.#options.sharedThreads.ownership([threadId])).has(threadId)
@@ -3982,10 +4011,19 @@ export class AppServerHost {
       return;
     }
     try {
+      const unknownThreadIds: string[] = [];
+      for (const threadId of params.data.threadIds) {
+        if (!(await this.#repository.find(threadId))) {
+          unknownThreadIds.push(threadId);
+        }
+      }
       const result = await listThreadRelations({
         threadIds: params.data.threadIds,
         source: this.#repository,
-        sharedThreadIds: await this.#options.sharedThreads?.ownership(params.data.threadIds),
+        sharedThreadIds:
+          unknownThreadIds.length > 0
+            ? await this.#options.sharedThreads?.ownership(unknownThreadIds)
+            : undefined,
       });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch {
@@ -6209,7 +6247,13 @@ export class AppServerHost {
       if (this.#externalQueue.pause(thread.id, "outcome-unknown"))
         await this.#publishExternalQueue(thread.id);
       this.#diagnose(`${thread.harnessId} Harness Session faulted: ${event.error.message}`);
-      // Idle Threads must not keep a dead Session; the next open restores from disk.
+      // The Session can fault without a terminal Turn. Settle open Turns from the
+      // projector, then drop the idle Session so the next request restores it.
+      for (const { projector } of [...thread.projectedTurns.values()]) {
+        for (const failure of projector.failureEvents(event.error)) {
+          await this.#projectHarnessOutput(thread, { kind: "event", event: failure });
+        }
+      }
       if (
         !thread.running &&
         !thread.activeTurnId &&

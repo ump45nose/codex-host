@@ -63,13 +63,11 @@ import {
   DELEGATION_RUNTIME_TOKEN_ENV,
 } from "./delegation-types.js";
 import { createProductionExternalThreadStore } from "./external-thread-repository.js";
-import { SharedThreadOwner } from "./shared-thread-owner.js";
 import { startClientChannelServer } from "./client-channel-server.js";
 import {
-  SharedThreadBridge,
-  connectSharedThreads,
-  sharedThreadSocketPath,
-} from "./shared-thread-bridge.js";
+  acquireSharedExternalThreadRuntime,
+  type SharedExternalThreadRuntime,
+} from "./shared-thread-coordinator.js";
 import {
   createRemoteControlAppServerPlan,
   publishRemoteControlAppServerDescriptor,
@@ -82,6 +80,7 @@ import {
   remoteAppServerSocketPath,
   remoteUnixListenerUrl,
 } from "./remote-app-server.js";
+import { SharedThreadBridge } from "./shared-thread-bridge.js";
 import { watchRemoteListenerSupervisor } from "./remote-listener-supervisor.js";
 import { remoteOfficialAppServerSocketPath } from "./remote-official-app-server.js";
 import { startConsoleControlServer } from "./console-control-server.js";
@@ -342,7 +341,10 @@ async function startExternalClients(
         "/mcp": externalClientMcp(route),
       },
       ...(options.network === "local"
-        ? { descriptorPath: externalClientDescriptorPath(environment), cliCredentials: { path: cliCredentialsPath(environment), token: cliToken } }
+        ? {
+            descriptorPath: externalClientDescriptorPath(environment),
+            cliCredentials: { path: cliCredentialsPath(environment), token: cliToken },
+          }
         : {}),
       diagnose,
     });
@@ -502,19 +504,55 @@ export async function runHostRuntime(input: {
           accountControl: official.accountControl,
         };
         if (!remoteControlPlan) {
+          let sharedRuntime: SharedExternalThreadRuntime | undefined;
           try {
+            if (process.platform !== "win32") {
+              sharedRuntime = await acquireSharedExternalThreadRuntime({
+                environment: delegationEnvironment,
+                ownerRole: "local Host Runtime",
+                diagnosticOutput: process.stderr,
+                registerCatalogDelegation: (api) =>
+                  registry.register(api, { harnessCatalog: true }),
+                createExternalHost: ({
+                  mappingStore: externalMappingStore,
+                  desktopInput,
+                  desktopOutput,
+                  onDelegationApi: onExternalDelegationApi,
+                }) =>
+                  new AppServerHost({
+                    ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
+                    modelPrices,
+                    usageStatistics,
+                    stockCodexPath,
+                    arguments: [],
+                    environment: delegationEnvironment,
+                    desktopInput,
+                    desktopOutput,
+                    diagnosticOutput: process.stderr,
+                    externalOnly: true,
+                    ...installedHarnessPluginOptions(
+                      delegationEnvironment,
+                      false,
+                      input.hostRuntimeUrl,
+                    ),
+                    mappingStore: externalMappingStore,
+                    closeMappingStoreOnExit: false,
+                    ...shared,
+                    onDelegationApi: onExternalDelegationApi,
+                    onThreadArchived,
+                  }),
+              });
+            }
             const host = new AppServerHost({
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
               modelPrices,
               usageStatistics,
-              ...(process.platform !== "win32"
+              ...(sharedRuntime
                 ? {
-                    sharedThreads: new SharedThreadBridge({
-                      connect: () => connectSharedThreads(delegationEnvironment),
-                      delegateCreates: false,
-                      diagnose: (error) =>
-                        process.stderr.write(`codexhost shared Threads: ${String(error)}\n`),
-                    }),
+                    sharedDelegation: () => sharedRuntime?.sharedDelegation,
+                    sharedThreads: sharedRuntime.createBridge(process.stderr),
+                    mappingStore: sharedRuntime.mappingStore,
+                    closeMappingStoreOnExit: false,
                   }
                 : {}),
               stockCodexPath,
@@ -534,7 +572,11 @@ export async function runHostRuntime(input: {
               delegationEnvironment,
             );
           } finally {
-            await official.close();
+            try {
+              await sharedRuntime?.close();
+            } finally {
+              await official.close();
+            }
           }
         }
         const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
@@ -552,6 +594,7 @@ export async function runHostRuntime(input: {
             ...(consoleOpener ? { consoleOpener } : {}),
             ...(webOpener ? { webOpener } : {}),
           };
+          let catalogDelegation: DelegationControlRegistration | undefined;
           const host = new AppServerHost({
             ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
             modelPrices,
@@ -559,7 +602,10 @@ export async function runHostRuntime(input: {
             ...common,
             arguments: input.arguments,
             // Every Remote Control client shares this backend and Mapping Store.
-            onDelegationApi: (api) => registry.register(api, { harnessCatalog: true }),
+            onDelegationApi: (api) => {
+              catalogDelegation = api;
+              return registry.register(api, { harnessCatalog: true });
+            },
             onThreadArchived,
           });
           listener = createRemoteAppServerWebSocketListener({
@@ -571,11 +617,12 @@ export async function runHostRuntime(input: {
                 modelPrices,
                 usageStatistics,
                 ...common,
+                sharedDelegation: () => catalogDelegation,
                 arguments: [],
                 desktopInput,
                 desktopOutput,
                 diagnosticOutput,
-                onDelegationApi: (api) => registry.register(api),
+                onDelegationApi: (api) => registry.register(api, { sharedBackend: true }),
                 onThreadArchived,
               }),
           });
@@ -637,78 +684,10 @@ export async function runHostRuntime(input: {
         revision: officialRuntimeScope.gate.revision,
         accounts: [{ accountId: "remote-native", label: "Remote native Codex Account" }],
       }));
-      const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
-      await mappingStore.initialize();
-      const sharedOwner = new SharedThreadOwner();
-      let sharedDelegation: DelegationControlRegistration | undefined;
-      const externalHost = new AppServerHost({
-        ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
-        modelPrices,
-        usageStatistics,
-        stockCodexPath,
-        arguments: [],
-        environment: delegationEnvironment,
-        desktopInput: sharedOwner.input,
-        desktopOutput: sharedOwner.output,
-        diagnosticOutput: process.stderr,
-        externalOnly: true,
-        sharedThreads: createRemoteSharedExternalBridge(
-          maintenanceRuntimePath,
-          delegationEnvironment,
-          stockCodexPath,
-        ),
-        ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
-        mappingStore,
-        closeMappingStoreOnExit: false,
-        officialRuntimeScope,
-        accountControl,
-        onDelegationApi: (api) => {
-          sharedDelegation = api;
-          return registry.register(api, { harnessCatalog: true });
-        },
-      });
-      const externalRunning = externalHost.run();
-      const sharedListener = createRemoteAppServerWebSocketListener({
-        socketPath: sharedThreadSocketPath(delegationEnvironment),
-        diagnosticOutput: process.stderr,
-        createSession: (streams) => sharedOwner.createSession(streams),
-      });
-      const listener = createRemoteAppServerWebSocketListener({
-        socketPath,
-        diagnosticOutput: process.stderr,
-        createSession: ({ input: desktopInput, output: desktopOutput, diagnosticOutput }) => {
-          return new AppServerHost({
-            ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
-            modelPrices,
-            usageStatistics,
-            ...(sharedDelegation ? { sharedDelegation } : {}),
-            sharedThreads: new SharedThreadBridge({
-              connect: async () => sharedOwner.connect(),
-              delegateCreates: true,
-              diagnose: (error) =>
-                diagnosticOutput.write(`codexhost shared Threads: ${String(error)}\n`),
-            }),
-            stockCodexPath,
-            arguments: [],
-            environment: delegationEnvironment,
-            desktopInput,
-            desktopOutput,
-            diagnosticOutput,
-            ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
-            mappingStore,
-            closeMappingStoreOnExit: false,
-            officialRuntimeScope,
-            accountControl,
-            onDelegationApi: (api) => registry.register(api),
-            ...(updateCoordinator ? { updateCoordinator } : {}),
-          });
-        },
-      });
-
+      let listener: ReturnType<typeof createRemoteAppServerWebSocketListener> | undefined;
       const stop = (): void => {
-        void listener.close();
+        void listener?.close();
       };
-      void externalRunning.then(stop, stop);
       // Desktop's reconnect cleanup can kill the Shim supervisor and stock Codex
       // while this retitled listener survives. An unsupervised listener must
       // close normally and release its socket instead of lingering or crashing
@@ -724,11 +703,69 @@ export async function runHostRuntime(input: {
         // startup means the supervisor is already gone.
         supervisorRequired: true,
       });
+      let sharedRuntime: SharedExternalThreadRuntime | undefined;
       try {
         await prepareRemoteAppServerSocketDirectory(socketPath);
-        await prepareRemoteAppServerSocketDirectory(sharedThreadSocketPath(delegationEnvironment));
         // Also covers a loss reported while the directory was being prepared.
         if (supervisorLost) return 0;
+        sharedRuntime = await acquireSharedExternalThreadRuntime({
+          environment: delegationEnvironment,
+          ownerRole: "remote app-server listener",
+          diagnosticOutput: process.stderr,
+          onFatalError: stop,
+          registerCatalogDelegation: (api) => registry.register(api, { harnessCatalog: true }),
+          createExternalHost: ({
+            mappingStore: externalMappingStore,
+            desktopInput,
+            desktopOutput,
+            onDelegationApi: onExternalDelegationApi,
+          }) =>
+            new AppServerHost({
+              ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
+              modelPrices,
+              usageStatistics,
+              stockCodexPath,
+              arguments: [],
+              environment: delegationEnvironment,
+              desktopInput,
+              desktopOutput,
+              diagnosticOutput: process.stderr,
+              externalOnly: true,
+              ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
+              mappingStore: externalMappingStore,
+              closeMappingStoreOnExit: false,
+              officialRuntimeScope,
+              accountControl,
+              onDelegationApi: onExternalDelegationApi,
+            }),
+        });
+        const activeSharedRuntime = sharedRuntime;
+        listener = createRemoteAppServerWebSocketListener({
+          socketPath,
+          diagnosticOutput: process.stderr,
+          createSession: ({ input: desktopInput, output: desktopOutput, diagnosticOutput }) => {
+            return new AppServerHost({
+              ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
+              modelPrices,
+              usageStatistics,
+              sharedDelegation: () => activeSharedRuntime.sharedDelegation,
+              sharedThreads: activeSharedRuntime.createBridge(diagnosticOutput),
+              stockCodexPath,
+              arguments: [],
+              environment: delegationEnvironment,
+              desktopInput,
+              desktopOutput,
+              diagnosticOutput,
+              ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
+              mappingStore: activeSharedRuntime.mappingStore,
+              closeMappingStoreOnExit: false,
+              officialRuntimeScope,
+              accountControl,
+              onDelegationApi: (api) => registry.register(api, { sharedBackend: true }),
+              ...(updateCoordinator ? { updateCoordinator } : {}),
+            });
+          },
+        });
         // Native Codex failure never closes this listener: external Harness
         // sessions stay alive while the Scope restarts the official generation.
         await officialRuntimeScope.start().catch(() => {
@@ -736,7 +773,6 @@ export async function runHostRuntime(input: {
         });
         if (supervisorLost) return 0;
         await listener.listen();
-        await sharedListener.listen();
         process.title = MANAGED_REMOTE_APP_SERVER_PROCESS_TITLE;
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
@@ -747,20 +783,12 @@ export async function runHostRuntime(input: {
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
         try {
-          await listener.close();
+          await listener?.close();
         } finally {
           try {
-            await sharedListener.close();
-            externalHost.close();
-            sharedOwner.close();
-            await externalRunning;
-            sharedOwner.output.end();
+            await sharedRuntime?.close();
           } finally {
-            try {
-              await officialRuntimeScope.close();
-            } finally {
-              await mappingStore.close();
-            }
+            await officialRuntimeScope.close();
           }
         }
       }

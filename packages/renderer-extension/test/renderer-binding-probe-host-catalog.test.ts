@@ -12,8 +12,11 @@ import {
   rendererModelSelectionFailed,
   type RendererModelControlView,
 } from "../src/renderer-model-picker.js";
+import { isListedConnectionHost } from "../src/renderer-binding-probe.js";
 import type { RendererRequestOptions } from "../src/renderer-request-sender.js";
 import type { installRendererSidebarAgentIcons } from "../src/renderer-sidebar-agent-icons.js";
+import type * as RendererSidebarStash from "../src/renderer-sidebar-stash.js";
+import type * as RendererTopTabs from "../src/renderer-top-tabs.js";
 import type { RendererConnectionDiagnostics } from "../src/settings/connections-page.js";
 import type { RendererSessionImportClient } from "../src/settings/session-import-page.js";
 import type * as VersionedRendererAdapter from "../src/versioned-renderer-adapter.js";
@@ -34,6 +37,14 @@ const testState = vi.hoisted(() => ({
   prewarmClears: 0,
   notifyMutations: null as null | ((records: MutationRecord[]) => void),
   animationFrames: [] as FrameRequestCallback[],
+}));
+
+vi.mock("../src/renderer-sidebar-overlay.js", () => ({
+  installRendererSidebarOverlay: () => ({ dispose: vi.fn() }),
+}));
+vi.mock("../src/renderer-top-tabs.js", () => ({
+  installRendererTopTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  collectSidebarThreads: () => new Map(),
 }));
 
 vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
@@ -116,6 +127,20 @@ vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
 
 vi.mock("../src/renderer-sidebar-thread-tree.js", () => ({
   installRendererSidebarThreadTree: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-overlay/index.js", () => ({
+  installRendererSidebarOverlay: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-stash.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererSidebarStash>()),
+  installRendererSidebarStash: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-top-tabs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererTopTabs>()),
+  installRendererTopTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
 vi.mock("../src/renderer-settings-lifecycle.js", () => ({
@@ -322,7 +347,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       undefined,
       {
         currentHostId: () => "local",
-        knownHostIds: () => ["local", "remote"],
+        knownHostIds: () => ["local", "remote-ssh:work"],
         clientForHost: (host: string) => (host === "local" ? local : remote),
       } as never,
     );
@@ -331,10 +356,49 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       expect(remote.listHarnessPlugins).not.toHaveBeenCalled();
       const getPlugins = testState.sidebarOptions?.getPlugins;
       assert(getPlugins);
-      expect(getPlugins("remote")).toBeUndefined();
-      await vi.waitFor(() => expect(getPlugins("remote")).toEqual([plugin]));
+      expect(getPlugins("remote-ssh:work")).toBeUndefined();
+      await vi.waitFor(() => expect(getPlugins("remote-ssh:work")).toEqual([plugin]));
       expect(remote.listHarnessPlugins).toHaveBeenCalledOnce();
       expect(getPlugins("local")).toEqual([]);
+    } finally {
+      probe.dispose();
+    }
+  });
+
+  it("omits Desktop-internal Hosts from the connection list", async () => {
+    installFakeBrowser();
+    const listed = vi.fn(async () => ({ plugins: [] }));
+    const hidden = vi.fn(async () => ({ plugins: [] }));
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({});
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => "local",
+        knownHostIds: () => [
+          "local",
+          "durable",
+          "env_e_6ac33e9d40788325a48a8c0aa62bc454",
+          "remote-ssh:work",
+        ],
+        clientForHost: (hostId: string) =>
+          isListedConnectionHost(hostId)
+            ? { listHarnessPlugins: listed }
+            : { listHarnessPlugins: hidden },
+      } as never,
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(
+          testState
+            .getConnectionDiagnostics?.()
+            ?.snapshot()
+            .hosts.map(({ hostId }) => hostId),
+        ).toEqual(["local", "remote-ssh:work"]);
+      });
+      expect(hidden).not.toHaveBeenCalled();
     } finally {
       probe.dispose();
     }
@@ -375,7 +439,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       undefined,
       {
         currentHostId: () => "local",
-        knownHostIds: () => ["local", "remote"],
+        knownHostIds: () => ["local", "remote-ssh:work"],
         clientForHost: (host: string) => (host === "local" ? local : remote),
       } as never,
     );
@@ -383,7 +447,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       const getPlugins = testState.sidebarOptions?.getPlugins;
       assert(getPlugins);
       await vi.waitFor(() =>
-        expect(getPlugins("remote")).toEqual([
+        expect(getPlugins("remote-ssh:work")).toEqual([
           { ...remotePlugin, iconStyle: localPlugin.iconStyle },
         ]),
       );
@@ -391,7 +455,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         testState
           .getConnectionDiagnostics?.()
           ?.snapshot()
-          .hosts.find(({ hostId }) => hostId === "remote")?.agents[0]?.plugin,
+          .hosts.find(({ hostId }) => hostId === "remote-ssh:work")?.agents[0]?.plugin,
       ).toEqual({
         ...remotePlugin,
         iconStyle: localPlugin.iconStyle,
@@ -427,7 +491,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       undefined,
       {
         currentHostId: () => "local",
-        knownHostIds: () => ["local", "remote"],
+        knownHostIds: () => ["local", "remote-ssh:work"],
         clientForHost: (host: string) => (host === "local" ? local : remote),
         subscribeThreadUsage: () => () => undefined,
       } as never,
@@ -440,7 +504,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       expect(hosts.find(({ hostId }) => hostId === "local")?.agents).toMatchObject([
         { agent: "unseen-local", plugin: { name: "Local plugin" }, availability: "ready" },
       ]);
-      expect(hosts.find(({ hostId }) => hostId === "remote")?.agents).toMatchObject([
+      expect(hosts.find(({ hostId }) => hostId === "remote-ssh:work")?.agents).toMatchObject([
         { agent: "unseen-remote", plugin: { name: "Remote plugin" }, availability: "ready" },
       ]);
       expect(local.inspectHarness.mock.calls.flat()).not.toContainEqual(
@@ -792,11 +856,13 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     for (let index = 0; index < 10; index += 1) reconcile();
     expect(testState.sidebarRefresh).not.toHaveBeenCalled();
 
-    hostId = "remote";
+    hostId = "remote-ssh:work";
     reconcile();
     expect(testState.sidebarRefresh).toHaveBeenCalled();
     await vi.waitFor(() =>
-      expect(getAgent({ hostId: "remote", threadId: "thread-a", draftId: null })).toBe("codex"),
+      expect(getAgent({ hostId: "remote-ssh:work", threadId: "thread-a", draftId: null })).toBe(
+        "codex",
+      ),
     );
   });
 
@@ -1334,7 +1400,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     probe.dispose();
   });
 
-  it.each(["local", "remote"])(
+  it.each(["local", "remote-ssh:work"])(
     "keeps %s Harness operations isolated with an ambiguous global route",
     async (ownerHostId) => {
       installFakeBrowser();
@@ -1393,14 +1459,14 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         } as never,
       );
       await vi.waitFor(() => expect(testState.renderedModelViews.at(-1)?.status).toBe("ready"));
-      for (const hostId of [null, "local", "remote", "local"]) {
+      for (const hostId of [null, "local", "remote-ssh:work", "local"]) {
         globalHostId = hostId;
         window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
         await Promise.resolve();
       }
       await testState
         .getConnectionDiagnostics?.()
-        ?.refresh(ownerHostId === "local" ? "remote" : "local");
+        ?.refresh(ownerHostId === "local" ? "remote-ssh:work" : "local");
       testState.selectModel?.("claude-model-v1.b3B1cw");
       await vi.waitFor(() => expect(local.selectThreadModel).toHaveBeenCalled());
       await vi.waitFor(() => expect(testState.renderedModelViews.at(-1)?.status).toBe("ready"));
@@ -1419,7 +1485,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
 
   it("does not let a stale remote Host response mark a locked Claude Model unavailable", async () => {
     installFakeBrowser();
-    let currentHostId = "host-a";
+    let currentHostId = "remote-a";
     let resolveCatalog!: (value: ReturnType<typeof readyInspection>) => void;
     const pendingCatalog = new Promise<ReturnType<typeof readyInspection>>((resolve) => {
       resolveCatalog = resolve;
@@ -1454,7 +1520,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     };
     const modelControl = {
       currentHostId: () => currentHostId,
-      clientForHost: vi.fn((hostId: string) => (hostId === "host-a" ? hostA : genericHostB)),
+      clientForHost: vi.fn((hostId: string) => (hostId === "remote-a" ? hostA : genericHostB)),
       inspectHarness: genericHostB.inspectHarness,
       inspectThread: vi.fn(),
       inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
@@ -1474,13 +1540,13 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     );
 
     await vi.waitFor(() => expect(claudeInspections).toBe(2));
-    currentHostId = "host-b";
+    currentHostId = "remote-b";
     resolveCatalog(readyInspection("claude-model-v1.c29ubmV0"));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(hostA.inspectThread).toHaveBeenCalledWith({ threadId: "thread-a" });
-    expect(modelControl.clientForHost).toHaveBeenCalledWith("host-a");
+    expect(modelControl.clientForHost).toHaveBeenCalledWith("remote-a");
     expect(genericHostB.inspectHarness).not.toHaveBeenCalledWith({ harnessId: "claude-code" });
     expect(testState.renderedModelViews.at(-1)).not.toMatchObject({ status: "error" });
     expect(testState.renderedModelViews).not.toContainEqual(
@@ -1528,7 +1594,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     };
     let selectedHost: typeof originalHost | typeof replacementHost = originalHost;
     const modelControl = {
-      currentHostId: () => "host-a",
+      currentHostId: () => "remote-a",
       clientForHost: vi.fn(() => selectedHost),
       inspectHarness: originalHost.inspectHarness,
       inspectThread: vi.fn(),
@@ -1570,7 +1636,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       inspectHarness: vi.fn(async () => readyInspection()),
     };
     const modelControl = {
-      currentHostId: () => "host-a",
+      currentHostId: () => "remote-a",
       clientForHost: vi.fn(() => hostA),
       inspectHarness: hostA.inspectHarness,
       inspectThread: vi.fn(),
@@ -1636,7 +1702,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       }),
     );
 
-    hostId = "remote";
+    hostId = "remote-ssh:work";
     window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
     await vi.waitFor(() =>
       expect(testState.renderedModelViews.at(-1)).toMatchObject({
@@ -1683,7 +1749,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     const applicationsBeforeSwitch = applyAgent.mock.calls.length;
     const clearsBeforeSwitch = testState.prewarmClears;
 
-    hostId = "remote";
+    hostId = "remote-ssh:work";
     window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
 
     await vi.waitFor(() => expect(remote.inspectHarness).toHaveBeenCalled());
@@ -1720,8 +1786,8 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     };
     const local = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
     const modelControl = {
-      currentHostId: () => "host-a",
-      clientForHost: vi.fn((hostId: string) => (hostId === "host-a" ? hostA : local)),
+      currentHostId: () => "remote-a",
+      clientForHost: vi.fn((hostId: string) => (hostId === "remote-a" ? hostA : local)),
       inspectHarness: local.inspectHarness,
       inspectThread: vi.fn(),
       inspectThreadCommands: vi.fn(async () => ({ commands: [] })),

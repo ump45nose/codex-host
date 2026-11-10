@@ -8,8 +8,6 @@ import {
   DelegationControlError,
   type DelegationControlApi,
   type DelegationControlRegistration,
-  type DelegationStartIdentity,
-  type DelegationStartInput,
 } from "./delegation-types.js";
 
 export const SHARED_DELEGATION_METHOD = "codexhost/shared-threads/delegation";
@@ -36,12 +34,10 @@ export function sharedDelegationRegistration(
   async function call<K extends Operation>(
     operation: K,
     input: Parameters<DelegationControlApi[K]>[0],
-    admitted?: DelegationStartIdentity,
   ): Promise<Awaited<ReturnType<DelegationControlApi[K]>>> {
     const response = await owner.request(SHARED_DELEGATION_METHOD, {
       operation,
       input: jsonValueSchema.parse(input ?? {}),
-      ...(admitted ? { admitted: jsonValueSchema.parse(admitted) } : {}),
     });
     if (response.error)
       throw new DelegationControlError(
@@ -127,7 +123,7 @@ export function sharedDelegationRegistration(
       input.harnessId === "codex" ||
       (input.parentThreadId !== undefined && (await local.ownsThread(input.parentThreadId)))
         ? local.start(input, admitted)
-        : call("start", input, admitted),
+        : call("start", input),
     read: (input) => thread("read", input),
     wait: async (input) => {
       if (!(await owner.ownership([input.threadId])).has(input.threadId)) return local.wait(input);
@@ -154,7 +150,7 @@ export function sharedDelegationRegistration(
 }
 
 /** Private, authenticated owner transport; coordinator methods validate their inputs. */
-export async function dispatchSharedDelegation(api: DelegationControlRegistration, params: JsonObject) {
+export async function dispatchSharedDelegation(api: DelegationControlApi, params: JsonObject) {
   if (
     !operations.includes(params.operation as Operation) ||
     !params.input ||
@@ -165,17 +161,6 @@ export async function dispatchSharedDelegation(api: DelegationControlRegistratio
   }
   try {
     const operation = params.operation as Operation;
-    if (operation === "start" && params.admitted !== undefined) {
-      const admitted = params.admitted;
-      if (!admitted || typeof admitted !== "object" || Array.isArray(admitted) ||
-          typeof admitted.delegationId !== "string" || typeof admitted.threadId !== "string" ||
-          typeof admitted.turnId !== "string") {
-        return { error: { code: "INVALID_ARGUMENT", message: "Invalid shared delegation identity" } };
-      }
-      return { value: jsonValueSchema.parse(await api.start(params.input as unknown as DelegationStartInput, {
-        delegationId: admitted.delegationId, threadId: admitted.threadId, turnId: admitted.turnId,
-      })) };
-    }
     const handler = api[operation] as (input: unknown) => Promise<unknown>;
     return { value: jsonValueSchema.parse(await handler(params.input)) };
   } catch (error) {

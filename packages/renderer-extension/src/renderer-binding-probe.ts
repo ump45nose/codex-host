@@ -231,6 +231,11 @@ interface HostHarnessAvailabilityState {
 
 const rendererUsageRefreshDelays = [250, 500, 1000, 2000, 4000, 8000] as const;
 
+/** Local and remote connections. Desktop-internal ids such as `durable` or `env_e_` are not Hosts. */
+export function isListedConnectionHost(hostId: string): boolean {
+  return hostId === "local" || /^(?:remote-|remote:)/u.test(hostId);
+}
+
 export function refreshConnectionHosts(
   hostIds: Iterable<string>,
   refreshHost: (hostId: string) => Promise<void>,
@@ -2849,7 +2854,8 @@ export function installRendererBindingProbe(
     // Settings lists observed Hosts even when multiple Composers make the
     // active route ambiguous. Requests still resolve each Host independently.
     for (const hostId of modelControl?.knownHostIds?.() ?? []) {
-      if (hostId !== "durable") hostHarnessAvailabilityState(hostId);
+      if (!isListedConnectionHost(hostId)) continue;
+      hostHarnessAvailabilityState(hostId);
     }
     // Hidden/native Composers can belong to a different Host. Never rebind
     // every Thread to the globally selected Host when navigating between them.
@@ -2931,7 +2937,7 @@ export function installRendererBindingProbe(
       const hostIds = [
         "local",
         ...[...harnessAvailabilityByHost.keys()]
-          .filter((hostId) => hostId !== "local" && hostId !== "durable")
+          .filter((hostId) => hostId !== "local" && isListedConnectionHost(hostId))
           .sort(),
       ];
       return {
@@ -2964,7 +2970,7 @@ export function installRendererBindingProbe(
       }
       reconcileHarnessAvailabilityHost();
       return refreshConnectionHosts(
-        [...harnessAvailabilityByHost.keys()].filter((target) => target !== "durable"),
+        [...harnessAvailabilityByHost.keys()].filter(isListedConnectionHost),
         (target) => refreshHarnessAvailabilityForHost(target, true, false, true),
       );
     },
@@ -3388,7 +3394,12 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (mounted) pendingDefaultPreferences.set(controller.get(mounted.composer).composerId, false);
     if (mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) return;
-    if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
+    if (controller.isSwitching(composer)) {
+      blockEvent(event);
+      return;
+    }
+    // Keep draft edits available while the Host request client is being rebound.
+    applyComposerAgent(composer);
   };
   const onSubmit = (event: Event): void => {
     const element = eventElement(event.target);
@@ -3415,7 +3426,7 @@ export function installRendererBindingProbe(
       return;
     }
     if (composer && !applyComposerAgent(composer)) {
-      blockEvent(event);
+      if (isComposerSubmissionKey(event)) blockEvent(event);
       return;
     }
     if (!isComposerSubmissionKey(event) || !composer) return;
@@ -3664,17 +3675,12 @@ export function installRendererBindingProbe(
   const api: RendererBindingProbeApi = {
     remoteConnections: (request) => handleRemoteConnectionsRequest(remoteConnections, request),
     currentThreadId() {
-      const connected = connectedComposers();
-      const current = currentThreadFromComposers(
-        connected.map((mounted) => ({
+      return currentThreadFromComposers(
+        connectedComposers().map((mounted) => ({
           shown: isShown(mounted),
           threadId: threadIdFromComposerModelTarget(mounted.modelTarget) ?? null,
         })),
       );
-      if (current) return current;
-      return connected.length === 1 && connected[0] && !isShown(connected[0])
-        ? (threadIdFromComposerModelTarget(connected[0].modelTarget) ?? null)
-        : null;
     },
     status() {
       const selections = connectedComposers().map((mounted) => ({

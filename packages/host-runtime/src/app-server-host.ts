@@ -6177,7 +6177,13 @@ export class AppServerHost {
       thread.stateObserver.fault(new Error(event.error.message));
       this.#externalRuntime.markSessionUnavailable(thread);
       this.#diagnose(`${thread.harnessId} Harness Session faulted: ${event.error.message}`);
-      // Idle Threads must not keep a dead Session; the next open restores from disk.
+      // The Session can fault without a terminal Turn. Settle open Turns from the
+      // projector, then drop the idle Session so the next request restores it.
+      for (const { projector } of [...thread.projectedTurns.values()]) {
+        for (const failure of projector.failureEvents(event.error)) {
+          await this.#projectHarnessOutput(thread, { kind: "event", event: failure });
+        }
+      }
       if (
         !thread.running &&
         !thread.activeTurnId &&
@@ -6223,6 +6229,8 @@ export class AppServerHost {
     if (event.type === "turn.completed" && thread.pendingSteerProjections.size > 0) {
       await Promise.allSettled([...thread.pendingSteerProjections]);
     }
+    // Session close can repeat a Turn that this fault already settled.
+    if (!thread.projectedTurns.has(event.turnId) && thread.sessionUnavailable) return;
     const projection = this.#projectedTurn(thread, event.turnId);
     await this.#waitForTurnResponse(thread, event.turnId);
     if (

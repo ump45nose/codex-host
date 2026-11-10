@@ -833,7 +833,13 @@ function catalogWithConfirmedModel(
     }
     return model;
   });
-  return replaced ? { ...catalog, models } : catalog;
+  return replaced
+    ? {
+        ...catalog,
+        models,
+        defaultModel: catalog.defaultModel?.id === requested.id ? effective : catalog.defaultModel,
+      }
+    : catalog;
 }
 
 export function installRendererBindingProbe(
@@ -1212,7 +1218,6 @@ export function installRendererBindingProbe(
       }),
     );
     // Auto-unstash for Codex and Harness sessions alike: stash listens on this event.
-    const mounted = mountedByComposer.get(composer);
     const submittedThreadId = mounted ? threadIdFromComposerModelTarget(mounted.modelTarget) : null;
     emitCodexHostUserMessage(submittedThreadId, window);
   };

@@ -62,7 +62,6 @@ import {
   DELEGATION_RUNTIME_TOKEN_ENV,
 } from "./delegation-types.js";
 import { createProductionExternalThreadStore } from "./external-thread-repository.js";
-import { SharedThreadOwner } from "./shared-thread-owner.js";
 import { startClientChannelServer } from "./client-channel-server.js";
 import {
   acquireSharedExternalThreadRuntime,

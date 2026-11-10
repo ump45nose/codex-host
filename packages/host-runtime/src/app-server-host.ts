@@ -47,7 +47,6 @@ import {
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
-  THREAD_MANUAL_COMPACTION_STARTED_METHOD,
   delegationCapacitySettingsSchema,
 } from "@codexhost/shared-contracts";
 import { HarnessDisplaySettingsStore } from "./harness-display-settings.js";
@@ -285,7 +284,13 @@ import {
 } from "./external-turn-projection.js";
 import { DesktopControlRequests } from "./desktop-control-requests.js";
 import { DesktopThreadRouting } from "./desktop-thread-routing.js";
-import { errorMessage, rpcEnvelope, rpcError, type HostRequestOrigin } from "./desktop-rpc.js";
+import {
+  errorMessage,
+  rpcEnvelope,
+  rpcError,
+  routingParams,
+  type HostRequestOrigin,
+} from "./desktop-rpc.js";
 import { ThreadListTiming } from "./thread-list-timing.js";
 import { allocateProjectlessWorkspace } from "./projectless-workspace.js";
 import {
@@ -1109,6 +1114,10 @@ export class AppServerHost {
         this.#rollbackExternalThread(request, derived, rollback),
       listExternalHistory: (request, thread, params, historyFresh) =>
         this.#listExternalHistory(request, thread, params, historyFresh),
+      listQueuedOfficialHistory: (request, params) =>
+        this.#listQueuedOfficialHistory(request, params),
+      readOrResumeQueuedOfficialThread: (request, params) =>
+        this.#readOrResumeQueuedOfficialThread(request, params),
       startExternalTurn: (request, thread) => this.#startExternalTurn(request, thread),
       steerExternalTurn: (request, thread) => this.#steerExternalTurn(request, thread),
       interruptExternalTurn: (request, thread, requestedTurnId) =>
@@ -2505,7 +2514,7 @@ export class AppServerHost {
                 input,
                 delegationId,
                 digest,
-                nativeModelId,
+                nativeSelection,
               });
               return { delegationId, threadId: opened.threadId, turnId: "pending" };
             },
@@ -2516,7 +2525,7 @@ export class AppServerHost {
         input,
         delegationId,
         digest,
-        nativeModelId,
+        nativeSelection,
         requestedModel,
         opened:
           opened ??
@@ -2524,7 +2533,7 @@ export class AppServerHost {
             input,
             delegationId,
             digest,
-            nativeModelId,
+            nativeSelection,
           })),
         queued: admitted !== undefined,
       });
@@ -2538,9 +2547,9 @@ export class AppServerHost {
     input: DelegationStartInput & { parentThreadId: string; cwd: string; title: string };
     delegationId: HostThreadId;
     digest: string;
-    nativeModelId: string | undefined;
+    nativeSelection: ReturnType<typeof decodeOfficialCodexModelSelection> | undefined;
   }): Promise<OpenedOfficialThread> {
-    const { input, delegationId, digest, nativeModelId } = context;
+    const { input, delegationId, digest, nativeSelection } = context;
     const started = await this.#officialRuntime.request("thread/start", {
       cwd: input.cwd,
       ...nativeSelection,
@@ -2699,13 +2708,13 @@ export class AppServerHost {
     input: DelegationStartInput & { parentThreadId: string; cwd: string };
     delegationId: HostThreadId;
     digest: string;
-    nativeModelId: string | undefined;
+    nativeSelection: ReturnType<typeof decodeOfficialCodexModelSelection> | undefined;
     requestedModel: HarnessModelRef | undefined;
     opened: OpenedOfficialThread;
     /** A queued Thread is never deleted: a user message may have reached it. */
     queued: boolean;
   }): Promise<DelegationStartResult> {
-    const { input, delegationId, digest, nativeModelId, requestedModel } = context;
+    const { input, delegationId, digest, nativeSelection, requestedModel } = context;
     const { threadId, thread, result: startedResult } = context.opened;
     this.#pendingOfficialDelegationThreads.add(threadId);
     let turnId: string;

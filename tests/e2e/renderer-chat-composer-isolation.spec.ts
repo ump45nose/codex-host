@@ -20,9 +20,19 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererBindingProbe } from "./packages/renderer-extension/src/renderer-binding-probe.ts";
+      import { installRendererHarnessPreferenceSync, writeRendererHarnessPreferences } from "./packages/renderer-extension/src/renderer-harness-preferences.ts";
+      const preferences = installRendererHarnessPreferenceSync(window);
+      globalThis.setSyntheticDraftPreference = async (agent) => {
+        const snapshot = { scope: "external", revision: 0, values: { favorites: {}, newThread: { lastHarness: agent, byHarness: {} } } };
+        preferences.connect("local", {
+          getHarnessPreferences: async () => snapshot,
+          patchHarnessPreferences: async () => snapshot,
+        });
+        await writeRendererHarnessPreferences(window, "local", [{ kind: "newThread", lastHarness: agent }]);
+      };
       const probe = installRendererBindingProbe({
         enabledAgents: ["codex", "pi"],
-        defaultAgent: "codex",
+        defaultAgent: globalThis.fixtureDefaultAgent ?? "pi",
       });
       let policyRebinding = false;
       let applyCalls = 0;
@@ -342,7 +352,7 @@ test("an external draft root reused after dot follows the new native draft prefe
   );
   const setDraft = async (id: string, agent: string) =>
     page.locator('[role="textbox"]').evaluate(
-      (editor, input) => {
+      async (editor, input) => {
         const modelState = { get: () => ({ modelSettings: null, isManuallyChanged: false }) };
         Object.defineProperty(editor, "__reactFiber$dot", {
           configurable: true,
@@ -360,6 +370,8 @@ test("an external draft root reused after dot follows the new native draft prefe
           "codexhost.new-thread-preference.v1",
           JSON.stringify({ version: 1, lastAgent: input.agent, externalByAgent: {} }),
         );
+        const setPreference = Reflect.get(window, "setSyntheticDraftPreference");
+        if (typeof setPreference === "function") await setPreference(input.agent);
       },
       { id, agent },
     );
@@ -684,6 +696,7 @@ test("a Codex composer keeps draft typing usable while its Host policy rebinds",
       },
     });
   });
+  await page.evaluate(() => Reflect.set(window, "fixtureDefaultAgent", "codex"));
   await page.addScriptTag({ content: browserBundle });
   await expect(page.locator("[data-codexhost-agent-control]")).toHaveCount(1);
 

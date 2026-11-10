@@ -214,6 +214,8 @@ Mapping Store 允许 Thread 主记录及独立元数据文件出现未知的顶�
 
 主记录和备份均无法恢复时，Mapping Store 先将独立元数据原样复制到 `quarantine/<id>.json.<时间戳>.invalid.metadata`，再将主记录移到同名的 `.invalid` 文件，不覆盖已有隔离文件。任一步失败只跳过该 Thread，保留源记录及元数据供后续启动重试，并将其元数据排除在孤儿清理之外；健康 Thread 仍可访问。成功隔离后才尽力清理源元数据，清理失败会在后续启动重试。隔离文件用于人工恢复，不会自动重新导入；Harness 原生会话不受此流程删除。
 
+启动时会检查缺少配对记录的 `.invalid.metadata` 文件：原记录已修复时恢复元数据，原记录仍损坏时完成配对隔离，目录等非文件标记不参与恢复。
+
 Mapping Store 使用 `store.lock` 限制同一目录只有一个写入实例。锁记录写入者的 PID、启动时间和角色（本机 Host Runtime 或远程 app-server listener）；遇到活跃持有者时，`STORE_LOCKED` 错误给出 Mapping Store 目录及持有者的 PID、角色和启动时间，未记录角色的旧锁只给出 PID 和启动时间。Host 初始化因此失败时，退出前把这一原因作为最后一行诊断再输出一次，Shim 随后在 Desktop 可见的最后一行重复它。远程 SSH listener 必须使用远程安装导出的 `CODEXHOST_DATA_DIR`；从本机 Launcher 会话或缺少该目录时，Shim 拒绝启动 listener，不会占用本机 Mapping Store。Windows 发生锁冲突时，通过本机 CIM `Win32_Process` 查询进程路径和创建时间；创建时间显式转换为 UTC ISO 字符串，查询最多等待 5 秒。即使系统进程路径不可读，只要创建时间与锁中记录相差超过既有的 5 秒容差，也能识别 PID 复用并回收旧锁，不结束占用该 PID 的进程。查询失败、超时或身份信息不足时仍保留锁并报 `STORE_LOCKED`；旧锁缺少进程创建时间时，不以锁文件的创建时间代替进程身份。
 
 ## 加载与关闭行为
@@ -232,6 +234,8 @@ Mapping Store 使用 `store.lock` 限制同一目录只有一个写入实例。�
 - 超时后才返回的 Adapter 会尝试关闭；未返回实例前创建的资源仍须由插件自行负责清理。
 - Host 退出时关闭已加载 Adapter；Registry 自身的 `close()` 幂等，并尝试关闭所有实例，即使某个实例同步抛错。
 - 外部 Session 输出消费或投影抛错时，Host 关闭该 Session，并用投影器已接受的 Item 状态取消未决交互、收尾活动 Item、将未结束的 Turn 标为失败。非法完成事件不能改变已有 Item 类型，也不能让 Desktop 永久保留运行状态；不伪造原生成功或 Checkpoint，不重写已完成 Turn 的结果。Desktop 已断开时通知只能尽力发送，关闭或通知失败保留诊断。
+
+Session 发布 `session.faulted` 时，Host 同样依据投影器的 Item 状态结束未完成 Turn；Session 关闭时重复发出的终态不会再次投影。空闲且没有子任务或后台工作的失效 Session 会被释放，下次请求从原生存储恢复。
 
 ### 外部 Thread 预热
 

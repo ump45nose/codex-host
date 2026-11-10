@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, stat } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,7 +13,7 @@ import {
   type HostThreadId,
   type NativeSessionRef,
 } from "@codexhost/shared-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MappingStore,
@@ -22,6 +23,20 @@ import {
   type StoredThreadRecordV1,
   type StoredTurnMappingV1,
 } from "../src/index.js";
+
+// Directory order is filesystem-defined. A test that depends on which Thread loads first sets
+// `listing.sorted` to read directories in name order.
+const listing = vi.hoisted(() => ({ sorted: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  const readdir = async (...args: unknown[]): Promise<unknown> => {
+    const entries: unknown = await (actual.readdir as (...values: unknown[]) => Promise<unknown>)(
+      ...args,
+    );
+    return listing.sorted && Array.isArray(entries) ? [...(entries as string[])].sort() : entries;
+  };
+  return { ...actual, readdir: readdir as typeof actual.readdir };
+});
 
 const temporaryDirectories: string[] = [];
 
@@ -124,6 +139,7 @@ async function createReadyThread(store: MappingStore, value: string, title: stri
 }
 
 afterEach(async () => {
+  listing.sorted = false;
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -1061,6 +1077,78 @@ describe("mapping-store package", () => {
     });
     await expect(reopened.getThread(removed)).resolves.toBeNull();
     await reopened.close();
+  });
+
+  it("recovers an interrupted quarantine when the record is still unreadable", async () => {
+    const directory = await temporaryStoreDirectory();
+    const first = new MappingStore({ directory });
+    await first.initialize();
+    await createReady(first);
+    await first.updateMetadata(threadId, { projectId: "project-a", daybreakEnabled: true });
+    await first.close();
+    const metadataPath = path.join(directory, "thread-metadata", `${threadId}.json`);
+    const metadataContent = await readFile(metadataPath, "utf8");
+    const primaryPath = path.join(directory, "threads", `${threadId}.json`);
+
+    // Simulate interruption after metadata rename, before record rename.
+    const stamp = "1700000000000";
+    const quarantined = `${threadId}.json.${stamp}.invalid`;
+    await mkdir(path.join(directory, "quarantine"), { recursive: true });
+    await rename(metadataPath, path.join(directory, "quarantine", `${quarantined}.metadata`));
+    await writeFile(primaryPath, "{broken", "utf8");
+    await writeFile(path.join(directory, "backups", `${threadId}.json`), "{broken", "utf8");
+
+    const reopened = new MappingStore({ directory, now: () => new Date(Number(stamp) + 1) });
+    await reopened.initialize();
+    await expect(reopened.getThread(threadId)).resolves.toBeNull();
+    await reopened.close();
+
+    await expect(readdir(path.join(directory, "thread-metadata"))).resolves.toEqual([]);
+    await expect(readdir(path.join(directory, "threads"))).resolves.not.toContain(
+      `${threadId}.json`,
+    );
+    await expect(
+      readFile(path.join(directory, "quarantine", `${quarantined}.metadata`), "utf8"),
+    ).resolves.toBe(metadataContent);
+    await expect(readdir(path.join(directory, "quarantine"))).resolves.toEqual(
+      expect.arrayContaining([quarantined, `${quarantined}.metadata`]),
+    );
+  });
+
+  it("restores quarantined metadata when the interrupted record was repaired", async () => {
+    const directory = await temporaryStoreDirectory();
+    const first = new MappingStore({ directory });
+    await first.initialize();
+    await createReady(first);
+    await first.updateMetadata(threadId, { projectId: "project-a", daybreakEnabled: true });
+    const recordContent = await readFile(
+      path.join(directory, "threads", `${threadId}.json`),
+      "utf8",
+    );
+    await first.close();
+    const metadataPath = path.join(directory, "thread-metadata", `${threadId}.json`);
+    const metadataContent = await readFile(metadataPath, "utf8");
+
+    const stamp = "1700000000000";
+    const quarantined = `${threadId}.json.${stamp}.invalid`;
+    await mkdir(path.join(directory, "quarantine"), { recursive: true });
+    await rename(metadataPath, path.join(directory, "quarantine", `${quarantined}.metadata`));
+    // Primary remains a valid record (user repaired it / interruption left it intact).
+    await writeFile(path.join(directory, "threads", `${threadId}.json`), recordContent, "utf8");
+
+    const reopened = new MappingStore({ directory, now: () => new Date(Number(stamp) + 1) });
+    await reopened.initialize();
+    await expect(reopened.getThread(threadId)).resolves.toMatchObject({
+      hostThreadId: threadId,
+      projectId: "project-a",
+      daybreakEnabled: true,
+    });
+    await reopened.close();
+
+    await expect(readFile(metadataPath, "utf8")).resolves.toBe(metadataContent);
+    await expect(readdir(path.join(directory, "quarantine"))).resolves.not.toContain(
+      `${quarantined}.metadata`,
+    );
   });
 
   it("cleans a provisional create without Native identity on restart", async () => {

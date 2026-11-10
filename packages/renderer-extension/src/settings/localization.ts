@@ -72,8 +72,43 @@ export interface RendererSettingsMessages {
   readonly idleReleasePending: string;
   readonly idleReleaseUnavailable: string;
   readonly idleReleaseFailed: string;
+  readonly delegationCapacitySection: string;
+  readonly delegationCapacityTitle: string;
+  readonly delegationCapacityDescription: string;
+  readonly delegationCapacityHelpLabel: string;
+  readonly delegationCapacityHelp: readonly string[];
+  readonly delegationCapacityLimit: string;
+  readonly delegationCapacityLimitDescription: string;
+  readonly delegationCapacityUnit: string;
+  readonly delegationCapacityInvalid: string;
+  readonly delegationCapacityPending: string;
+  readonly delegationCapacityUnavailable: string;
+  readonly delegationCapacityFailed: string;
+  readonly userInstructionsSection: string;
+  readonly userInstructionsTitle: string;
+  readonly userInstructionsDescription: string;
+  readonly userInstructionsHelpLabel: string;
+  readonly userInstructionsHelp: readonly string[];
+  readonly userInstructionsPending: string;
+  readonly userInstructionsUnavailable: string;
+  readonly userInstructionsFailed: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
+  readonly sidebarGroup: string;
+  readonly archiveChildrenTitle: string;
+  readonly archiveChildrenDescription: string;
+  readonly archiveChildrenAsk: string;
+  readonly archiveChildrenAlways: string;
+  readonly archiveChildrenNever: string;
+  readonly sidebarStashTitle: string;
+  readonly sidebarStashDescription: string;
+  readonly sidebarOverlayModeTitle: string;
+  readonly sidebarOverlayModeDescription: string;
+  readonly sidebarOverlayModeAuto: string;
+  readonly sidebarOverlayModeOverlay: string;
+  readonly sidebarOverlayModeDocked: string;
+  readonly topTabsTitle: string;
+  readonly topTabsDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -343,8 +378,55 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleasePending: "Syncing…",
   idleReleaseUnavailable: "Not supported by this Host",
   idleReleaseFailed: "Sync failed, try again",
+  delegationCapacitySection: "Delegation",
+  delegationCapacityTitle: "Limit running delegations",
+  delegationCapacityDescription:
+    "When the limit is reached, new delegations wait in a queue and start in order.",
+  delegationCapacityHelpLabel: "About the delegation limit",
+  delegationCapacityHelp: Object.freeze([
+    "Counts top-level sessions running on this computer, including ones you opened yourself. Subagents are not counted.",
+    "Only new delegations wait. Your messages and follow-up messages to existing sessions are never held back. Queued delegations are kept across Host restarts and can be cancelled.",
+  ]),
+  delegationCapacityLimit: "Running limit",
+  delegationCapacityLimitDescription: "1–32 sessions.",
+  delegationCapacityUnit: "sessions",
+  delegationCapacityInvalid: "Enter a whole number from 1 to 32.",
+  delegationCapacityPending: "Syncing…",
+  delegationCapacityUnavailable: "Not supported by this Host",
+  delegationCapacityFailed: "Sync failed, try again",
+  userInstructionsSection: "User instructions",
+  userInstructionsTitle: "Replace external CLI user instructions with Codex instructions",
+  userInstructionsDescription:
+    "Sync Codex global user instructions to enabled external CLIs and restore originals when turned off.",
+  userInstructionsHelpLabel: "About replacing external CLI user instructions",
+  userInstructionsHelp: Object.freeze([
+    "Reads Codex global user instructions from $CODEX_HOME/AGENTS.override.md (or $CODEX_HOME/AGENTS.md) and writes them to each enabled external CLI's global user instruction file.",
+    "Before replacing a CLI's instruction file, codexhost backs up the original under ~/.codexhost/user-instructions-backups and restores it when turned off.",
+  ]),
+  userInstructionsPending: "Syncing…",
+  userInstructionsUnavailable: "Not supported by this Host",
+  userInstructionsFailed: "Sync failed, try again",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
+  sidebarGroup: "Sidebar",
+  archiveChildrenTitle: "When archiving a parent thread",
+  archiveChildrenDescription:
+    "Child threads are unarchived Delegations and native forks nested under it in the sidebar. Official subagents are unaffected.",
+  archiveChildrenAsk: "Ask every time",
+  archiveChildrenAlways: "Always archive child threads",
+  archiveChildrenNever: "Never archive child threads",
+  sidebarStashTitle: "Stash (收纳箱)",
+  sidebarStashDescription:
+    "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
+  sidebarOverlayModeTitle: "Sidebar layout mode",
+  sidebarOverlayModeDescription:
+    "Floating overlay drawer keeps main content width fixed without reflow. Auto switches to floating drawer when window width is under 1080px.",
+  sidebarOverlayModeAuto: "Auto (< 1080px floating drawer)",
+  sidebarOverlayModeOverlay: "Always floating drawer",
+  sidebarOverlayModeDocked: "Always docked",
+  topTabsTitle: "Top session capsule tabs",
+  topTabsDescription:
+    "Show 3–5 stable working-set session capsules in the top toolbar with aggregated child status and overflow menu.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -657,8 +739,54 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleasePending: "同步中…",
   idleReleaseUnavailable: "当前 Host 不支持",
   idleReleaseFailed: "同步失败，请重试",
+  delegationCapacitySection: "委派",
+  delegationCapacityTitle: "限制同时运行的委派",
+  delegationCapacityDescription: "达到上限后，新的委派排队等待，有空位时按先后自动开始。",
+  delegationCapacityHelpLabel: "同时运行的委派上限说明",
+  delegationCapacityHelp: Object.freeze([
+    "计入本机正在运行的顶层会话，包括你手动打开的会话；子代理不计入。",
+    "只有新的委派会排队；你发送的消息和对已有会话的后续消息不受限制。排队中的委派在 Host 重启后保留，也可以取消。",
+  ]),
+  delegationCapacityLimit: "同时运行上限",
+  delegationCapacityLimitDescription: "1～32 个会话。",
+  delegationCapacityUnit: "个",
+  delegationCapacityInvalid: "请输入 1～32 之间的整数。",
+  delegationCapacityPending: "同步中…",
+  delegationCapacityUnavailable: "当前 Host 不支持",
+  delegationCapacityFailed: "同步失败，请重试",
+  userInstructionsSection: "用户自定义指令",
+  userInstructionsTitle: "使用 Codex 用户自定义指令替换外部 CLI 指令",
+  userInstructionsDescription:
+    "将 Codex 全局用户自定义指令同步至已启用的外部 CLI，关闭时自动恢复原文件。",
+  userInstructionsHelpLabel: "替换外部 CLI 用户自定义指令说明",
+  userInstructionsHelp: Object.freeze([
+    "从 $CODEX_HOME/AGENTS.override.md（或 $CODEX_HOME/AGENTS.md）读取 Codex 全局用户指令，并同步至各已启用外部 CLI 的全局用户指令文件。",
+    "首次替换前会将原文件备份至 ~/.codexhost/user-instructions-backups，关闭总开关或单个 CLI 开关时自动恢复原文件。",
+  ]),
+  userInstructionsPending: "同步中…",
+  userInstructionsUnavailable: "当前 Host 不支持",
+  userInstructionsFailed: "同步失败，请重试",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
+  sidebarGroup: "侧边栏",
+  archiveChildrenTitle: "归档父会话时",
+  archiveChildrenDescription:
+    "子会话指侧边栏中嵌套在其下、尚未归档的委派会话和原生 fork 会话，不影响官方子代理。",
+  archiveChildrenAsk: "每次询问",
+  archiveChildrenAlways: "总是归档子会话",
+  archiveChildrenNever: "从不归档子会话",
+  sidebarStashTitle: "收纳箱",
+  sidebarStashDescription:
+    "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
+  sidebarOverlayModeTitle: "侧边栏布局模式",
+  sidebarOverlayModeDescription:
+    "悬浮抽屉展开时不挤压正文宽度，消除竖屏代码重排。自动模式在窗口宽度小于 1080px 时切换为悬浮抽屉。",
+  sidebarOverlayModeAuto: "自动（窄屏 < 1080px 悬浮抽屉）",
+  sidebarOverlayModeOverlay: "始终悬浮抽屉",
+  sidebarOverlayModeDocked: "始终固定常驻",
+  topTabsTitle: "顶部胶囊工作标签栏",
+  topTabsDescription:
+    "在主工具栏显示 3～5 个顺序稳定的工作会话胶囊，聚合子会话状态并提供超出会话「更多」菜单。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

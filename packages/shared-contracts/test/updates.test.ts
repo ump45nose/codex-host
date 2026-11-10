@@ -106,7 +106,7 @@ describe("update runtime contracts", () => {
         updateAvailable: true,
         installationAvailable: true,
         releaseNotes: null,
-        releaseNotesUrl: "https://github.com/Other/codex-host/releases/tag/v1.2.3",
+        releaseNotesUrl: "https://github.com/Other/codex-host/pull/1",
         status: null,
         error: null,
       }).success,

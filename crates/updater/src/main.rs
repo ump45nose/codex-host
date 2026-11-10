@@ -3,6 +3,7 @@
 mod handoff;
 mod install;
 mod prepare_install;
+mod release_channel;
 mod remote;
 mod request;
 mod restart;

@@ -43,6 +43,7 @@ import {
   createNpmMetaReadme,
   createNpmMetaPackageManifest,
   expectedNpmMetaPackagePaths,
+  npmMetaOptionalDependencies,
   validateNpmMetaPackage,
 } from "../../scripts/release/prepare-npm-meta.mjs";
 import { hostReleaseTargetId, releaseTarget } from "../../scripts/release/targets.mjs";
@@ -560,6 +561,30 @@ describe("npm package release", () => {
     );
   });
 
+  it("points fork meta packages at the platform tarballs of their GitHub Release", () => {
+    const version = "0.17.2-vincent.1";
+    const base = `https://github.com/ump45nose/codex-host/releases/download/v${version}`;
+    const manifest = createNpmMetaPackageManifest({
+      version,
+      platformBaseUrl: base,
+      platformTargets: ["macos-arm64", "macos-x64", "linux-x64"],
+    });
+    expect(manifest.optionalDependencies).toEqual({
+      "@codexhost/cli-darwin-arm64": `${base}/codexhost-cli-${version}-macos-arm64.tgz`,
+      "@codexhost/cli-darwin-x64": `${base}/codexhost-cli-${version}-macos-x64.tgz`,
+      "@codexhost/cli-linux-x64": `${base}/codexhost-cli-${version}-linux-x64.tgz`,
+    });
+    expect(
+      Object.keys(npmMetaOptionalDependencies({ version, platformBaseUrl: `${base}/` })),
+    ).toEqual(Object.values(NPM_PLATFORM_PACKAGE_NAMES));
+    expect(() =>
+      npmMetaOptionalDependencies({ version, platformBaseUrl: "http://example.com/x" }),
+    ).toThrow("https");
+    expect(() =>
+      npmMetaOptionalDependencies({ version, platformBaseUrl: base, platformTargets: ["sparc"] }),
+    ).toThrow("unknown npm platform target");
+  });
+
   it("prints the star prompt before npm launch setup begins", () => {
     const source = createNpmBinLauncherSource({ version: "0.1.0" });
     const promptCall = source.indexOf("  printStarPrompt();");
@@ -568,6 +593,20 @@ describe("npm package release", () => {
     expect(promptCall).toBeGreaterThanOrEqual(0);
     expect(promptCall).toBeLessThan(platformResolution);
     expect(source.match(/\n {2}printStarPrompt\(\);/gu)).toHaveLength(1);
+  });
+
+  it("tells fork channel installs to reinstall from the Release tarball", () => {
+    const channel = createNpmBinLauncherSource({ version: "0.17.2-vincent.1" });
+    expect(channel).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(channel).not.toContain("npm install -g @codexhost/cli@0.17.2-vincent.1");
+    expect(createNpmMetaReadme({ version: "0.17.2-vincent.1" })).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(createNpmMetaReadme({ version: "0.1.0" })).toContain(
+      "npm install -g @codexhost/cli@0.1.0",
+    );
   });
 
   it("injects package resources when the user runs codexhost with no args", () => {
@@ -596,6 +635,7 @@ describe("npm package release", () => {
     expect(source).toContain('userArguments[0] === "thread"');
     expect(source).toContain('userArguments[0] === "client"');
     expect(source).toContain('userArguments[0] === "events"');
+    expect(source).toContain('userArguments[0] === "preview"');
     expect(source).toContain('userArguments[0] === "console"');
     expect(source).toContain('[consoleServer, userArguments[0] === "update" ? "update" : "open"]');
     expect(source).toContain('"--codexhost-delegation-cli"');

@@ -7,6 +7,7 @@ export * from "./delegation-read.js";
 export * from "./credential-imports.js";
 export * from "./harness-display-settings.js";
 export * from "./harness-preferences.js";
+export * from "./harness-user-instructions-settings.js";
 export * from "./harness-presentation.js";
 export * from "./account-credits-presentation.js";
 export * from "./model-price-overrides.js";
@@ -15,6 +16,7 @@ export * from "./thread-prewarm.js";
 export * from "./thread-questions.js";
 export * from "./web.js";
 export * from "./web-tool-output.js";
+export * from "./thread-relations.js";
 export {
   CONSOLE_HOST_METHODS,
   CONSOLE_OPEN_METHOD,
@@ -35,6 +37,14 @@ export {
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
 } from "./idle-release.js";
+export {
+  DELEGATION_CAPACITY_SETTINGS_METHOD,
+  DELEGATION_CAPACITY_MAX_RUNNING_MAX,
+  DELEGATION_CAPACITY_MAX_RUNNING_MIN,
+  DEFAULT_DELEGATION_CAPACITY_SETTINGS,
+  delegationCapacitySettingsSchema,
+  type DelegationCapacitySettings,
+} from "./delegation-capacity.js";
 export {
   LOADED_SESSIONS_METHOD,
   loadedSessionsSchema,
@@ -411,3 +421,4 @@ export {
   type WebUiExtensionMeta,
   type WebUiExtensionsState,
 } from "./web-ui-extensions.js";
+export * from "./sidebar-stash.js";

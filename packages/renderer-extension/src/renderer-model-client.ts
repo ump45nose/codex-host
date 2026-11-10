@@ -23,6 +23,12 @@ import {
   harnessDisplaySettingsSchema,
   type HarnessDisplaySet,
   type HarnessDisplaySettings,
+  HARNESS_USER_INSTRUCTIONS_SETTINGS_GET_METHOD,
+  HARNESS_USER_INSTRUCTIONS_SETTINGS_SET_METHOD,
+  harnessUserInstructionsSetSchema,
+  harnessUserInstructionsSettingsSchema,
+  type HarnessUserInstructionsSet,
+  type HarnessUserInstructionsSettings,
   CONSOLE_OPEN_METHOD,
   WEB_OPEN_METHOD,
   webOpenParamsSchema,
@@ -45,6 +51,9 @@ import {
   type LoadedSession,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
+  DELEGATION_CAPACITY_SETTINGS_METHOD,
+  delegationCapacitySettingsSchema,
+  type DelegationCapacitySettings,
   harnessAccountInspectParamsSchema,
   harnessAccountInspectResultSchema,
   harnessAccountSourceListResultSchema,
@@ -84,6 +93,12 @@ import {
   threadThinkingSelectParamsSchema,
   threadOwnershipListParamsSchema,
   threadOwnershipListResultSchema,
+  threadRelationListParamsSchema,
+  threadRelationListResultSchema,
+  THREAD_RELATION_LIST_METHOD,
+  SIDEBAR_STASH_LEGACY_FILE_METHOD,
+  sidebarStashLegacyFileResultSchema,
+  type SidebarStashLegacyFileResult,
   threadUsageInspectionParamsSchema,
   threadUsageInspectionSchema,
   updateCheckResultSchema,
@@ -111,6 +126,9 @@ import {
   type ThreadThinkingSelectParams,
   type ThreadOwnershipListParams,
   type ThreadOwnershipListResult,
+  type HostThreadId,
+  type ThreadRelationListParams,
+  type ThreadRelationListResult,
   type ThreadUsageInspection,
   type ThreadUsageInspectionParams,
   type UpdateCheckResult,
@@ -125,7 +143,16 @@ import {
   RendererMethodUnavailableError,
   type RendererRequestOptions,
 } from "./renderer-request-sender.js";
-import { verifyNativeCodexThread } from "./renderer-native-thread.js";
+import {
+  readNativeCodexThread,
+  readNativeThreadForkSource,
+  usesIndependentNativeInference,
+  verifyNativeCodexThread,
+} from "./renderer-native-thread.js";
+import {
+  inspectNativeProviderContinuation,
+  continueNativeWithConfiguredProvider,
+} from "./renderer-native-provider-continuation.js";
 import {
   HARNESS_PREFERENCES_GET_METHOD,
   HARNESS_PREFERENCES_PATCH_METHOD,
@@ -184,6 +211,7 @@ export const UPDATE_STATUS_METHOD = "codexhost/update/status";
 export const CODEX_ACCOUNT_LIST_METHOD = "codexhost/account/list";
 export const CODEX_ACCOUNT_REFRESH_METHOD = "codexhost/account/refresh";
 export const CODEX_ACCOUNT_CHANGED_METHOD = "codexhost/account/changed";
+export const THREAD_ARCHIVED_METHOD = "thread/archived";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -217,6 +245,9 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
   return nested && typeof nested.addNotificationCallback === "function" ? nested : null;
 }
 
+/** Target of a native inference route check: an existing Thread or a new draft's workspace. */
+export type NativeInferenceTarget = ThreadInspectionParams | { cwd: string };
+
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
   getHarnessPreferences?(scope?: string): Promise<HarnessPreferenceSnapshot>;
   patchHarnessPreferences?(input: HarnessPreferencePatch): Promise<HarnessPreferenceSnapshot>;
@@ -226,10 +257,18 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   subscribeHarnessDisplaySettings?(listener: () => void): () => void;
   getHarnessDisplaySettings?(): Promise<HarnessDisplaySettings>;
   setHarnessDisplaySettings?(input: HarnessDisplaySet): Promise<HarnessDisplaySettings>;
+  getHarnessUserInstructionsSettings?(): Promise<HarnessUserInstructionsSettings>;
+  setHarnessUserInstructionsSettings?(
+    input: HarnessUserInstructionsSet,
+  ): Promise<HarnessUserInstructionsSettings>;
   getHarnessLaunchSettings?(input: HarnessLaunchSettingsGet): Promise<HarnessLaunchSettings>;
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
+  setDelegationCapacitySettings?(
+    settings: DelegationCapacitySettings,
+  ): Promise<DelegationCapacitySettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
+  readSidebarStashLegacyFile?(): Promise<SidebarStashLegacyFileResult>;
   currentHostId?(composer?: Element): string | null;
   knownHostIds?(): readonly string[];
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
@@ -241,12 +280,29 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   ): Promise<HarnessInspection>;
   openHarnessWebUi?(input: HarnessWebUiOpenParams): Promise<void>;
   inspectThread(input: ThreadInspectionParams): Promise<ThreadInspection>;
+  /**
+   * Checks whether native Codex inference bypasses the Codex quota. An existing
+   * Thread uses its own provider and workspace; a new draft passes the
+   * workspace Desktop picked for it so project `.codex/config.toml` applies.
+   */
+  usesIndependentNativeInference?(input?: NativeInferenceTarget): Promise<boolean>;
+  inspectNativeProviderContinuation?(input: ThreadInspectionParams): Promise<string | null>;
+  continueNativeWithConfiguredProvider?(
+    input: ThreadInspectionParams,
+    providerId: string,
+  ): Promise<void>;
   inspectHarnessCommands(input: HarnessCommandsInspectParams): Promise<HarnessCommandCatalog>;
   inspectThreadCommands(input: ThreadCommandsInspectParams): Promise<HarnessCommandCatalog>;
   executeThreadCommand(input: ThreadCommandExecuteParams): Promise<ThreadCommandExecuteResult>;
   listThreadOwnership(input: ThreadOwnershipListParams): Promise<ThreadOwnershipListResult>;
+  /** Persisted sidebar parents; optional because older Hosts and stock Codex lack it. */
+  listThreadRelations?(input: ThreadRelationListParams): Promise<ThreadRelationListResult>;
+  /** Native Codex `thread/read` Fork source, metadata only. */
+  readNativeThreadForkSource?(threadId: HostThreadId): Promise<HostThreadId | null>;
   inspectThreadUsage(input: ThreadUsageInspectionParams): Promise<ThreadUsageInspection>;
   subscribeThreadUsage?(listener: (update: ThreadUsageInspection) => void): () => void;
+  /** App-server `thread/archived` notifications, from every archive entry point. */
+  subscribeThreadArchived?(listener: (threadId: HostThreadId) => void): () => void;
   selectThreadModel(input: ThreadModelSelectParams): Promise<HarnessModelSelectionState>;
   selectThreadThinking(input: ThreadThinkingSelectParams): Promise<HarnessModelSelectionState>;
   selectThreadPermissionMode(
@@ -409,6 +465,40 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
+    async inspectNativeProviderContinuation(input: ThreadInspectionParams) {
+      return inspectNativeProviderContinuation(
+        manager.sendRequest,
+        threadInspectionParamsSchema.parse(input).threadId,
+      );
+    },
+    async continueNativeWithConfiguredProvider(input: ThreadInspectionParams, providerId: string) {
+      return continueNativeWithConfiguredProvider(
+        manager.sendRequest,
+        threadInspectionParamsSchema.parse(input).threadId,
+        providerId,
+      );
+    },
+    async usesIndependentNativeInference(input?: NativeInferenceTarget): Promise<boolean> {
+      const thread =
+        input && "threadId" in input
+          ? await readNativeCodexThread(
+              manager.sendRequest,
+              threadInspectionParamsSchema.parse(input).threadId,
+            )
+          : undefined;
+      const draftCwd =
+        input && !("threadId" in input) && typeof input.cwd === "string" && input.cwd.length > 0
+          ? input.cwd
+          : undefined;
+      const cwd = input && "threadId" in input ? thread?.cwd : draftCwd;
+      return usesIndependentNativeInference(
+        await manager.sendRequest("config/read", {
+          includeLayers: false,
+          ...(cwd ? { cwd } : {}),
+        }),
+        thread?.modelProvider,
+      );
+    },
     async getHarnessPreferences(scope = "external") {
       return harnessPreferenceSnapshotSchema.parse(
         await manager.sendRequest(
@@ -460,6 +550,21 @@ export function createRendererModelClient(
         await manager.sendRequest(HARNESS_DISPLAY_SET_METHOD, input),
       );
     },
+    async getHarnessUserInstructionsSettings(): Promise<HarnessUserInstructionsSettings> {
+      return harnessUserInstructionsSettingsSchema.parse(
+        await manager.sendRequest(HARNESS_USER_INSTRUCTIONS_SETTINGS_GET_METHOD, {}),
+      );
+    },
+    async setHarnessUserInstructionsSettings(
+      input: HarnessUserInstructionsSet,
+    ): Promise<HarnessUserInstructionsSettings> {
+      return harnessUserInstructionsSettingsSchema.parse(
+        await manager.sendRequest(
+          HARNESS_USER_INSTRUCTIONS_SETTINGS_SET_METHOD,
+          harnessUserInstructionsSetSchema.parse(input),
+        ),
+      );
+    },
     async getHarnessLaunchSettings(
       input: HarnessLaunchSettingsGet,
     ): Promise<HarnessLaunchSettings> {
@@ -483,10 +588,23 @@ export function createRendererModelClient(
     async listLoadedSessions(): Promise<LoadedSession[]> {
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
     },
+    async readSidebarStashLegacyFile(): Promise<SidebarStashLegacyFileResult> {
+      return sidebarStashLegacyFileResultSchema.parse(
+        await manager.sendRequest(SIDEBAR_STASH_LEGACY_FILE_METHOD, {}),
+      );
+    },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);
       return idleReleaseSettingsSchema.parse(
         await manager.sendRequest(IDLE_RELEASE_SETTINGS_METHOD, params),
+      );
+    },
+    async setDelegationCapacitySettings(
+      settings: DelegationCapacitySettings,
+    ): Promise<DelegationCapacitySettings> {
+      const params = delegationCapacitySettingsSchema.parse(settings);
+      return delegationCapacitySettingsSchema.parse(
+        await manager.sendRequest(DELEGATION_CAPACITY_SETTINGS_METHOD, params),
       );
     },
     ...createRendererSessionImportClient(async (method, params) =>
@@ -541,6 +659,51 @@ export function createRendererModelClient(
       }
       return result;
     },
+    async listThreadRelations(input: ThreadRelationListParams): Promise<ThreadRelationListResult> {
+      const params = threadRelationListParamsSchema.parse(input);
+      let result: ThreadRelationListResult;
+      try {
+        result = threadRelationListResultSchema.parse(
+          await manager.sendRequest(THREAD_RELATION_LIST_METHOD, params),
+        );
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        // Older Hosts have no relation store access; keep only ownership so
+        // native Fork lookup is limited to Codex Threads. Stock Codex has
+        // neither method and every Thread is native.
+        let owners: ThreadOwnershipListResult["threads"] | null = null;
+        try {
+          owners = threadOwnershipListResultSchema.parse(
+            await manager.sendRequest(THREAD_OWNERSHIP_LIST_METHOD, params),
+          ).threads;
+        } catch (ownershipError) {
+          if (!(ownershipError instanceof RendererMethodUnavailableError)) throw ownershipError;
+        }
+        result = {
+          threads: params.threadIds.map((threadId, index) => ({
+            threadId,
+            owner: owners?.[index]?.threadId === threadId ? owners[index].owner : "codex",
+            parent: null,
+          })),
+        };
+        if (owners && owners.some((thread, index) => thread.threadId !== params.threadIds[index]))
+          throw new Error("Thread ownership-list result does not match the requested IDs");
+      }
+      if (
+        result.threads.length !== params.threadIds.length ||
+        result.threads.some((thread, index) => thread.threadId !== params.threadIds[index])
+      ) {
+        throw new Error("Thread relation-list result does not match the requested IDs");
+      }
+      return result;
+    },
+    async readNativeThreadForkSource(threadId: HostThreadId): Promise<HostThreadId | null> {
+      const parent = await readNativeThreadForkSource(
+        manager.sendRequest,
+        hostThreadIdSchema.parse(threadId),
+      );
+      return parent === null ? null : hostThreadIdSchema.parse(parent);
+    },
     inspectThreadUsage,
     subscribeThreadUsage(listener: (update: ThreadUsageInspection) => void): () => void {
       const notifications = notificationTarget(source);
@@ -569,6 +732,18 @@ export function createRendererModelClient(
         generations.clear();
         removeNotificationCallback();
       };
+    },
+    subscribeThreadArchived(listener: (threadId: HostThreadId) => void): () => void {
+      const notifications = notificationTarget(source);
+      if (!notifications?.addNotificationCallback) {
+        throw new Error("Renderer archive notification callback is unavailable");
+      }
+      return notifications.addNotificationCallback(THREAD_ARCHIVED_METHOD, (notification) => {
+        if (!isRecord(notification) || notification.method !== THREAD_ARCHIVED_METHOD) return;
+        const params = notification.params;
+        const threadId = hostThreadIdSchema.safeParse(isRecord(params) ? params.threadId : null);
+        if (threadId.success) listener(threadId.data);
+      });
     },
     selectThreadModel,
     selectThreadThinking,

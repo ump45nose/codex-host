@@ -10,6 +10,7 @@ import {
   catalogModelForRef,
   decodeHarnessPluginRoute,
   harnessIdSchema,
+  hostThreadIdSchema,
   permissionModeFixedAtCreate,
   type HarnessCommandDescriptor,
   type HarnessPluginDescriptor,
@@ -74,6 +75,15 @@ import {
   type RendererCodexUsageGateStatus,
 } from "./renderer-codex-usage-gate.js";
 import {
+  createRendererNativeProviderUsageBanner,
+  type RendererNativeProviderUsageBanner,
+} from "./renderer-native-provider-usage-banner.js";
+import {
+  createRendererNativeInferenceRoute,
+  type RendererNativeInferenceRoute,
+} from "./renderer-native-inference-route.js";
+import { createRendererNativeProviderControl } from "./renderer-native-provider-control.js";
+import {
   decodeAntigravityTransportModelId,
   decodeClaudeTransportModelId,
   decodeDeepSeekHarnessTransportModelId,
@@ -103,6 +113,25 @@ import {
   installRendererSidebarAgentIcons,
   SIDEBAR_THREAD_ROW_SELECTOR,
 } from "./renderer-sidebar-agent-icons.js";
+import {
+  installRendererSidebarArchiveChildren,
+  type RendererSidebarArchiveChildren,
+} from "./renderer-sidebar-archive-children.js";
+import { installRendererSidebarThreadTree } from "./renderer-sidebar-thread-tree.js";
+import {
+  emitCodexHostUserMessage,
+  installRendererSidebarStash,
+  readSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+  type RendererSidebarStashHandle,
+} from "./renderer-sidebar-stash.js";
+import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
+import { collectSidebarThreads, installRendererTopTabs } from "./renderer-top-tabs.js";
+import {
+  PETS_OPEN_THREAD_REQUEST_STORAGE_KEY,
+  writePetsRemoteThreads,
+  type PetsOpenThreadRequest,
+} from "./renderer-avatar-overlay.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -142,6 +171,21 @@ function isRetryableHarnessAvailability(
     availability !== "notInstalled" &&
     error?.retryable === true
   );
+}
+
+/**
+ * The task the user is looking at. Desktop keeps hidden composers mounted for
+ * other views, so only shown ones count, and several composers of one task count
+ * as one. No shown composer, or shown composers of different tasks, gives null.
+ */
+export function currentThreadFromComposers(
+  composers: readonly { shown: boolean; threadId: string | null }[],
+): string | null {
+  const threads = new Set(
+    composers.filter((composer) => composer.shown).map((composer) => composer.threadId),
+  );
+  const [only] = threads;
+  return threads.size === 1 ? (only ?? null) : null;
 }
 
 export function retryableHarnessAvailabilityAgents(
@@ -590,6 +634,7 @@ interface MountedComposer {
   composerId: string;
   control: ComposerAgentControl;
   codexUsageGate: RendererCodexUsageGate;
+  codexUsageBanner: RendererNativeProviderUsageBanner;
   modelTarget: readonly unknown[] | null;
   modelView: ExternalModelControlView;
   permissionModeView: ExternalPermissionModeControlView;
@@ -602,6 +647,8 @@ interface MountedComposer {
   usageRequestGeneration: number;
   draftUsageClient: RendererModelClient | null;
   commandRequestGeneration: number;
+  nativeInferenceRoute: RendererNativeInferenceRoute;
+  nativeProviderControl: ReturnType<typeof createRendererNativeProviderControl>;
 }
 
 interface MountedCatalogRequest {
@@ -846,6 +893,12 @@ export function installRendererBindingProbe(
     },
     getLocalAgent: localAgentForSidebarThread,
   });
+  // Installed after the settings lifecycle, which owns the locale its dialog uses.
+  let sidebarArchiveChildren: RendererSidebarArchiveChildren | null = null;
+  const sidebarThreadTree = installRendererSidebarThreadTree({
+    getClient: (hostId) => modelClientForHost(hostId),
+    onHosts: (hostIds) => sidebarArchiveChildren?.observeHosts(hostIds),
+  });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const remoteConnections = createRemoteConnectionsControl(window, modelClientForHost);
   const usageStatistics = createRendererUsageStatisticsSource({
@@ -885,6 +938,113 @@ export function installRendererBindingProbe(
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
     },
   });
+  sidebarArchiveChildren = installRendererSidebarArchiveChildren({
+    ownerWindow: window,
+    tree: sidebarThreadTree,
+    getClient: (hostId) => modelClientForHost(hostId),
+    locale: () => settingsLifecycle.locale,
+  });
+  let sidebarStash: RendererSidebarStashHandle | null = null;
+  const mountSidebarStash = (): void => {
+    sidebarStash?.dispose();
+    sidebarStash = null;
+    if (!readSidebarStashEnabledPreference(window)) return;
+    try {
+      sidebarStash = installRendererSidebarStash({
+        document,
+        window,
+        getLocale: () => settingsLifecycle.locale,
+        getEnabled: () => readSidebarStashEnabledPreference(window),
+        logger: console,
+        loadExternalFile: async () => {
+          const client = modelClientForHost("local");
+          const read = client?.readSidebarStashLegacyFile;
+          if (!read) return undefined;
+          try {
+            const result = await read();
+            if (result.error) {
+              console.warn(
+                "[codexhost-sidebar-stash] legacy file read error",
+                result.path,
+                result.error,
+              );
+            }
+            // null document with no error (ENOENT) still completes one-time migration.
+            return result.document;
+          } catch (error) {
+            console.warn("[codexhost-sidebar-stash] Host RPC legacy-file failed", error);
+            return undefined;
+          }
+        },
+      });
+    } catch (error) {
+      console.warn("[codexhost-sidebar-stash] install failed", error);
+      sidebarStash = null;
+    }
+  };
+  mountSidebarStash();
+  const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
+    mountSidebarStash();
+  });
+  const sidebarOverlay = installRendererSidebarOverlay({
+    document,
+    window,
+    getLocale: () => settingsLifecycle.locale,
+  });
+  const topTabs = installRendererTopTabs({
+    document,
+    window,
+    tree: sidebarThreadTree,
+    getLocale: () => settingsLifecycle.locale,
+    getActiveThread: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!isMountedComposer(mounted.composer)) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        const hostId = mounted.hostId ?? activeModelHostId(mounted.composer) ?? "local";
+        if (threadId) return { hostId, threadId };
+      }
+      return null;
+    },
+    getThreadAgent: (hostId, threadId) => {
+      const localAgent = localAgentForSidebarThread({ hostId, threadId, draftId: null });
+      if (!localAgent) return null;
+      const plugin = pluginForHost(hostId, localAgent);
+      return { agent: localAgent, ...(plugin ? { plugin } : {}) };
+    },
+  });
+  const syncPetsRemoteThreads = (): void => {
+    try {
+      const snapshots = collectSidebarThreads(document);
+      const remotes = [...snapshots.values()]
+        .filter((item) => item.hostId !== "local")
+        .slice(0, 12)
+        .map((item) => ({
+          hostId: item.hostId,
+          threadId: item.threadId,
+          title: item.title,
+          status: item.status,
+          agent: item.agent,
+        }));
+      writePetsRemoteThreads(remotes, window.localStorage);
+    } catch {
+      // Ignore storage sync errors
+    }
+  };
+  const onPetsOpenRequestStorage = (event: StorageEvent): void => {
+    if (event.key !== PETS_OPEN_THREAD_REQUEST_STORAGE_KEY || !event.newValue) return;
+    try {
+      const parsed: unknown = JSON.parse(event.newValue);
+      if (typeof parsed !== "object" || parsed === null) return;
+      const { hostId, threadId } = parsed as Partial<PetsOpenThreadRequest>;
+      const validThreadId = hostThreadIdSchema.safeParse(threadId);
+      if (typeof hostId === "string" && validThreadId.success) {
+        void openRendererThread(validThreadId.data, { hostId }).catch(() => undefined);
+      }
+    } catch {
+      // Ignore invalid payloads
+    }
+  };
+  window.addEventListener("storage", onPetsOpenRequestStorage);
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
@@ -1022,12 +1182,17 @@ export function installRendererBindingProbe(
         },
       }),
     );
+    // Auto-unstash for Codex and Harness sessions alike: stash listens on this event.
+    const mounted = mountedByComposer.get(composer);
+    const submittedThreadId = mounted ? threadIdFromComposerModelTarget(mounted.modelTarget) : null;
+    emitCodexHostUserMessage(submittedThreadId, window);
   };
 
   const showCodexUsageGateStatus = (
     mounted: MountedComposer,
     status: RendererCodexUsageGateStatus,
   ): void => {
+    mounted.codexUsageBanner.update(status === "bypassed");
     const title =
       status === "unsupported"
         ? rendererHarnessMessages(settingsLifecycle.locale).codexUsageGateUnavailable
@@ -1056,6 +1221,20 @@ export function installRendererBindingProbe(
       : "installing";
   };
 
+  /**
+   * Workspace of each Host's current draft, published by the draft prewarm
+   * (the only place Desktop names it). A draft asks the Host for that
+   * workspace's live commands and skills.
+   */
+  const draftWorkspaces = new Map<string, string>();
+  {
+    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
+    if (typeof published === "object" && published !== null) {
+      for (const [hostId, cwd] of Object.entries(published)) {
+        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
+      }
+    }
+  }
   const renderMounted = (mounted: MountedComposer): void => {
     if (!isMountedComposer(mounted.composer)) return;
     restorePendingDraftPreference(mounted);
@@ -1075,7 +1254,9 @@ export function installRendererBindingProbe(
       mounted.control,
       controller.get(mounted.composer),
       composerAdapterState(mounted),
-      controller.isSwitching(mounted.composer) || mounted.ownershipStatus === "loading",
+      controller.isSwitching(mounted.composer) ||
+        mounted.ownershipStatus === "loading" ||
+        mounted.nativeProviderControl.blocked,
       composerAvailability(mounted),
       mounted.modelView,
       mounted.permissionModeView,
@@ -1085,7 +1266,32 @@ export function installRendererBindingProbe(
       currentCodexAccount ?? null,
       mounted.ownershipStatus === "error",
     );
-    showCodexUsageGateStatus(mounted, mounted.codexUsageGate.update(externalSubmissionReady));
+    const nativeTargetResolved =
+      mounted.modelTarget?.[0] === "default" || mounted.modelTarget?.[0] === "conversation";
+    const nativeEligible =
+      nativeTargetResolved &&
+      controller.get(mounted.composer).agent === "codex" &&
+      mounted.ownershipStatus !== "loading" &&
+      mounted.ownershipStatus !== "error" &&
+      !controller.isSwitching(mounted.composer);
+    const nativeThreadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+    const draftHostId = nativeThreadId ? null : activeModelHostId(mounted.composer);
+    const nativeSubmissionReady = mounted.nativeInferenceRoute.update(
+      composerClient(mounted),
+      nativeThreadId,
+      nativeEligible && !mounted.nativeProviderControl.blocked,
+      draftHostId ? (draftWorkspaces.get(draftHostId) ?? null) : null,
+    );
+    showCodexUsageGateStatus(
+      mounted,
+      mounted.codexUsageGate.update(externalSubmissionReady || nativeSubmissionReady),
+    );
+    mounted.nativeProviderControl.update(
+      composerClient(mounted),
+      threadIdFromComposerModelTarget(mounted.modelTarget),
+      nativeEligible,
+      settingsLifecycle.locale,
+    );
     if (mounted.control.usage) {
       mounted.control.usage.onOpen = () => {
         void refreshThreadUsage(
@@ -1097,20 +1303,6 @@ export function installRendererBindingProbe(
   };
 
   let delegationMention: RendererDelegationMentionControl | null = null;
-  /**
-   * Workspace of each Host's current draft, published by the draft prewarm
-   * (the only place Desktop names it). A draft asks the Host for that
-   * workspace's live commands and skills.
-   */
-  const draftWorkspaces = new Map<string, string>();
-  {
-    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
-    if (typeof published === "object" && published !== null) {
-      for (const [hostId, cwd] of Object.entries(published)) {
-        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
-      }
-    }
-  }
   /**
    * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
    * clearing first, so an open menu never flickers empty.
@@ -1491,6 +1683,7 @@ export function installRendererBindingProbe(
         renderMounted(mounted);
         if (mounted.ownershipStatus !== "error") void refreshCommands(mounted);
         sidebarAgentIcons.refresh();
+        sidebarThreadTree.refresh();
         // Ownership can already contain Usage, but only usage inspection tells
         // us whether this (possibly unknown) plugin also supplies account quota.
         if (mounted.ownershipStatus !== "error") void refreshThreadUsage(mounted);
@@ -1549,6 +1742,7 @@ export function installRendererBindingProbe(
       void loadThreadOwnership(mounted);
     }
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     return true;
   };
 
@@ -2301,6 +2495,7 @@ export function installRendererBindingProbe(
         void refreshCommands(mounted);
       }
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
       return switched;
     } catch {
       adapterStatus = {
@@ -2507,6 +2702,7 @@ export function installRendererBindingProbe(
           );
           controller.setEnabledAgents(enabledAgents);
           sidebarAgentIcons.refresh();
+          sidebarThreadTree.refresh();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -2672,7 +2868,10 @@ export function installRendererBindingProbe(
       renderMounted(mounted);
       void loadThreadOwnership(mounted);
     }
-    if (changed) sidebarAgentIcons.refresh();
+    if (changed) {
+      sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+    }
   };
 
   function reconcileHarnessAvailabilityHost(retryDraftUsage = false): void {
@@ -2724,7 +2923,10 @@ export function installRendererBindingProbe(
       }
     }
     // A reconnect can replace the client without changing the Composer's Host ID.
-    if (connectionsChanged) sidebarAgentIcons.refresh();
+    if (connectionsChanged) {
+      sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+    }
     const hostId = activeModelHostId();
     if (
       !hostId ||
@@ -2942,6 +3144,18 @@ export function installRendererBindingProbe(
       composerId: state.composerId,
       control,
       codexUsageGate: createRendererCodexUsageGate(composer),
+      codexUsageBanner: createRendererNativeProviderUsageBanner(composer),
+      nativeInferenceRoute: createRendererNativeInferenceRoute(() => {
+        if (!disposed && mountedByComposer.get(composer) === mounted && composer.isConnected) {
+          renderMounted(mounted);
+        }
+      }),
+      nativeProviderControl: createRendererNativeProviderControl(composer, () => {
+        if (!disposed && mountedByComposer.get(composer) === mounted && composer.isConnected) {
+          mounted.nativeInferenceRoute.update(null, null, false);
+          renderMounted(mounted);
+        }
+      }),
       modelTarget,
       modelView: inherited?.modelView ?? { status: "idle" },
       permissionModeView: inherited?.permissionModeView ?? { status: "idle" },
@@ -2965,6 +3179,7 @@ export function installRendererBindingProbe(
     }
     renderMounted(mounted);
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     if (threadIdFromComposerModelTarget(modelTarget) && !inherited) {
       void loadThreadOwnership(mounted);
     } else if (
@@ -3038,6 +3253,9 @@ export function installRendererBindingProbe(
           usageRefreshTimers.delete(composer);
         }
         mounted.codexUsageGate.dispose();
+        mounted.codexUsageBanner.dispose();
+        mounted.nativeProviderControl.dispose();
+        mounted.nativeInferenceRoute.dispose();
         disposeComposerAgentControl(mounted.control);
         ownershipRecovery.delete(mounted);
         modelRecovery.delete(mounted);
@@ -3171,7 +3389,11 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (!mounted) return null;
     const current = controller.get(composer);
-    if (controller.isSwitching(composer) || isOwnershipSubmissionBlocked(mounted.ownershipStatus)) {
+    if (
+      controller.isSwitching(composer) ||
+      isOwnershipSubmissionBlocked(mounted.ownershipStatus) ||
+      mounted.nativeProviderControl.blocked
+    ) {
       return false;
     }
     if (!isExternalConfigurationReady(mounted)) return false;
@@ -3270,6 +3492,7 @@ export function installRendererBindingProbe(
       }
     }
     sidebarAgentIcons.refresh();
+    sidebarThreadTree.refresh();
     reconcileHarnessAvailabilityHost();
     void loadCodexAccounts();
     void refreshHarnessAvailability();
@@ -3290,6 +3513,9 @@ export function installRendererBindingProbe(
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3357,6 +3583,12 @@ export function installRendererBindingProbe(
         controller.get(mounted.composer).agent !== "codex"
       ) {
         void refreshCommands(mounted, { keepCurrent: true });
+      } else if (
+        !threadIdFromComposerModelTarget(mounted.modelTarget) &&
+        activeModelHostId(mounted.composer) === hostId
+      ) {
+        // A Codex draft re-checks its inference route against the new workspace.
+        renderMounted(mounted);
       }
     }
   };
@@ -3438,13 +3670,15 @@ export function installRendererBindingProbe(
       (mounted) => isMountedComposer(mounted.composer) && mounted.control.root.isConnected,
     );
 
+  // Desktop keeps hidden composers mounted for other views; only a shown one is the current task.
+  const isShown = (mounted: MountedComposer): boolean =>
+    mounted.composer.getClientRects().length > 0 &&
+    window.getComputedStyle(mounted.composer).visibility === "visible" &&
+    !mounted.composer.closest('[hidden], [inert], [aria-hidden="true"]');
+
   const questions = installRendererQuestions(window, () => {
     const visible = connectedComposers().filter(
-      (mounted) =>
-        mounted.composer.getClientRects().length > 0 &&
-        window.getComputedStyle(mounted.composer).visibility === "visible" &&
-        !mounted.composer.closest('[hidden], [inert], [aria-hidden="true"]') &&
-        controller.get(mounted.composer).agent !== "codex",
+      (mounted) => isShown(mounted) && controller.get(mounted.composer).agent !== "codex",
     );
     const mounted = visible.length === 1 ? visible[0] : undefined;
     const threadId = mounted
@@ -3460,21 +3694,12 @@ export function installRendererBindingProbe(
   const api: RendererBindingProbeApi = {
     remoteConnections: (request) => handleRemoteConnectionsRequest(remoteConnections, request),
     currentThreadId() {
-      // The app routinely keeps several composer roots connected (hidden leftovers included), so
-      // counting connected roots alone never yields exactly one. Pick the single visible root —
-      // the conversation the user is looking at; fall back to a single connected root so the
-      // one-composer layout behaves exactly as before.
-      const connected = connectedComposers();
-      const visible = connected.filter(
-        (mounted) =>
-          mounted.composer.getClientRects().length > 0 &&
-          window.getComputedStyle(mounted.composer).visibility === "visible" &&
-          !mounted.composer.closest('[hidden], [inert], [aria-hidden="true"]'),
+      return currentThreadFromComposers(
+        connectedComposers().map((mounted) => ({
+          shown: isShown(mounted),
+          threadId: threadIdFromComposerModelTarget(mounted.modelTarget) ?? null,
+        })),
       );
-      const mounted = visible.length === 1 ? visible : connected.length === 1 ? connected : [];
-      return mounted.length === 1 && mounted[0]
-        ? (threadIdFromComposerModelTarget(mounted[0].modelTarget) ?? null)
-        : null;
     },
     status() {
       const selections = connectedComposers().map((mounted) => ({
@@ -3543,6 +3768,9 @@ export function installRendererBindingProbe(
       harnessAvailabilityByHost.clear();
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
+      sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -3588,6 +3816,14 @@ export function installRendererBindingProbe(
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       sidebarThreadState.dispose();
+      sidebarArchiveChildren?.dispose();
+      disposeSidebarStashPreference();
+      sidebarStash?.dispose();
+      sidebarStash = null;
+      sidebarOverlay.dispose();
+      topTabs.dispose();
+      window.removeEventListener("storage", onPetsOpenRequestStorage);
+      sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
@@ -3610,6 +3846,9 @@ export function installRendererBindingProbe(
         mounted.usageRequestGeneration += 1;
         usageRefreshAttempts.delete(mounted.composer);
         mounted.codexUsageGate.dispose();
+        mounted.codexUsageBanner.dispose();
+        mounted.nativeProviderControl.dispose();
+        mounted.nativeInferenceRoute.dispose();
         disposeComposerAgentControl(mounted.control);
       }
       mountedByComposer.clear();

@@ -240,9 +240,74 @@ export async function runDelegationCli(input: {
       }
     }
     if (group === "client") {
-      rejectUnknown(parsed, []);
-      writeJson(output, await runClientCommand(command, parsed.positionals, environment));
+      rejectUnknown(parsed, [
+        "--scope",
+        "--network",
+        "--tailnet",
+        "--public",
+        "--adapter",
+        "--url",
+        "--key-file",
+        "--clear",
+      ]);
+      const clear = value(parsed, "--clear");
+      if (clear !== undefined && clear !== "true")
+        throw new DelegationControlError(
+          "INVALID_ARGUMENT",
+          "--clear takes no value other than true",
+        );
+      writeJson(
+        output,
+        await runClientCommand(command, parsed.positionals, environment, {
+          ...(value(parsed, "--scope") ? { scope: value(parsed, "--scope") } : {}),
+          ...(value(parsed, "--network") ? { network: value(parsed, "--network") } : {}),
+          ...(value(parsed, "--tailnet") ? { tailnet: value(parsed, "--tailnet") } : {}),
+          ...(value(parsed, "--public") ? { public: value(parsed, "--public") } : {}),
+          ...(value(parsed, "--adapter") ? { adapter: value(parsed, "--adapter") } : {}),
+          ...(value(parsed, "--url") ? { url: value(parsed, "--url") } : {}),
+          ...(value(parsed, "--key-file") ? { keyFile: value(parsed, "--key-file") } : {}),
+          ...(clear ? { clear: true } : {}),
+        }),
+      );
       return 0;
+    }
+    if (group === "preview") {
+      rejectUnknown(parsed, []);
+      const [target, ...extra] = parsed.positionals;
+      const request = (route: string, body: Record<string, unknown>) =>
+        requestRuntime({
+          environment,
+          path: route,
+          body,
+          ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+        });
+      if (command === "list" && !target) {
+        writeJson(output, await request("/v1/preview/list", {}));
+        return 0;
+      }
+      if (
+        (command === "open" || command === "show" || command === "close") &&
+        target &&
+        !extra.length
+      ) {
+        const caller = callerThreadId(environment);
+        writeJson(
+          output,
+          command === "open"
+            ? await request("/v1/preview/open", {
+                // Resolved here: the Runtime's own cwd is not the caller's workspace.
+                path: path.resolve(process.cwd(), target),
+                cwd: process.cwd(),
+                ...(caller ? { threadId: normalizeThreadId(caller) } : {}),
+              })
+            : await request(`/v1/preview/${command}`, { previewId: target }),
+        );
+        return 0;
+      }
+      throw new DelegationControlError(
+        "INVALID_ARGUMENT",
+        "Usage: codexhost preview open <file> | list | show <preview> | close <preview>",
+      );
     }
     if (group === "harness" && command === "list") {
       rejectUnknown(parsed, []);
@@ -310,6 +375,7 @@ export async function runDelegationCli(input: {
         "--watch",
         "--watch-timeout-ms",
         "--ref",
+        "--stall-after-ms",
       ]);
       if (parsed.positionals.length > 0)
         throw new DelegationControlError(
@@ -328,6 +394,11 @@ export async function runDelegationCli(input: {
         throw new DelegationControlError(
           "INVALID_ARGUMENT",
           "--watch-timeout-ms requires --watch true",
+        );
+      if (watch !== "true" && value(parsed, "--stall-after-ms") !== undefined)
+        throw new DelegationControlError(
+          "INVALID_ARGUMENT",
+          "--stall-after-ms requires --watch true",
         );
       writeResult(
         "delegate start",
@@ -353,6 +424,14 @@ export async function runDelegationCli(input: {
                   watchTimeoutMs: value(parsed, "--watch-timeout-ms")
                     ? positiveInteger(value(parsed, "--watch-timeout-ms"), "--watch-timeout-ms")
                     : DEFAULT_WATCH_TIMEOUT_MS,
+                  ...(value(parsed, "--stall-after-ms") !== undefined
+                    ? {
+                        stallAfterMs: positiveInteger(
+                          value(parsed, "--stall-after-ms"),
+                          "--stall-after-ms",
+                        ),
+                      }
+                    : {}),
                 }
               : {}),
           },
@@ -483,7 +562,7 @@ export async function runDelegationCli(input: {
       return 0;
     }
     if (group === "thread" && command === "watch") {
-      rejectUnknown(parsed, ["--notify", "--timeout-ms"]);
+      rejectUnknown(parsed, ["--notify", "--timeout-ms", "--stall-after-ms"]);
       if (parsed.positionals.length !== 1)
         throw new DelegationControlError(
           "INVALID_ARGUMENT",
@@ -511,6 +590,14 @@ export async function runDelegationCli(input: {
             timeoutMs: value(parsed, "--timeout-ms")
               ? positiveInteger(value(parsed, "--timeout-ms"), "--timeout-ms")
               : DEFAULT_WATCH_TIMEOUT_MS,
+            ...(value(parsed, "--stall-after-ms") !== undefined
+              ? {
+                  stallAfterMs: positiveInteger(
+                    value(parsed, "--stall-after-ms"),
+                    "--stall-after-ms",
+                  ),
+                }
+              : {}),
           },
           ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
         }),

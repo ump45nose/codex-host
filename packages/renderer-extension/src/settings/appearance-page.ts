@@ -3,16 +3,41 @@ import {
   readReasoningTranscriptSoftWrap,
   setReasoningTranscriptSoftWrap,
 } from "../renderer-transcript-dom.js";
+import {
+  isArchiveChildrenMode,
+  readArchiveChildrenMode,
+  setArchiveChildrenMode,
+  subscribeArchiveChildrenMode,
+} from "../renderer-archive-children-preference.js";
+import {
+  readSidebarStashEnabledPreference,
+  setSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+} from "../renderer-sidebar-stash.js";
+import {
+  isSidebarOverlayMode,
+  readSidebarOverlayMode,
+  setSidebarOverlayMode,
+  subscribeSidebarOverlayPreference,
+} from "../renderer-sidebar-overlay.js";
+import {
+  readTopTabsEnabledPreference,
+  setTopTabsEnabledPreference,
+  subscribeTopTabsPreference,
+} from "../renderer-top-tabs.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
+import { mountDelegationCapacityControls } from "./delegation-capacity-controls.js";
 import { mountIdleReleaseControls } from "./idle-release-controls.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import {
   createPreferenceGroup,
   createPreferenceItem,
+  createPreferenceSelect,
   createPreferenceSwitch,
   preferenceId,
 } from "./preference-ui.js";
+import { mountUserInstructionsControls } from "./user-instructions-controls.js";
 
 export function createAppearanceSettingsPage(
   messages: RendererSettingsMessages,
@@ -53,15 +78,116 @@ export function createAppearanceSettingsPage(
       row.item.append(toggle);
       card.append(row.item);
 
-      context.content.append(heading, description, group);
+      const sidebar = createPreferenceGroup(document, messages.sidebarGroup);
+      const archiveChildrenId = preferenceId("archive-children");
+      const archiveChildrenRow = createPreferenceItem(document, {
+        title: messages.archiveChildrenTitle,
+        description: messages.archiveChildrenDescription,
+        controlId: archiveChildrenId,
+      });
+      const archiveChildren = createPreferenceSelect(document, {
+        id: archiveChildrenId,
+        describedBy: archiveChildrenRow.description.id,
+        options: [
+          { value: "ask", label: messages.archiveChildrenAsk },
+          { value: "always", label: messages.archiveChildrenAlways },
+          { value: "never", label: messages.archiveChildrenNever },
+        ],
+      });
+      archiveChildren.value = readArchiveChildrenMode(ownerWindow);
+      archiveChildren.addEventListener("change", () => {
+        if (isArchiveChildrenMode(archiveChildren.value)) {
+          setArchiveChildrenMode(ownerWindow, archiveChildren.value);
+        }
+      });
+      const disposeArchiveChildren = subscribeArchiveChildrenMode(ownerWindow, () => {
+        archiveChildren.value = readArchiveChildrenMode(ownerWindow);
+      });
+      archiveChildrenRow.item.append(archiveChildren);
+      sidebar.card.append(archiveChildrenRow.item);
+
+      const stashId = preferenceId("sidebar-stash");
+      const stashRow = createPreferenceItem(document, {
+        title: messages.sidebarStashTitle,
+        description: messages.sidebarStashDescription,
+        controlId: stashId,
+      });
+      const stashToggle = createPreferenceSwitch(document, stashId, stashRow.description.id);
+      stashToggle.checked = readSidebarStashEnabledPreference(ownerWindow);
+      stashToggle.addEventListener("change", () => {
+        setSidebarStashEnabledPreference(ownerWindow, stashToggle.checked);
+      });
+      const disposeStashPref = subscribeSidebarStashEnabledPreference(ownerWindow, () => {
+        stashToggle.checked = readSidebarStashEnabledPreference(ownerWindow);
+      });
+      stashRow.item.append(stashToggle);
+      sidebar.card.append(stashRow.item);
+
+      const overlayModeId = preferenceId("sidebar-overlay-mode");
+      const overlayModeRow = createPreferenceItem(document, {
+        title: messages.sidebarOverlayModeTitle,
+        description: messages.sidebarOverlayModeDescription,
+        controlId: overlayModeId,
+      });
+      const overlayModeSelect = createPreferenceSelect(document, {
+        id: overlayModeId,
+        describedBy: overlayModeRow.description.id,
+        options: [
+          { value: "auto", label: messages.sidebarOverlayModeAuto },
+          { value: "overlay", label: messages.sidebarOverlayModeOverlay },
+          { value: "docked", label: messages.sidebarOverlayModeDocked },
+        ],
+      });
+      overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
+      overlayModeSelect.addEventListener("change", () => {
+        if (isSidebarOverlayMode(overlayModeSelect.value)) {
+          setSidebarOverlayMode(ownerWindow, overlayModeSelect.value);
+        }
+      });
+      const disposeOverlayMode = subscribeSidebarOverlayPreference(ownerWindow, () => {
+        overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
+      });
+      overlayModeRow.item.append(overlayModeSelect);
+      sidebar.card.append(overlayModeRow.item);
+
+      const topTabsId = preferenceId("top-tabs-enabled");
+      const topTabsRow = createPreferenceItem(document, {
+        title: messages.topTabsTitle,
+        description: messages.topTabsDescription,
+        controlId: topTabsId,
+      });
+      const topTabsToggle = createPreferenceSwitch(document, topTabsId, topTabsRow.description.id);
+      topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      topTabsToggle.addEventListener("change", () => {
+        setTopTabsEnabledPreference(ownerWindow, topTabsToggle.checked);
+      });
+      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, () => {
+        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      });
+      topTabsRow.item.append(topTabsToggle);
+      sidebar.card.append(topTabsRow.item);
+
+      context.content.append(heading, description, group, sidebar.group);
       const disposeIdleRelease = mountIdleReleaseControls(
+        context,
+        messages,
+        getLoadedSessionsClient,
+      );
+      const disposeDelegationCapacity = mountDelegationCapacityControls(context, messages);
+      const disposeUserInstructions = mountUserInstructionsControls(
         context,
         messages,
         getLoadedSessionsClient,
       );
       return () => {
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
+        disposeArchiveChildren();
+        disposeStashPref();
+        disposeOverlayMode();
+        disposeTopTabsPref();
         disposeIdleRelease();
+        disposeDelegationCapacity();
+        disposeUserInstructions();
       };
     },
   });

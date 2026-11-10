@@ -13,6 +13,8 @@ import {
   discoverRecentCompletedUpdateStatus,
   fetchLatestGitHubRelease,
   fetchLatestGitHubReleaseWithGitHubCli,
+  hasNpmReleaseArtifacts,
+  isReleaseChannelVersion,
   recoverUpdateOperationLock,
   resolveInstalledUpdateContext,
   readRuntimeMetadata,
@@ -85,7 +87,13 @@ export function createHostUpdateCoordinator(
         platform,
         signal: requestSignal,
       });
-      return authenticated ?? fetchLatestGitHubRelease({ signal: requestSignal });
+      return (
+        authenticated ??
+        fetchLatestGitHubRelease({
+          ...(options.environment ? { environment: options.environment } : {}),
+          signal: requestSignal,
+        })
+      );
     });
   let candidate: CodexhostLatestRelease | null = null;
 
@@ -108,7 +116,13 @@ export function createHostUpdateCoordinator(
     context: InstalledUpdateContext,
     release: CodexhostLatestRelease,
   ): Promise<boolean> {
-    if (context.installation.kind === "npm") return true;
+    if (context.installation.kind === "npm") {
+      // Fork channel builds are installed from the Release tarballs, not the registry.
+      return (
+        !isReleaseChannelVersion(release.version) ||
+        hasNpmReleaseArtifacts(release, context.metadata.target)
+      );
+    }
     const target = context.metadata.target;
     if (target === "linux-x64" || target === "linux-arm64") return false;
     try {

@@ -10,7 +10,7 @@ export const EVENT_RETENTION_DAYS_ENV = "CODEXHOST_CLIENT_EVENT_RETENTION_DAYS";
 const DAY_MS = 24 * 60 * 60_000;
 const SEGMENT = /^(\d{4}-\d{2}-\d{2})\.jsonl$/u;
 
-/** What an external client learns when a watched Thread stops: state and links, never content. */
+/** Watch outcomes for an external client: state and links, never conversation content. */
 export interface ClientEvent {
   /** Increases within a client's log; use it as the cursor. */
   id: number;
@@ -130,6 +130,11 @@ export class ClientEventLog {
     }
     const events = (await this.#all(client)).filter((event) => event.id > after).slice(0, limit);
     return { events, cursor: events.at(-1)?.id ?? after };
+  }
+
+  /** The newest event id, or 0; a new webhook starts after it rather than replaying history. */
+  async lastEventId(client: string): Promise<number> {
+    return this.#lastId(client);
   }
 
   /** Resolves when the client's log gains an event, or after the timeout. */

@@ -19,7 +19,35 @@ export function expectedNpmMetaPackagePaths() {
   return ["README.md", "bin/codexhost.js", "package.json"];
 }
 
-export function createNpmMetaPackageManifest({ version }) {
+/**
+ * Platform dependency specs. Registry releases pin each platform package to the same
+ * version. Fork releases (`platformBaseUrl`) are not on the registry, so each listed
+ * platform package points at its tarball attached to the GitHub Release instead; npm
+ * still skips the optional packages whose os/cpu do not match.
+ */
+export function npmMetaOptionalDependencies({ version, platformBaseUrl, platformTargets }) {
+  if (platformBaseUrl === undefined) {
+    return Object.fromEntries(
+      Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((packageName) => [packageName, version]),
+    );
+  }
+  const base = new URL(platformBaseUrl);
+  if (base.protocol !== "https:" || base.search || base.hash || base.username || base.password) {
+    throw new Error("npm meta platform base URL must be a plain https URL");
+  }
+  const targets = platformTargets ?? Object.keys(NPM_PLATFORM_PACKAGE_NAMES);
+  if (targets.length === 0) throw new Error("npm meta package needs at least one platform target");
+  const prefix = base.href.endsWith("/") ? base.href : `${base.href}/`;
+  return Object.fromEntries(
+    targets.map((target) => {
+      const packageName = NPM_PLATFORM_PACKAGE_NAMES[target];
+      if (!packageName) throw new Error(`unknown npm platform target: ${target}`);
+      return [packageName, `${prefix}codexhost-cli-${version}-${target}.tgz`];
+    }),
+  );
+}
+
+export function createNpmMetaPackageManifest({ version, platformBaseUrl, platformTargets }) {
   return {
     name: NPM_PACKAGE_NAME,
     version,
@@ -28,9 +56,11 @@ export function createNpmMetaPackageManifest({ version }) {
     bin: { codexhost: "bin/codexhost.js" },
     files: ["bin/**", "README.md"],
     engines: { node: NPM_NODE_ENGINE },
-    optionalDependencies: Object.fromEntries(
-      Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((packageName) => [packageName, version]),
-    ),
+    optionalDependencies: npmMetaOptionalDependencies({
+      version,
+      platformBaseUrl,
+      platformTargets,
+    }),
     keywords: ["codex", "codexhost", "pi", "claude-code", "agent", "harness"],
     repository: {
       type: "git",
@@ -43,6 +73,9 @@ export function createNpmMetaPackageManifest({ version }) {
 }
 
 export function createNpmMetaReadme({ version }) {
+  const installCommand = version.includes("-vincent.")
+    ? `npm install -g https://github.com/ump45nose/codex-host/releases/download/v${version}/codexhost-cli.tgz`
+    : `npm install -g ${NPM_PACKAGE_NAME}@${version}`;
   return `# ${NPM_PACKAGE_NAME}
 
 ${NPM_PACKAGE_DESCRIPTION}
@@ -50,7 +83,7 @@ ${NPM_PACKAGE_DESCRIPTION}
 ## Install
 
 \`\`\`bash
-npm install -g ${NPM_PACKAGE_NAME}@${version}
+${installCommand}
 \`\`\`
 
 npm automatically installs the matching macOS, Windows, or Linux platform package. ${NPM_NODE_REQUIREMENT} is required. Official ChatGPT/Codex Desktop is only required for the Desktop interface; Web is included and works without it.
@@ -140,7 +173,12 @@ export async function validateNpmMetaPackage({ packageRoot }) {
   return actual;
 }
 
-export async function prepareNpmMetaPackage({ version, root = repositoryRoot }) {
+export async function prepareNpmMetaPackage({
+  version,
+  root = repositoryRoot,
+  platformBaseUrl,
+  platformTargets,
+}) {
   const packageVersion = await resolveNpmPackageVersion(root, version);
   const outputRoot = path.join(root, "build", "npm", packageVersion, "meta");
   const packageRoot = path.join(outputRoot, "package");
@@ -154,7 +192,11 @@ export async function prepareNpmMetaPackage({ version, root = repositoryRoot }) 
   await chmod(path.join(packageRoot, "bin", "codexhost.js"), 0o755);
   await writeFile(
     path.join(packageRoot, "package.json"),
-    `${JSON.stringify(createNpmMetaPackageManifest({ version: packageVersion }), null, 2)}\n`,
+    `${JSON.stringify(
+      createNpmMetaPackageManifest({ version: packageVersion, platformBaseUrl, platformTargets }),
+      null,
+      2,
+    )}\n`,
   );
   await writeFile(
     path.join(packageRoot, "README.md"),
@@ -181,17 +223,27 @@ export async function packNpmMetaPackage({ outputRoot, packageRoot, version }) {
 export async function runNpmMetaReleaseCli(arguments_) {
   let version;
   let pack = false;
+  let platformBaseUrl;
+  let platformTargets;
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (argument === "--pack") pack = true;
     else if (argument === "--version") version = arguments_[++index];
     else if (argument.startsWith("--version=")) version = argument.slice("--version=".length);
-    else if (argument === "--help" || argument === "-h") {
-      console.log("usage: npm run release:npm:meta -- --version <semver> [--pack]");
+    else if (argument === "--platform-base-url") platformBaseUrl = arguments_[++index];
+    else if (argument === "--platform-targets") {
+      platformTargets = (arguments_[++index] ?? "").split(",").filter(Boolean);
+    } else if (argument === "--help" || argument === "-h") {
+      console.log(
+        "usage: npm run release:npm:meta -- --version <semver> [--pack] [--platform-base-url <url> [--platform-targets macos-arm64,linux-x64]]",
+      );
       return;
     } else throw new Error(`unknown npm meta release option: ${argument}`);
   }
-  const prepared = await prepareNpmMetaPackage({ version });
+  if (platformTargets !== undefined && platformBaseUrl === undefined) {
+    throw new Error("--platform-targets requires --platform-base-url");
+  }
+  const prepared = await prepareNpmMetaPackage({ version, platformBaseUrl, platformTargets });
   console.log(`package=${prepared.packageRoot}`);
   console.log(`version=${prepared.version}`);
   if (pack) {

@@ -10,6 +10,7 @@ import {
   type RendererHostRouting,
 } from "@codexhost/desktop-control/renderer-bindings";
 import { createRendererHostClients } from "./renderer-host-clients.js";
+import { installDelegationCapacityPreferenceSync } from "./renderer-delegation-capacity-preference.js";
 import { installIdleReleasePreferenceSync } from "./renderer-idle-release-preference.js";
 import { installRendererHarnessPreferenceSync } from "./renderer-harness-preferences.js";
 import {
@@ -41,6 +42,7 @@ import { installRendererForkControl } from "./renderer-fork-control.js";
 import {
   createThreadUsageSubscriptionRelay,
   type RendererModelClient,
+  type NativeInferenceTarget,
 } from "./renderer-model-client.js";
 
 export const PI_TRANSPORT_MODEL_ID = "codexhost/pi-native";
@@ -889,6 +891,7 @@ export function installCurrentRendererAdapter(): {
   const usageSubscription = createThreadUsageSubscriptionRelay();
   const idleReleaseSync = installIdleReleasePreferenceSync(window);
   const preferencesSync = installRendererHarnessPreferenceSync(window);
+  const delegationCapacitySync = installDelegationCapacityPreferenceSync(window);
   const clients = createRendererHostClients(() => window.__codexhostHostRoutingV1, window);
   const stopGroupSync = startAgentGroupSync(
     getSharedAgentGroupPreferenceStore(),
@@ -918,6 +921,7 @@ export function installCurrentRendererAdapter(): {
     stopGroupSync.connect();
     preferencesSync.connect("local", localClient);
     if (route?.hostId && route.hostId !== "local") preferencesSync.connect(route.hostId, client);
+    delegationCapacitySync.connect(localClient);
     // Adapter readiness describes native connections, not a unique global
     // Composer route. Never use this aggregate readiness to choose a request Host.
     const connected =
@@ -984,6 +988,12 @@ export function installCurrentRendererAdapter(): {
     inspectHarness: (...args: Parameters<RendererModelClient["inspectHarness"]>) =>
       currentModelClient().inspectHarness(...args),
     inspectThread: (input: ThreadInspectionParams) => currentModelClient().inspectThread(input),
+    usesIndependentNativeInference: async (input?: NativeInferenceTarget) => {
+      const client = currentModelClient();
+      return client.usesIndependentNativeInference
+        ? client.usesIndependentNativeInference(input)
+        : false;
+    },
     inspectHarnessCommands: (input: HarnessCommandsInspectParams) =>
       currentModelClient().inspectHarnessCommands(input),
     inspectThreadCommands: (input: ThreadCommandsInspectParams) =>
@@ -1160,6 +1170,7 @@ export function installCurrentRendererAdapter(): {
         () => usageSubscription.dispose(),
         () => idleReleaseSync.dispose(),
         () => preferencesSync.dispose(),
+        () => delegationCapacitySync.dispose(),
       ];
       selectedPolicies.clear();
       for (const cleanup of cleanups) {

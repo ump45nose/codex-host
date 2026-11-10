@@ -1,0 +1,35 @@
+export {
+  installRendererSidebarOverlay,
+  SIDEBAR_OVERLAY_HTML_ATTRIBUTE,
+  SIDEBAR_OVERLAY_OPEN_HTML_ATTRIBUTE,
+  SIDEBAR_PIN_BUTTON_ATTRIBUTE,
+  type InstallRendererSidebarOverlayOptions,
+  type RendererSidebarOverlayHandle,
+} from "./renderer-sidebar-overlay/index.js";
+export {
+  DEFAULT_SIDEBAR_OVERLAY_BREAKPOINT,
+  DEFAULT_SIDEBAR_OVERLAY_DWELL_MS,
+  DEFAULT_SIDEBAR_OVERLAY_LEAVE_MS,
+  DEFAULT_SIDEBAR_OVERLAY_MODE,
+  SIDEBAR_OVERLAY_BREAKPOINT_STORAGE_KEY,
+  SIDEBAR_OVERLAY_DWELL_MS_STORAGE_KEY,
+  SIDEBAR_OVERLAY_MODES,
+  SIDEBAR_OVERLAY_MODE_STORAGE_KEY,
+  SIDEBAR_OVERLAY_PREFERENCE_CHANGE_EVENT,
+  isSidebarOverlayMode,
+  parseSidebarOverlayMode,
+  readSidebarOverlayBreakpoint,
+  readSidebarOverlayDwellMs,
+  readSidebarOverlayMode,
+  resolveSidebarOverlayEffective,
+  setSidebarOverlayMode,
+  subscribeSidebarOverlayPreference,
+  writeSidebarOverlayBreakpoint,
+  writeSidebarOverlayMode,
+  type SidebarOverlayMode,
+} from "./renderer-sidebar-overlay/preference.js";
+export {
+  SIDEBAR_OVERLAY_STYLE_ID,
+  buildSidebarOverlayCss,
+  ensureSidebarOverlayStyles,
+} from "./renderer-sidebar-overlay/style.js";

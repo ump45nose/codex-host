@@ -63,6 +63,20 @@ describe("Claude installation", () => {
     expect(mocks.run).toHaveBeenCalledWith(executable, ["update"], environment, 300_000);
   });
 
+  it("warns on the connection page while the Claude Desktop entrypoint is reported", async () => {
+    await expect(createClaudeInstallation(environment)("check")).resolves.not.toHaveProperty(
+      "notice",
+    );
+    const optedIn = { ...environment, CODEXHOST_CLAUDE_ENTRYPOINT: "claude-desktop" };
+    const result = await createClaudeInstallation(optedIn)("check");
+    expect(result).toMatchObject({
+      notice: {
+        "zh-CN": expect.stringContaining("Claude Desktop"),
+        en: expect.stringContaining("own risk"),
+      },
+    });
+  });
+
   it("keeps npm updates on the identified prefix without bypassing native policy checks", async () => {
     mocks.npm.mockResolvedValue({ prefix: "/selected/npm", canUpdate: true });
     mocks.run.mockImplementation(async (_command, args) =>

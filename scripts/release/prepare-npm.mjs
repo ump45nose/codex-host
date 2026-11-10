@@ -343,6 +343,9 @@ export function createNpmPackageManifest({ version, target }) {
 }
 
 export function createNpmBinLauncherSource({ version }) {
+  const channelReinstall = version.includes("-vincent.")
+    ? `npm install -g https://github.com/ump45nose/codex-host/releases/download/v${version}/codexhost-cli.tgz`
+    : null;
   return `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -451,8 +454,11 @@ try {
   fail(\`cannot read platform package metadata: \${packageRoot}\`);
 }
 if (platformVersion !== version) {
+  const reinstall =
+    ${channelReinstall === null ? "null" : JSON.stringify(channelReinstall)} ??
+    \`npm install -g @codexhost/cli@\${version} \${platformPackage}@\${version}\`;
   fail(
-    \`platform package version mismatch: '\${platformPackage}' at '\${packageRoot}' has \${JSON.stringify(platformVersion) ?? "no version"}; expected \${version}. Close Codex Desktop, then run: npm install -g @codexhost/cli@\${version} \${platformPackage}@\${version}\`,
+    \`platform package version mismatch: '\${platformPackage}' at '\${packageRoot}' has \${JSON.stringify(platformVersion) ?? "no version"}; expected \${version}. Close Codex Desktop, then run: \${reinstall}\`,
   );
 }
 startupTrace("platform package resolved");
@@ -610,7 +616,8 @@ if (userArguments.length === 0) {
   userArguments[0] === "delegate" ||
   userArguments[0] === "thread" ||
   userArguments[0] === "client" ||
-  userArguments[0] === "events"
+  userArguments[0] === "events" ||
+  userArguments[0] === "preview"
 ) {
   launchArguments = null;
   delegationArguments = userArguments;
@@ -635,8 +642,9 @@ if (userArguments.length === 0) {
       "  codexhost harness inspect ...",
       "  codexhost delegate start ...",
       "  codexhost thread send|cancel|read|wait|watch|watches|list ...",
-      "  codexhost client add|list|remove ...",
+      "  codexhost client add|list|set|pair|remove|access|webhook ...",
       "  codexhost events [--after <id>] [--limit <n>] [--follow true|false]",
+      "  codexhost preview open|list|show|close ...",
       "",
       "This npm package uses the current Node.js runtime and the packaged",
       "Rust launcher/shim. Without Codex Desktop, codexhost opens Web.",

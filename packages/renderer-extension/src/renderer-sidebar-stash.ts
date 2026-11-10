@@ -1,0 +1,16 @@
+export {
+  installRendererSidebarStash,
+  emitCodexHostUserMessage,
+  STANDALONE_GUARD,
+  HOST_GUARD,
+  USER_MESSAGE_EVENT,
+  readSidebarStashEnabledPreference,
+  writeSidebarStashEnabledPreference,
+  setSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+  SIDEBAR_STASH_ENABLED_STORAGE_KEY,
+  SIDEBAR_STASH_ENABLED_CHANGE_EVENT,
+  STASH_RESERVED_HOTKEYS,
+  type InstallRendererSidebarStashOptions,
+  type RendererSidebarStashHandle,
+} from "./renderer-sidebar-stash/index.js";

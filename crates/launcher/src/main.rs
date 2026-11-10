@@ -149,7 +149,8 @@ const USAGE: &str = "usage:
   codexhost delegate start ...
   codexhost thread send|cancel|read|wait|watch|watches|list ...
   codexhost client status|on|off|create|list|revoke ...
-  codexhost events pull|ack ...";
+  codexhost events pull|ack ...
+  codexhost preview open|list|show|close ...";
 
 fn usage() {
     eprintln!("{USAGE}");
@@ -811,7 +812,12 @@ fn supervise_desktop(
     let mut controller = start_desktop_controller(options, control, environment)?;
     let desktop_pid = desktop.root_snapshot().id;
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(desktop.root_snapshot(), options, Duration::from_secs(30))? {
+    if !wait_for_host_chain(
+        desktop.root_snapshot(),
+        options,
+        env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new),
+        Duration::from_secs(30),
+    )? {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.shutdown(Duration::from_secs(2));
         return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
@@ -909,7 +915,12 @@ fn supervise_desktop(
         }
     };
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(&desktop_snapshot, options, Duration::from_secs(30))? {
+    if !wait_for_host_chain(
+        &desktop_snapshot,
+        options,
+        env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new),
+        Duration::from_secs(30),
+    )? {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.kill();
         let _ = desktop.wait();
@@ -1316,10 +1327,19 @@ fn launch_gui(
             {
                 continue;
             }
-            result => return result,
+            Ok(()) => {
+                console::stop_for_launch();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
         }
         #[cfg(target_os = "macos")]
-        return result;
+        {
+            if result.is_ok() {
+                console::stop_for_launch();
+            }
+            return result;
+        }
     }
 }
 
@@ -1404,14 +1424,18 @@ fn launch_gui(
             env::var_os(REMOTE_SSH_MANAGED_ENV),
         ),
     );
-    supervise_desktop(
+    let result = supervise_desktop(
         &installation,
         &options,
         &control.renderer_cdp_arguments,
         &environment,
         &control,
         &descriptor_path,
-    )
+    );
+    if result.is_ok() {
+        console::stop_for_launch();
+    }
+    result
 }
 
 fn start_launch_console(options: &LaunchOptions) {
@@ -1532,9 +1556,8 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
         Some("host") => host_service::run(&arguments[1..]),
         Some("web-service") => web_service::run(&arguments[1..]),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
-        Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events") => {
-            run_delegation_cli(arguments)
-        }
+        Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events")
+        | Some("preview") => run_delegation_cli(arguments),
         _ => {
             usage();
             Err("invalid launcher arguments".into())

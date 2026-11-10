@@ -1,4 +1,5 @@
 import { type RendererAgent } from "./agent-selection-state.js";
+import { installCodexProjectDefaultDirectory } from "./codex-project-default-directory.js";
 import {
   installRendererBindingProbe,
   type RendererBindingProbeApi,
@@ -10,20 +11,34 @@ export function installRendererBinding(
 ): RendererBindingProbeApi {
   window.__codexhostRendererBindingProbeV1?.dispose();
   const binding = installRendererBindingProbe({ ...(enabledAgents ? { enabledAgents } : {}) });
+  const projectDefaultDirectory = installCodexProjectDefaultDirectory(window);
   try {
     const adapter = installCurrentRendererAdapter();
-    binding.setAdapter(adapter.status, adapter.dispose, adapter.applyAgent, adapter.modelControl);
+    binding.setAdapter(
+      adapter.status,
+      () => {
+        projectDefaultDirectory.dispose();
+        adapter.dispose();
+      },
+      adapter.applyAgent,
+      adapter.modelControl,
+    );
   } catch (error) {
     console.error(
       "codexhost Renderer Adapter installation failed",
       error instanceof Error ? error.name : "UnknownError",
     );
-    binding.setAdapter({
-      state: "unsupported",
-      reason: "installation-failed",
-      modelUpdates: 0,
-      hook: null,
-    });
+    binding.setAdapter(
+      {
+        state: "unsupported",
+        reason: "installation-failed",
+        modelUpdates: 0,
+        hook: null,
+      },
+      () => {
+        projectDefaultDirectory.dispose();
+      },
+    );
   }
   return binding;
 }

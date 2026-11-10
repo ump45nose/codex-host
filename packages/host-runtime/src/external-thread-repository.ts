@@ -1,5 +1,6 @@
 import type { UsageMeasurementsSnapshot } from "@codexhost/shared-contracts";
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -35,6 +36,7 @@ import {
   materializeExternalSubagent,
   projectExternalSnapshot,
 } from "./external-subagent-threads.js";
+import { originClientName } from "./external-client-origin.js";
 
 export interface ExternalThreadStore {
   initialize(): Promise<void>;
@@ -115,17 +117,53 @@ export function defaultMappingStoreDirectory(environment: NodeJS.ProcessEnv): st
   );
 }
 
+export function resolveSharedMappingStoreDirectory(environment: NodeJS.ProcessEnv): string {
+  const configured = defaultMappingStoreDirectory(environment);
+  const home = environment.HOME ? path.resolve(environment.HOME) : os.homedir();
+  const defaultRemoteMappingStore = path.join(
+    home,
+    ".codexhost",
+    "remote",
+    "data",
+    "mapping-store",
+  );
+  const localMappingStore = path.join(home, ".codexhost", "mapping-store");
+  if (path.resolve(configured) === defaultRemoteMappingStore) {
+    try {
+      if (statSync(localMappingStore).isDirectory()) {
+        return localMappingStore;
+      }
+    } catch {
+      /* Keep the remote directory when no local Mapping Store exists. */
+    }
+  }
+  return configured;
+}
+
+/** Names the Host process that owns a Mapping Store in lock contention diagnostics. */
+export type MappingStoreOwnerRole = "local Host Runtime" | "remote app-server listener";
+
 export function createProductionExternalThreadStore(
   environment: NodeJS.ProcessEnv,
+  ownerRole: MappingStoreOwnerRole = "local Host Runtime",
 ): ExternalThreadStore {
-  return new MappingStore({ directory: defaultMappingStoreDirectory(environment) });
+  return new MappingStore({
+    directory: resolveSharedMappingStoreDirectory(environment),
+    ownerRole,
+  });
 }
 
 export class ExternalThreadRepository {
+  readonly #delegationsByChild = new Map<HostThreadId, StoredDelegationRecordV1>();
+  readonly #pendingDelegationsByChild = new Map<HostThreadId, StoredDelegationRecordV1>();
+
   constructor(private readonly store: ExternalThreadStore) {}
 
-  initialize(): Promise<void> {
-    return this.store.initialize();
+  async initialize(): Promise<void> {
+    await this.store.initialize();
+    for (const record of await this.store.listDelegations()) {
+      this.#delegationsByChild.set(record.childHostThreadId, record);
+    }
   }
 
   close(): Promise<void> {
@@ -168,8 +206,26 @@ export class ExternalThreadRepository {
     return this.store.getDelegation(delegationId);
   }
 
-  getDelegationByChild(childHostThreadId: HostThreadId): Promise<StoredDelegationRecordV1 | null> {
-    return this.store.getDelegationByChild(childHostThreadId);
+  async getDelegationByChild(
+    childHostThreadId: HostThreadId,
+  ): Promise<StoredDelegationRecordV1 | null> {
+    const stored = await this.store.getDelegationByChild(childHostThreadId);
+    if (stored) {
+      this.#delegationsByChild.set(childHostThreadId, stored);
+      return stored;
+    }
+    return this.#pendingDelegationsByChild.get(childHostThreadId) ?? null;
+  }
+
+  /** Whether this Thread is a Delegation child of a session Thread rather than a top-level client start. */
+  hasSessionDelegationParent(threadId: string): boolean {
+    const delegation =
+      this.#delegationsByChild.get(threadId as HostThreadId) ??
+      this.#pendingDelegationsByChild.get(threadId as HostThreadId);
+    if (!delegation) return false;
+    return (
+      delegation.parentHostThreadId !== threadId && !originClientName(delegation.parentHostThreadId)
+    );
   }
 
   findDelegationByRequest(requestId: string): Promise<StoredDelegationRecordV1 | null> {
@@ -184,19 +240,42 @@ export class ExternalThreadRepository {
     return this.store.listDelegations(parentHostThreadId);
   }
 
-  createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
-    return this.store.createDelegation(input);
+  async createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
+    const timestamp = new Date().toISOString();
+    const provisional: StoredDelegationRecordV1 = {
+      formatVersion: 1,
+      revision: 1,
+      ...input,
+      status: input.status ?? "creating",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.#pendingDelegationsByChild.set(input.childHostThreadId, provisional);
+    try {
+      const created = await this.store.createDelegation(input);
+      this.#delegationsByChild.set(created.childHostThreadId, created);
+      return created;
+    } finally {
+      this.#pendingDelegationsByChild.delete(input.childHostThreadId);
+    }
   }
 
-  setDelegationStatus(
+  async setDelegationStatus(
     delegationId: HostThreadId,
     status: DelegationStatus,
   ): Promise<StoredDelegationRecordV1> {
-    return this.store.setDelegationStatus(delegationId, status);
+    const updated = await this.store.setDelegationStatus(delegationId, status);
+    this.#delegationsByChild.set(updated.childHostThreadId, updated);
+    return updated;
   }
 
-  removeDelegation(delegationId: HostThreadId): Promise<void> {
-    return this.store.removeDelegation(delegationId);
+  async removeDelegation(delegationId: HostThreadId): Promise<void> {
+    for (const [childId, record] of this.#delegationsByChild) {
+      if (record.delegationId === delegationId) {
+        this.#delegationsByChild.delete(childId);
+      }
+    }
+    await this.store.removeDelegation(delegationId);
   }
 
   createProvisional(input: CreateProvisionalThreadInput): Promise<StoredThreadRecordV1> {
@@ -388,6 +467,8 @@ export class ExternalThreadRepository {
     return this.#projectSnapshot(nextRecord, snapshot, derived);
   }
 
+  /** Replace the current Session with one holding an exact shorter prefix of its Turns:
+   * usually without the last Turn, or without several trailing Turns derived from a Checkpoint. */
   async commitLastTurnRollback(
     current: StoredThreadRecordV1,
     nativeSessionRef: NativeSessionRef,
@@ -397,9 +478,9 @@ export class ExternalThreadRepository {
       current.state !== "ready" ||
       !current.nativeSessionRef ||
       nativeSessionRef.harnessId !== current.harnessId ||
-      snapshot.turns.length !== current.turnMappings.length - 1
+      snapshot.turns.length >= current.turnMappings.length
     ) {
-      throw new Error("Last-Turn rollback is not an exact ready Session replacement");
+      throw new Error("Rollback is not an exact shorter ready Session replacement");
     }
     const mappings = snapshot.turns.map((turn, index): StoredTurnMappingV1 => {
       const previous = current.turnMappings[index];

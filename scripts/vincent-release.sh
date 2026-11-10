@@ -170,6 +170,12 @@ cmd_build() {
   fi
   (
     cd "$wt"
+    # Never build an older fork version from a checkout that already contains
+    # a newer upstream version (the release filename must match the binaries).
+    local source_version
+    source_version="$(node -p 'require("./package.json").version')"
+    [[ "$source_version" == "${TAG#v}" ]] ||
+      die "refusing to build $TAG: source package.json is $source_version; select the matching upstream release"
     log "npm ci"; npm ci --no-audit --no-fund >/dev/null
     log "build"; npm run -s build:typescript; npm run -s build:renderer
     if ! $NO_TEST; then log "typecheck + tests"; npm run -s typecheck; npx vitest run --config tests/vitest.config.js; fi

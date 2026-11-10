@@ -4,6 +4,7 @@
 #   scripts/vincent-ci.sh plan  [TAG] [--force]  # prints tag=, version=, skip= lines (GITHUB_OUTPUT format)
 #   scripts/vincent-ci.sh merge TAG              # merges upstream TAG + manifest branches onto HEAD
 #   scripts/vincent-ci.sh test                   # full vitest suite, tolerating only the known flake
+#   scripts/vincent-ci.sh verify-version TAG     # ensure source version matches the release
 #
 # Environment: CH_UPSTREAM_URL (default BytePioneer-AI/codex-host), CH_FORK_REPOSITORY
 # (default ump45nose/codex-host), CH_FORK_REMOTE (default origin), GH_TOKEN for `plan`.
@@ -49,6 +50,15 @@ cmd_plan() {
   echo "tag=$tag"
   echo "version=$core-$CHANNEL.$((n + 1))"
   echo "skip=$skip"
+}
+
+cmd_verify_version() {
+  local tag="${1:?verify-version TAG}" source_version
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable upstream tag: $tag"
+  source_version="$(node -p 'require("./package.json").version')" || die "cannot read source version"
+  [[ "$source_version" == "${tag#v}" ]] ||
+    die "refusing to publish $tag: source package.json is $source_version; select the matching upstream release"
+  log "release $tag matches source version $source_version"
 }
 
 manifest_branches() {
@@ -139,5 +149,6 @@ case "$cmd" in
   plan) cmd_plan "$@" ;;
   merge) cmd_merge "$@" ;;
   test) cmd_test "$@" ;;
-  *) die "usage: vincent-ci.sh plan [TAG] [--force] | merge TAG | test" ;;
+  verify-version) cmd_verify_version "$@" ;;
+  *) die "usage: vincent-ci.sh plan [TAG] [--force] | merge TAG | verify-version TAG | test" ;;
 esac

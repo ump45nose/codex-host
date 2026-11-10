@@ -10,7 +10,9 @@
 
 ## 监听与发现
 
-- Runtime 在 `127.0.0.1:4398` 提供外部监听；`CODEXHOST_EXTERNAL_CLIENT_PORT` 改端口，`off` 关闭。端口被占用时只停用外部监听并写诊断，Desktop 不受影响。只有本机 Desktop 路径的 Runtime 开启监听，受管远程 Host 不开。
+- 本机 Desktop Runtime 与受管 Remote Host 均在 `127.0.0.1:4398` 提供外部监听；`CODEXHOST_EXTERNAL_CLIENT_PORT` 改端口，`off` 关闭。端口被占用时只停用外部监听并写诊断，Host 的其他功能不受影响。Remote Host 不要求 Desktop 保持连接，委派使用其共享执行会话。
+- Remote Host 的客户端登记、访问设置、事件与 webhook 使用该 Host 的数据目录（默认 `~/.codexhost/remote/data`）。运行 `codexhost client` 时须使用相同的 `CODEXHOST_DATA_DIR`；修改 `~/.codexhost` 下的登记不会配置另一个数据目录的 Host。
+- 无界面的共享执行会话在首次原生 Codex 委派前协商官方协议；使用默认模型无需先查询模型目录或打开 Desktop。
 - 监听只接受客户端令牌，不接受 Host 内部令牌；令牌缺失、未知或已吊销都返回相同的 `UNAUTHORIZED`，不透露客户端名称。
 - Runtime 写出 `<数据目录>/external-client-endpoint.json`（端点、进程标识、启动时间，不含令牌），退出时只删除自己写的那份。
 - CLI 有 Host 提供的连接参数时照旧使用；没有时，若设置了 `CODEXHOST_CLIENT_TOKEN` 或 `CODEXHOST_CLIENT_TOKEN_FILE`，经描述文件或配置端口连接外部监听。两者都没有时，错误详情的 `externalClient` 给出这两个变量和登记命令。
@@ -73,6 +75,7 @@
 - `client access --tailnet on|off --public on|off` 或控制台外部客户端页面写入 `<数据目录>/external-client-access.json`，两者默认关闭。运行中的 Runtime 每 30 秒按它和 Tailscale 状态调整监听，并把实际状态写入 `external-client-access-status.json`，`client access` 与控制台外部客户端页面会一起显示。
 - 控制台外部客户端页面（`/api/external-clients`、`/api/external-clients/access`）直接读写数据目录中的状态与登记文件，展示本机、tailnet、公网监听状态与 Funnel MCP URL、开关、已登记客户端的权限/网络范围、最近访问及 webhook 投递状态，不返回任何令牌或密钥，且在 Desktop 未运行时同样可用。
 - tailnet：在本机 Tailscale IPv4 地址上使用与本机监听相同的端口；地址变化时重新绑定，Tailscale 不可用时报告原因。
+- 私有 HTTPS：可使用 `tailscale serve --bg --https=14443 http://127.0.0.1:4398`，MCP 地址为 `https://<机器>.<tailnet>.ts.net:14443/mcp`。Serve 转发到本机监听，因此客户端须允许 `local` 网络并携带 Bearer 令牌；无需开启 codexhost 公网入口或 Funnel。该方式与直接连接 Tailscale IPv4 的 `tailnet` 监听分开配置。
 - 公网：一个独立的 loopback 端口，只由 Tailscale Funnel 的 `/codexhost` 路径转发过来，因此公网请求不可能被当作本机请求。Funnel 会剥离前缀，后端收到 `/mcp`、`/v1/...`。公网 MCP 地址是 `https://<机器>.<tailnet>.ts.net/codexhost/mcp`。codexhost 只添加和删除自己的路径，路径已指向非 loopback 目标时报告不可用而不替换；关闭公网后，或新 Runtime 发现上次留下的映射时删除它。
 - Tailscale 通过其 CLI 操作（macOS 上也查找 `Tailscale.app` 内的 CLI，可用 `CODEXHOST_TAILSCALE` 指定）；两个开关都关闭时 Runtime 不调用它。
 - 公网入口同时支持静态 `Authorization: Bearer <token>`（Grok Bot 等支持静态 header 的 connector）和基于一次性配对码的 OAuth 2.1 + PKCE（供只支持 OAuth 的托管 MCP connector 使用）：

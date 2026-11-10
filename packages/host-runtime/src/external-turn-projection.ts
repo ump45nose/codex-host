@@ -124,6 +124,7 @@ export class ExternalTurnProjection {
     if (event.type === "turn.completed" && thread.pendingSteerProjections.size > 0) {
       await Promise.allSettled([...thread.pendingSteerProjections]);
     }
+    if (!thread.projectedTurns.has(event.turnId) && thread.sessionUnavailable) return;
     const projection = projectedTurn(thread, event.turnId);
     await waitForTurnResponse(thread, event.turnId);
     if (

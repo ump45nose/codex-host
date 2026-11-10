@@ -127,6 +127,30 @@ describe("Cursor parameterized Thinking", () => {
         }),
       ).toMatchObject({ ok: false });
       expect(f.session.initialState).toEqual(original);
+      expect(f.outputs.some((output) => output.kind === "event")).toBe(false);
+    } finally {
+      await f.session.close();
+      await f.done;
+    }
+  });
+  it("confirms a Model that is already selected without another native write", async () => {
+    const f = setup();
+    const current = required(f.session.initialState.effectiveModel);
+    try {
+      expect(await f.session.execute({ type: "model.select", model: current })).toEqual({
+        ok: true,
+        value: { completed: true },
+      });
+      expect(f.transport.configure).not.toHaveBeenCalled();
+      expect(f.outputs).toEqual([
+        {
+          kind: "event",
+          event: {
+            type: "session.state.changed",
+            state: expect.objectContaining({ effectiveModel: current }),
+          },
+        },
+      ]);
     } finally {
       await f.session.close();
       await f.done;

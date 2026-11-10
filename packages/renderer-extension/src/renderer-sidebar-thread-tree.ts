@@ -183,13 +183,14 @@ export interface SidebarThreadForestOptions {
 }
 
 /**
- * Lay out all native lists together. Desktop files every Thread in exactly one
- * list, and a new Fork is not pinned, so the Fork of a pinned Thread lands in
+ * Lay out all native lists together. A new Fork is not pinned, so the Fork of a pinned Thread lands in
  * Recents while its parent stays in Pinned. Such a child, with its own
  * subtree, is mirrored into the list that shows its root ancestor and hidden
  * where Desktop placed it; inside each list `layoutSidebarThreadTree` applies.
- * A parent in the same list wins over one elsewhere. Only a key shown once
- * across all lists can move, and a cross-list cycle keeps its entries in place.
+ * A pinned parent wins over a duplicate in the child's list; otherwise a
+ * parent in the same list wins over one elsewhere. Duplicate children are
+ * mirrored only once into Pinned; other cross-list moves require a unique key.
+ * A cross-list cycle keeps its entries in place.
  *
  * Lists marked in `retainNativeList` (Pinned) keep their native rows even when
  * the parent lives elsewhere, so a pinned child stays visible in Pinned on its
@@ -217,7 +218,17 @@ export function planSidebarThreadForest(
     const entry = lists[list]?.[index];
     if (!entry || entry.key === null || entry.parentKey === null) return null;
     if (entry.parentKey === entry.key || indexByKey[list]?.get(entry.key) !== index) return null;
-    const sameList = indexByKey[list]?.get(entry.parentKey);
+    const parentKey = entry.parentKey;
+    const sameList = indexByKey[list]?.get(parentKey);
+    // A pinned parent can also be rendered in its project or Recents. Prefer
+    // the pinned occurrence for an unpinned child so it stays with that parent.
+    if (!retainNative[list]) {
+      const pinnedList = lists.findIndex(
+        (_, candidate) => retainNative[candidate] && indexByKey[candidate]?.has(parentKey),
+      );
+      const pinnedIndex = indexByKey[pinnedList]?.get(parentKey);
+      if (pinnedIndex !== undefined) return { list: pinnedList, index: pinnedIndex };
+    }
     if (sameList !== undefined) return { list, index: sameList };
     // Outbound retain: do not yank a pinned (etc.) row under an unpinned parent.
     if (retainNative[list]) return null;
@@ -239,14 +250,23 @@ export function planSidebarThreadForest(
 
   return lists.map((entries, list): SidebarThreadForestListPlan => {
     const shown: { list: number; index: number }[] = [];
+    const shownKeys = new Set<string>();
     entries.forEach((_, index) => {
-      if (display[list]?.[index] === list) shown.push({ list, index });
+      if (display[list]?.[index] === list) {
+        shown.push({ list, index });
+        const key = entries[index]?.key;
+        if (key !== null && key !== undefined) shownKeys.add(key);
+      }
     });
     const kept = shown.length;
     lists.forEach((other, otherList) => {
       if (otherList === list) return;
       other.forEach((_, index) => {
-        if (display[otherList]?.[index] === list) shown.push({ list: otherList, index });
+        if (display[otherList]?.[index] !== list) return;
+        const key = other[index]?.key;
+        if (key && shownKeys.has(key)) return;
+        shown.push({ list: otherList, index });
+        if (key) shownKeys.add(key);
       });
     });
     const shownEntries = shown.map(
@@ -1146,35 +1166,88 @@ export function installRendererSidebarThreadTree(options: {
       }
       return retain;
     });
+    // Reflow retained mirrors together with the current rows. Their old order
+    // can collide with rows that shifted when the source list unmounted.
+    lists.forEach((_, listIndex) => {
+      const retain = retainByList[listIndex];
+      const forest = plans[listIndex];
+      if (!retain?.size || !forest) return;
+      const entriesInList = entries[listIndex] ?? [];
+      const shown: {
+        entry: SidebarThreadTreeEntry;
+        order: number;
+        sticky: boolean;
+        assign(plan: SidebarThreadTreeLayoutPlan): void;
+      }[] = [];
+      entriesInList.forEach((entry, index) => {
+        const item = forest.items?.[index];
+        if (item?.mirrored) return;
+        shown.push({
+          entry,
+          order: item?.order ?? index,
+          sticky: false,
+          assign(plan) {
+            if (!forest.items) {
+              forest.items = entriesInList.map((_, order) => ({
+                order,
+                depth: 0,
+                hidden: false,
+                childCount: 0,
+                collapsed: false,
+                mirrored: false,
+              }));
+            }
+            forest.items[index] = { ...plan, mirrored: false };
+          },
+        });
+      });
+      for (const mirror of forest.mirrors) {
+        const entry = entries[mirror.list]?.[mirror.index];
+        if (entry)
+          shown.push({
+            entry,
+            order: mirror.plan.order,
+            sticky: false,
+            assign(plan) {
+              mirror.plan = plan;
+            },
+          });
+      }
+      for (const [key, layout] of retain) {
+        shown.push({
+          entry: { key, parentKey: parentKeyFromMirrorKey(key) },
+          order: layout.order,
+          sticky: true,
+          assign(plan) {
+            retain.set(key, layoutOf(plan, key));
+          },
+        });
+      }
+      shown.sort((a, b) => a.order - b.order || Number(b.sticky) - Number(a.sticky));
+      const reflowed = layoutSidebarThreadTree(
+        shown.map(({ entry }) => entry),
+        collapsed,
+      );
+      reflowed?.forEach((plan, index) => shown[index]?.assign(plan));
+    });
     // Lay out native entries first so every mirror clones its settled source.
-    // When Recents unmounts every child, forest may return items:null; still
-    // apply a parent layout if sticky mirrors remain under that parent.
     listItems.forEach((items, listIndex) => {
       const listPlan = plans[listIndex]?.items ?? null;
-      const retain = retainByList[listIndex] ?? new Map();
-      const stickyDirectByParent = new Map<string, number>();
-      for (const stickyKey of retain.keys()) {
-        const parent = parentKeyFromMirrorKey(stickyKey);
-        if (parent === null) continue;
-        stickyDirectByParent.set(parent, (stickyDirectByParent.get(parent) ?? 0) + 1);
-      }
       items.forEach((item, index) => {
         const key = entries[listIndex]?.[index]?.key ?? null;
         const plan = listPlan?.[index];
-        const stickyDirect = key !== null ? (stickyDirectByParent.get(key) ?? 0) : 0;
-        if (!plan && stickyDirect === 0) {
+        if (!plan) {
           item.apply(null);
           return;
         }
-        const childCount = (plan?.childCount ?? 0) + stickyDirect;
         item.apply(
           layoutOf(
             {
-              order: plan?.order ?? index,
-              depth: plan?.depth ?? 0,
-              hidden: plan?.hidden ?? false,
-              childCount,
-              collapsed: key !== null && childCount > 0 && collapsed.has(key),
+              order: plan.order,
+              depth: plan.depth,
+              hidden: plan.hidden,
+              childCount: plan.childCount,
+              collapsed: plan.collapsed,
             },
             key,
           ),

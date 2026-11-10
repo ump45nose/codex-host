@@ -3768,6 +3768,8 @@ export class AppServerHost {
       }));
     const threadUsage =
       resolution.kind === "official" ? null : await this.#threadUsage(resolution.thread);
+    const sessionCatalog =
+      resolution.kind === "external" ? resolution.thread.session.modelCatalog?.() : undefined;
     const inspection = threadInspectionSchema.parse(
       resolution.kind === "official"
         ? {
@@ -3803,6 +3805,7 @@ export class AppServerHost {
                     resolution.thread.stateObserver.state.effectivePermissionModeId,
                 }
               : {}),
+            ...(sessionCatalog ? { catalog: sessionCatalog } : {}),
             history: resolution.thread.session.capabilities.history,
             ...(threadUsage ? { usage: threadUsage } : {}),
             locked: true,
@@ -6151,7 +6154,13 @@ export class AppServerHost {
       if (this.#externalQueue.pause(thread.id, "outcome-unknown"))
         await this.#publishExternalQueue(thread.id);
       this.#diagnose(`${thread.harnessId} Harness Session faulted: ${event.error.message}`);
-      // Idle Threads must not keep a dead Session; the next open restores from disk.
+      // The Session can fault without a terminal Turn. Settle open Turns from the
+      // projector, then drop the idle Session so the next request restores it.
+      for (const { projector } of [...thread.projectedTurns.values()]) {
+        for (const failure of projector.failureEvents(event.error)) {
+          await this.#projectHarnessOutput(thread, { kind: "event", event: failure });
+        }
+      }
       if (
         !thread.running &&
         !thread.activeTurnId &&

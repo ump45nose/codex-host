@@ -735,6 +735,9 @@ fn child_command(
     };
     if !desktop_helper && should_start_host_runtime(arguments) {
         if inherited_remote_profile {
+            if is_managed_remote_listener(arguments) {
+                return Err("managed remote listener inherited a local codexhost Launcher session; start remote listeners only from an SSH session".into());
+            }
             return Err("local Desktop inherited remote Host bootstrap; restart through codexhost with a clean local environment".into());
         }
         match host_paths {

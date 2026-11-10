@@ -179,8 +179,6 @@ export function delegationCliEnvironment(
 async function prepareDelegationRuntime(input: {
   environment: NodeJS.ProcessEnv;
   hostRuntimePath?: string;
-  /** Only the local Runtime serves external clients; a managed remote Host does not. */
-  externalClients?: boolean;
   /** Only the local Runtime can show pages in Codex Desktop. */
   preview?: LocalPreviewManager;
   createHost(
@@ -227,19 +225,17 @@ async function prepareDelegationRuntime(input: {
     watchApi: registry,
     ...(input.preview ? { preview: input.preview } : {}),
   });
-  const externalServer = input.externalClients
-    ? await startExternalClients(input.environment, registry, events).then(
-        (started) => {
-          if (started)
-            process.stderr.write(`codexhost external clients: listening on ${started.endpoint}\n`);
-          return started;
-        },
-        (error: unknown) => {
-          process.stderr.write(`codexhost external clients: ${String(error)}\n`);
-          return undefined;
-        },
-      )
-    : undefined;
+  const externalServer = await startExternalClients(input.environment, registry, events).then(
+    (started) => {
+      if (started)
+        process.stderr.write(`codexhost external clients: listening on ${started.endpoint}\n`);
+      return started;
+    },
+    (error: unknown) => {
+      process.stderr.write(`codexhost external clients: ${String(error)}\n`);
+      return undefined;
+    },
+  );
   const environment = {
     ...input.environment,
     ...delegationCliEnvironment(input.environment, input.hostRuntimePath),
@@ -424,7 +420,6 @@ export async function runHostRuntime(input: {
     return prepareDelegationRuntime({
       environment,
       ...(hostRuntimePath ? { hostRuntimePath } : {}),
-      externalClients: true,
       preview,
       createHost: async (delegationEnvironment, onDelegationApi, registry) => {
         const official = await prepareLocalCodex({

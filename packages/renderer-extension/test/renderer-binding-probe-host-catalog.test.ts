@@ -12,6 +12,7 @@ import {
   rendererModelSelectionFailed,
   type RendererModelControlView,
 } from "../src/renderer-model-picker.js";
+import { isListedConnectionHost } from "../src/renderer-binding-probe.js";
 import type { RendererRequestOptions } from "../src/renderer-request-sender.js";
 import type { installRendererSidebarAgentIcons } from "../src/renderer-sidebar-agent-icons.js";
 import type { RendererConnectionDiagnostics } from "../src/settings/connections-page.js";
@@ -335,6 +336,45 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       await vi.waitFor(() => expect(getPlugins("remote")).toEqual([plugin]));
       expect(remote.listHarnessPlugins).toHaveBeenCalledOnce();
       expect(getPlugins("local")).toEqual([]);
+    } finally {
+      probe.dispose();
+    }
+  });
+
+  it("omits Desktop-internal Hosts from the connection list", async () => {
+    installFakeBrowser();
+    const listed = vi.fn(async () => ({ plugins: [] }));
+    const hidden = vi.fn(async () => ({ plugins: [] }));
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({});
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => "local",
+        knownHostIds: () => [
+          "local",
+          "durable",
+          "env_e_6ac33e9d40788325a48a8c0aa62bc454",
+          "remote-ssh:work",
+        ],
+        clientForHost: (hostId: string) =>
+          isListedConnectionHost(hostId)
+            ? { listHarnessPlugins: listed }
+            : { listHarnessPlugins: hidden },
+      } as never,
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(
+          testState
+            .getConnectionDiagnostics?.()
+            .snapshot()
+            .hosts.map(({ hostId }) => hostId),
+        ).toEqual(["local", "remote-ssh:work"]);
+      });
+      expect(hidden).not.toHaveBeenCalled();
     } finally {
       probe.dispose();
     }

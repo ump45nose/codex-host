@@ -1347,6 +1347,10 @@ fn managed_remote_listener_detaches_and_reuses_a_matching_socket_owner() {
     };
     let root_id = value("root=");
     let shim_id = value("shim=");
+    assert!(
+        ready_contents.lines().any(|line| line == "aqua_service="),
+        "detached listener leaked CODEXHOST_REMOTE_AQUA_SERVICE to child: {ready_contents}"
+    );
     let output = match completion_receiver.recv_timeout(Duration::from_secs(2)) {
         Ok(output) => output.expect("wait for managed remote listener bootstrap"),
         Err(error) => {

@@ -35,6 +35,8 @@ pub const REMOTE_SSH_MANAGED_ENV: &str = "CODEXHOST_REMOTE_SSH_MANAGED";
 const DATA_DIRECTORY_ENV: &str = "CODEXHOST_DATA_DIR";
 const LAUNCHER_PID_ENV: &str = "CODEXHOST_LAUNCHER_PID";
 const REMOTE_LISTENER_CHILD_ENV: &str = "CODEXHOST_REMOTE_LISTENER_CHILD";
+#[cfg(target_os = "macos")]
+const REMOTE_AQUA_SERVICE_ENV: &str = "CODEXHOST_REMOTE_AQUA_SERVICE";
 const INTERNAL_ORIGINATOR_OVERRIDE_ENV: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const DESKTOP_ORIGINATOR: &str = "Codex Desktop";
 
@@ -544,14 +546,18 @@ fn socket_identity(socket_path: &Path) -> Option<(u64, u64)> {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn detach_remote_listener_session() -> ShimResult<()> {
+    use nix::errno::Errno;
     use nix::unistd::setsid;
 
-    setsid().map(|_| ()).map_err(|error| {
-        io::Error::other(format!(
+    // A listener launched through macOS `launchctl` in `gui/<uid>` is already a
+    // session leader (`pgid == pid`), where `setsid` returns `EPERM`.
+    match setsid() {
+        Ok(_) | Err(Errno::EPERM) => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
             "could not detach the managed remote listener session: {error}"
         ))
-    })?;
-    Ok(())
+        .into()),
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -574,6 +580,274 @@ fn stop_detached_listener(child: &mut std::process::Child) {
         let _ = child.kill();
     }
     let _ = child.wait();
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+enum DetachedListenerHandle {
+    Child(std::process::Child),
+    #[cfg(target_os = "macos")]
+    AquaLaunchd {
+        process_id: u32,
+        service_target: String,
+    },
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl DetachedListenerHandle {
+    fn try_wait(&mut self) -> ShimResult<Option<String>> {
+        match self {
+            Self::Child(child) => Ok(child.try_wait()?.map(|status| status.to_string())),
+            #[cfg(target_os = "macos")]
+            Self::AquaLaunchd {
+                process_id,
+                service_target,
+            } => {
+                if codexhost_platform::process_exists(*process_id) {
+                    return Ok(None);
+                }
+                let status = aqua_service_last_exit_status(service_target)
+                    .unwrap_or_else(|| "exited".to_owned());
+                remote_lifecycle::bootout_aqua_service(service_target);
+                Ok(Some(status))
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        match self {
+            Self::Child(child) => stop_detached_listener(child),
+            #[cfg(target_os = "macos")]
+            Self::AquaLaunchd {
+                process_id,
+                service_target,
+            } => {
+                use nix::sys::signal::{Signal, kill};
+                use nix::unistd::Pid;
+
+                if let Ok(raw_process_id) = i32::try_from(*process_id) {
+                    let pid = Pid::from_raw(raw_process_id);
+                    if codexhost_platform::process_exists(*process_id) {
+                        let _ = kill(pid, Signal::SIGTERM);
+                        let deadline = Instant::now() + Duration::from_secs(2);
+                        while codexhost_platform::process_exists(*process_id)
+                            && Instant::now() < deadline
+                        {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        if codexhost_platform::process_exists(*process_id) {
+                            let _ = kill(pid, Signal::SIGKILL);
+                        }
+                    }
+                }
+                remote_lifecycle::bootout_aqua_service(service_target);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn aqua_service_last_exit_status(service_target: &str) -> Option<String> {
+    let output = Command::new("/bin/launchctl")
+        .args(["print", service_target])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(code) = line.trim().strip_prefix("last exit code = ") {
+            let code = code.trim();
+            if !code.is_empty() && code != "(never exited)" {
+                return Some(format!("exit status: {code}"));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn is_valid_plist_str(value: &str) -> bool {
+    value.chars().all(|character| {
+        matches!(
+            character,
+            '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}'
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+#[cfg(target_os = "macos")]
+fn write_temporary_aqua_plist(path: &Path, contents: &str) -> io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let _ = std::fs::remove_file(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()
+}
+
+/// Launches the detached remote listener supervisor inside the desktop user's
+/// `gui/<uid>` (`Aqua`) security session when available so local CLIs and
+/// Harnesses spawned from remote sessions inherit Keychain and TCC access.
+/// Falls back to direct process spawning when no `Aqua` session is logged in.
+#[cfg(target_os = "macos")]
+fn spawn_aqua_remote_listener(
+    current_executable: &Path,
+    arguments: &[OsString],
+    socket_path: &Path,
+) -> Option<DetachedListenerHandle> {
+    let uid = nix::unistd::geteuid().as_raw();
+    if uid == 0 {
+        return None;
+    }
+    let executable_str = current_executable.to_str()?;
+    if !is_valid_plist_str(executable_str) {
+        return None;
+    }
+    let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
+    program_arguments.push(executable_str);
+    for argument in arguments {
+        let text = argument.to_str()?;
+        if !is_valid_plist_str(text) {
+            return None;
+        }
+        program_arguments.push(text);
+    }
+
+    let label = remote_lifecycle::aqua_listener_label(socket_path);
+    let domain_target = format!("gui/{uid}");
+    let service_target = format!("{domain_target}/{label}");
+    remote_lifecycle::bootout_aqua_service(&service_target);
+
+    let mut plist = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n",
+    );
+    plist.push_str(&format!(
+        "  <key>Label</key>\n  <string>{}</string>\n",
+        xml_escape(&label)
+    ));
+    plist.push_str("  <key>ProgramArguments</key>\n  <array>\n");
+    for argument in program_arguments {
+        plist.push_str(&format!("    <string>{}</string>\n", xml_escape(argument)));
+    }
+    plist.push_str("  </array>\n");
+
+    if let Ok(working_directory) = env::current_dir()
+        && working_directory.is_dir()
+        && let Some(working_directory_str) = working_directory.to_str()
+        && is_valid_plist_str(working_directory_str)
+    {
+        plist.push_str(&format!(
+            "  <key>WorkingDirectory</key>\n  <string>{}</string>\n",
+            xml_escape(working_directory_str)
+        ));
+    }
+
+    plist.push_str("  <key>EnvironmentVariables</key>\n  <dict>\n");
+    for (name, value) in env::vars_os() {
+        let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
+            continue;
+        };
+        if matches!(
+            name,
+            REMOTE_LISTENER_CHILD_ENV | REMOTE_AQUA_SERVICE_ENV | "SECURITYSESSIONID"
+        ) {
+            continue;
+        }
+        if !is_valid_plist_str(name) || !is_valid_plist_str(value) {
+            continue;
+        }
+        plist.push_str(&format!(
+            "    <key>{}</key>\n    <string>{}</string>\n",
+            xml_escape(name),
+            xml_escape(value)
+        ));
+    }
+    plist.push_str(&format!(
+        "    <key>{}</key>\n    <string>1</string>\n",
+        xml_escape(REMOTE_LISTENER_CHILD_ENV)
+    ));
+    plist.push_str(&format!(
+        "    <key>{}</key>\n    <string>{}</string>\n",
+        xml_escape(REMOTE_AQUA_SERVICE_ENV),
+        xml_escape(&service_target)
+    ));
+    plist.push_str("  </dict>\n");
+    plist.push_str(
+        "  <key>RunAtLoad</key>\n  <false/>\n\
+           <key>LimitLoadToSessionType</key>\n  <string>Aqua</string>\n\
+           <key>AbandonProcessGroup</key>\n  <true/>\n\
+           <key>ProcessType</key>\n  <string>Interactive</string>\n\
+           <key>StandardInPath</key>\n  <string>/dev/null</string>\n\
+           <key>StandardOutPath</key>\n  <string>/dev/null</string>\n\
+           <key>StandardErrorPath</key>\n  <string>/dev/null</string>\n\
+         </dict>\n\
+         </plist>\n",
+    );
+
+    let plist_path = env::temp_dir().join(format!(".{label}.{}.plist", std::process::id()));
+    write_temporary_aqua_plist(&plist_path, &plist).ok()?;
+    let plist_argument = plist_path.to_str()?.to_owned();
+    let bootstrap = Command::new("/bin/launchctl")
+        .args(["bootstrap", &domain_target, &plist_argument])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = std::fs::remove_file(&plist_path);
+    if !bootstrap.is_ok_and(|status| status.success()) {
+        remote_lifecycle::bootout_aqua_service(&service_target);
+        return None;
+    }
+
+    let kickstart = Command::new("/bin/launchctl")
+        .args(["kickstart", "-p", &service_target])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok();
+    let process_id = kickstart
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .rev()
+                .find_map(|token| token.parse::<u32>().ok())
+                .filter(|pid| *pid > 1)
+        });
+    let Some(process_id) = process_id else {
+        remote_lifecycle::bootout_aqua_service(&service_target);
+        return None;
+    };
+    Some(DetachedListenerHandle::AquaLaunchd {
+        process_id,
+        service_target,
+    })
 }
 
 /// A managed remote listener owns the remote installation's Host state. It must never run
@@ -640,15 +914,25 @@ fn launch_detached_remote_listener(arguments: &[OsString]) -> ShimResult<i32> {
         previous_socket = None;
     }
     ensure_remote_listener_environment()?;
-    let mut command = Command::new(&current_executable);
-    command
-        .args(arguments)
-        .env(REMOTE_LISTENER_CHILD_ENV, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    configure_background_command(&mut command);
-    let mut child = command.spawn()?;
+    #[cfg(target_os = "macos")]
+    let aqua_child = spawn_aqua_remote_listener(&current_executable, arguments, &socket_path);
+    #[cfg(not(target_os = "macos"))]
+    let aqua_child: Option<DetachedListenerHandle> = None;
+
+    let mut child = match aqua_child {
+        Some(handle) => handle,
+        None => {
+            let mut command = Command::new(&current_executable);
+            command
+                .args(arguments)
+                .env(REMOTE_LISTENER_CHILD_ENV, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            configure_background_command(&mut command);
+            DetachedListenerHandle::Child(command.spawn()?)
+        }
+    };
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if let Some(status) = child.try_wait()? {
@@ -668,7 +952,7 @@ fn launch_detached_remote_listener(arguments: &[OsString]) -> ShimResult<i32> {
             return Ok(0);
         }
         if Instant::now() >= deadline {
-            stop_detached_listener(&mut child);
+            child.stop();
             return Err(format!(
                 "managed remote listener did not become ready at {} within {} seconds",
                 socket_path.display(),
@@ -755,6 +1039,8 @@ fn child_command(
                     .env_remove(CODEX_CLI_PATH_ENV)
                     .env_remove(REMOTE_SSH_MANAGED_ENV)
                     .env_remove(REMOTE_LISTENER_CHILD_ENV);
+                #[cfg(target_os = "macos")]
+                command.env_remove(REMOTE_AQUA_SERVICE_ENV);
                 command.envs(remote_proxy_environment);
                 configure_background_command(&mut command);
                 return Ok(command);
@@ -787,6 +1073,8 @@ fn child_command(
         .env_remove(HOST_RUNTIME_PATH_ENV)
         .env_remove(REMOTE_SSH_MANAGED_ENV)
         .env_remove(REMOTE_LISTENER_CHILD_ENV);
+    #[cfg(target_os = "macos")]
+    command.env_remove(REMOTE_AQUA_SERVICE_ENV);
     command.envs(remote_proxy_environment);
     configure_background_command(&mut command);
     Ok(command)
@@ -1005,9 +1293,17 @@ pub fn run_from_environment() -> ShimResult<i32> {
     {
         if env::var_os(REMOTE_LISTENER_CHILD_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
             detach_remote_listener_session()?;
-        } else {
-            return launch_detached_remote_listener(&arguments);
+            let result = run_proxy(&arguments);
+            #[cfg(target_os = "macos")]
+            if let Some(service_target) = env::var_os(REMOTE_AQUA_SERVICE_ENV)
+                .and_then(|value| value.into_string().ok())
+                .filter(|value| !value.is_empty())
+            {
+                remote_lifecycle::schedule_aqua_service_bootout(&service_target);
+            }
+            return result;
         }
+        return launch_detached_remote_listener(&arguments);
     }
     run_proxy(&arguments)
 }

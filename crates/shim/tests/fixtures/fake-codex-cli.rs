@@ -43,9 +43,10 @@ fn run_unix_listener() -> bool {
         write_ready_file(
             &path,
             &format!(
-                "root={}\nshim={}\n",
+                "root={}\nshim={}\naqua_service={}\n",
                 process::id(),
-                nix::unistd::getppid().as_raw()
+                nix::unistd::getppid().as_raw(),
+                env::var("CODEXHOST_REMOTE_AQUA_SERVICE").unwrap_or_default()
             ),
         );
     }

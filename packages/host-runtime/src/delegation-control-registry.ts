@@ -395,6 +395,15 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
       );
     }
     const matches = await this.#matching((registration) => registration.canHandleStart(input));
+    // In a shared-backend Runtime, attached GUI sessions observe the same native
+    // Codex notifications and store as the catalog.
+    if (matches.length !== 1 && this.#harnessCatalog) {
+      if (matches.length > 1 || Boolean(input.parentThreadId)) {
+        return matches.includes(this.#harnessCatalog)
+          ? this.#harnessCatalog
+          : (matches[0] ?? this.#harnessCatalog);
+      }
+    }
     return only(
       matches,
       input.parentThreadId
@@ -435,6 +444,11 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
     const registrations = [...this.#registrations];
     const matches = await this.#matching((registration) => registration.ownsThread(threadId));
     if (matches.length === 1) return matches[0] as DelegationControlRegistration;
+    if (this.#harnessCatalog) {
+      return matches.includes(this.#harnessCatalog)
+        ? this.#harnessCatalog
+        : (matches[0] ?? this.#harnessCatalog);
+    }
     if (matches.length > 1) {
       throw new DelegationControlError(
         "PARENT_THREAD_AMBIGUOUS",
@@ -442,7 +456,6 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
         { matchingRuntimeCount: matches.length },
       );
     }
-    if (this.#harnessCatalog) return this.#harnessCatalog;
     if (registrations.length === 0) {
       throw new DelegationControlError(
         "PARENT_THREAD_AMBIGUOUS",

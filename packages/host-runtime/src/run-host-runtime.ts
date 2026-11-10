@@ -512,9 +512,7 @@ export async function runHostRuntime(input: {
               usageStatistics,
               ...(sharedRuntime
                 ? {
-                    ...(sharedRuntime.sharedDelegation
-                      ? { sharedDelegation: sharedRuntime.sharedDelegation }
-                      : {}),
+                    sharedDelegation: () => sharedRuntime?.sharedDelegation,
                     sharedThreads: sharedRuntime.createBridge(process.stderr),
                     mappingStore: sharedRuntime.mappingStore,
                     closeMappingStoreOnExit: false,
@@ -559,6 +557,7 @@ export async function runHostRuntime(input: {
             ...(consoleOpener ? { consoleOpener } : {}),
             ...(webOpener ? { webOpener } : {}),
           };
+          let catalogDelegation: DelegationControlRegistration | undefined;
           const host = new AppServerHost({
             ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
             modelPrices,
@@ -566,7 +565,10 @@ export async function runHostRuntime(input: {
             ...common,
             arguments: input.arguments,
             // Every Remote Control client shares this backend and Mapping Store.
-            onDelegationApi: (api) => registry.register(api, { harnessCatalog: true }),
+            onDelegationApi: (api) => {
+              catalogDelegation = api;
+              return registry.register(api, { harnessCatalog: true });
+            },
             onThreadArchived,
           });
           listener = createRemoteAppServerWebSocketListener({
@@ -578,6 +580,7 @@ export async function runHostRuntime(input: {
                 modelPrices,
                 usageStatistics,
                 ...common,
+                sharedDelegation: () => catalogDelegation,
                 arguments: [],
                 desktopInput,
                 desktopOutput,
@@ -708,9 +711,7 @@ export async function runHostRuntime(input: {
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
               modelPrices,
               usageStatistics,
-              ...(activeSharedRuntime.sharedDelegation
-                ? { sharedDelegation: activeSharedRuntime.sharedDelegation }
-                : {}),
+              sharedDelegation: () => activeSharedRuntime.sharedDelegation,
               sharedThreads: activeSharedRuntime.createBridge(diagnosticOutput),
               stockCodexPath,
               arguments: [],

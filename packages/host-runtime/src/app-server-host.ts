@@ -397,7 +397,8 @@ export interface AppServerHostOptions {
   /** GUI connection to the single external-session owner. */
   sharedThreads?: SharedThreadBridge;
   /** In-process SSH fronts send external Delegations to the same owner as GUI requests. */
-  sharedDelegation?: DelegationControlRegistration;
+  sharedDelegation?:
+    DelegationControlRegistration | (() => DelegationControlRegistration | undefined);
   stockCodexPath: string;
   arguments: string[];
   environment?: NodeJS.ProcessEnv;
@@ -984,11 +985,12 @@ export class AppServerHost {
         this.#waitForPlugins().then(() => this.#delegationCoordinator.inspect(input)),
       start: (input, admitted) =>
         maintenanceOperation(async () => {
-          if (options.sharedDelegation && input.harnessId !== "codex") {
+          const sharedDelegation = this.#sharedDelegation();
+          if (sharedDelegation && input.harnessId !== "codex") {
             const active = [...this.#activeOfficialTurns.keys()];
             const parentThreadId =
               input.parentThreadId ?? (active.length === 1 ? active[0] : undefined);
-            return options.sharedDelegation.start(
+            return sharedDelegation.start(
               {
                 ...input,
                 ...(parentThreadId ? { parentThreadId } : {}),
@@ -2271,14 +2273,20 @@ export class AppServerHost {
     return [...external, ...native];
   }
 
+  #sharedDelegation(): DelegationControlRegistration | undefined {
+    const value = this.#options.sharedDelegation;
+    return typeof value === "function" ? value() : value;
+  }
+
   async #canHandleDelegationStart(input: DelegationStartInput): Promise<boolean> {
     if (input.parentThreadId) return this.#ownsDelegationThread(input.parentThreadId);
+    if (await this.#sharedDelegation()?.canHandleStart(input)) return false;
     const externalActive = this.#externalRuntime.values().some((thread) => thread.running);
     return externalActive || this.#activeOfficialTurns.size > 0;
   }
 
   async #ownsDelegationThread(threadId: string): Promise<boolean> {
-    if (await this.#options.sharedDelegation?.ownsThread(threadId)) return false;
+    if (await this.#sharedDelegation()?.ownsThread(threadId)) return false;
     if (
       this.#options.sharedThreads?.options.delegateCreates &&
       (await this.#options.sharedThreads.ownership([threadId])).has(threadId)

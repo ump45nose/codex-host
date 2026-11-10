@@ -391,8 +391,55 @@ pub fn run_terminate(arguments: &[String]) -> LifecycleResult<i32> {
     }
     let root = roots.remove(0);
     terminate_tree(&root, &all)?;
+    #[cfg(target_os = "macos")]
+    {
+        let uid = nix::unistd::geteuid().as_raw();
+        if uid != 0 {
+            let label = aqua_listener_label(&options.socket_path);
+            bootout_aqua_service(&format!("gui/{uid}/{label}"));
+        }
+    }
     println!("terminated_pid={}", root.id);
     Ok(0)
+}
+
+#[cfg(target_os = "macos")]
+pub fn aqua_listener_label(socket_path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in socket_path.as_os_str().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("ai.bytepioneer.codexhost.remote-listener.{hash:016x}")
+}
+
+#[cfg(target_os = "macos")]
+pub fn bootout_aqua_service(service_target: &str) {
+    let _ = Command::new("/bin/launchctl")
+        .args(["bootout", service_target])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(target_os = "macos")]
+pub fn schedule_aqua_service_bootout(service_target: &str) {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "/bin/sleep 0.2; /bin/launchctl bootout \"$1\" >/dev/null 2>&1",
+            "codexhost-aqua-bootout",
+            service_target,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    codexhost_platform::configure_background_command(&mut command);
+    let _ = command.spawn();
 }
 
 #[cfg(test)]

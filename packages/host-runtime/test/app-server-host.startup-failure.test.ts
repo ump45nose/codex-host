@@ -22,6 +22,7 @@ describe("AppServerHost startup failure", () => {
       mappingStore: new MappingStore({ directory: mappingStoreDirectory }),
     });
     try {
+      await expect(fixture.ready).rejects.toThrow("Host exited before fixture startup");
       await expect(fixture.running).resolves.toBe(1);
       const output: string = fixture.diagnosticOutput.read()?.toString() ?? "";
       const lines = output.split("\n").filter((line) => line.length > 0);

@@ -3007,7 +3007,7 @@ export class AppServerHost {
     nativeModelId: string | undefined;
   }): Promise<OpenedOfficialThread> {
     const { input, delegationId, digest, nativeModelId } = context;
-    const started = await this.#officialRuntime.request("thread/start", {
+    const started = await this.#requestOfficial("thread/start", {
       cwd: input.cwd,
       ...(nativeModelId ? { model: nativeModelId } : {}),
       approvalPolicy: "never",

@@ -144,7 +144,6 @@ export type MappingStoreOwnerRole = "local Host Runtime" | "remote app-server li
 
 export function createProductionExternalThreadStore(
   environment: NodeJS.ProcessEnv,
-  _ownerRole: MappingStoreOwnerRole = "local Host Runtime",
 ): ExternalThreadStore {
   return new MappingStore({
     directory: resolveSharedMappingStoreDirectory(environment),

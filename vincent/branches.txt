@@ -1,27 +1,28 @@
 # Feature branches merged onto each upstream release by scripts/vincent-release.sh.
 # Format: <fork branch>   # upstream PR / note
 # Order matters: later branches are merged after earlier ones. Lines starting with '#' are ignored.
-# Drop a line once upstream has merged that PR (the script also skips branches already contained in the base).
+# Drop a line once the selected stable upstream tag contains the change, not merely upstream/main.
+# Review heads may target newer prereleases; keep the stable-compatible release branches below.
 fix/renderer-inspector-script-cache          # local: bound V8 inspector script cache (memory leak); no PR yet
 fix/antigravity-recovered-native-error       # PR #737
 fix/antigravity-thinking-projection          # PR #739
-fix/antigravity-compact                      # PR #747
-fix/external-thread-compact-start            # PR #759 (Desktop thread/compact/start runs the Harness /compact)
-fix/antigravity-print-timeout                # PR #761 (Fixes #760 antigravity print timeout)
+fix/antigravity-compact                      # PR #747 merged into upstream/main; not in stable v0.17.4
+fix/external-thread-compact-start            # PR #759 merged into upstream/main; not in stable v0.17.4
+fix/antigravity-print-timeout                # PR #761 merged into upstream/main; not in stable v0.17.4
 feat/external-cli-codex-user-instructions    # PR #741
 feat/renderer-archive-thread-children        # PR #717 (contains PR #709 sidebar nesting)
 fix/sidebar-sticky-mirrors                   # local: retain sidebar mirrors when Recents collapses; also on PR #709
 feat/renderer-sidebar-thread-nesting         # PR #709 tip: pinned-child retain-native (also via archive-thread-children)
 feat/renderer-sidebar-stash                 # local: sidebar 收纳箱 (stash) renderer extension; no upstream PR
-feat/external-client-access                  # PR #727 (contains PR #726 persist watches)
-feat/remote-client-access                    # PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)
-feat/thread-watch-stall                      # local
-feat/delegation-capacity                     # local
+feat/external-client-access                  # PRs #726/#727 merged into upstream/main; not in stable v0.17.4
+feat/remote-client-access                    # PR #785; review head codex/upstream-remote-client-access
+feat/thread-watch-stall                      # PR #783; review head codex/upstream-thread-watch-stall
+feat/delegation-capacity                     # PR #784 depends on #783; review head codex/upstream-delegation-capacity
 feat/local-design-preview                    # PR #728 (contains PR #725 openspec docs)
 feat/claude-desktop-entrypoint               # Claude Desktop opt-in entrypoint
 fix/remote-ssh-share-local-data              # PR #584
 fix/cursor-side-chat-edit                    # PR #576
-fix/cursor-fast-mode                         # local: Cursor Fast toggle via catalog fastModel; no PR yet
+fix/cursor-fast-mode                         # PR #782; review head codex/upstream-cursor-fast
 fix/independent-native-provider-quota        # PR #470
 fix/macos-nested-codex-cli                   # PR #396
 fix/mapping-store-lock-coordination          # PR #766 (Fixes #765 Desktop Host behind a remote listener lock); cherry-picked onto v0.17.3 lines

@@ -3456,7 +3456,12 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (mounted) pendingDefaultPreferences.set(controller.get(mounted.composer).composerId, false);
     if (mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) return;
-    if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
+    if (controller.isSwitching(composer)) {
+      blockEvent(event);
+      return;
+    }
+    // Keep draft edits available while the Host request client is being rebound.
+    applyComposerAgent(composer);
   };
   const onSubmit = (event: Event): void => {
     const element = eventElement(event.target);
@@ -3483,7 +3488,7 @@ export function installRendererBindingProbe(
       return;
     }
     if (composer && !applyComposerAgent(composer)) {
-      blockEvent(event);
+      if (isComposerSubmissionKey(event)) blockEvent(event);
       return;
     }
     if (!isComposerSubmissionKey(event) || !composer) return;

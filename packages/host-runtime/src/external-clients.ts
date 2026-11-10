@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { DelegationControlError } from "./delegation-types.js";
+import { withRemoteAppServerSocketInitializationLock as withFileMutationLock } from "./remote-socket-lock.js";
 
 /** `read` observes; `dispatch` may also start, steer, cancel and watch work. */
 export type ClientScope = "read" | "dispatch";
@@ -129,6 +130,11 @@ export class ExternalClientRegistry {
     this.#cliTokenHash = localCliToken ? hashToken("", localCliToken) : undefined;
   }
 
+  async #mutate<T>(action: () => Promise<T>): Promise<T> {
+    await mkdir(path.dirname(this.#filePath), { recursive: true, mode: 0o700 });
+    return withFileMutationLock(this.#filePath, action);
+  }
+
   async add(
     name: string,
     access: Partial<ClientAccess> = {},
@@ -144,20 +150,22 @@ export class ExternalClientRegistry {
         "INVALID_ARGUMENT",
         "Client name 'local-cli' is reserved for the local CLI",
       );
-    const clients = await this.#read();
-    if (clients.some((client) => client.name === name))
-      throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' already exists`);
-    const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
-    const salt = randomBytes(16).toString("hex");
-    const client: StoredClient = {
-      name,
-      createdAt: now.toISOString(),
-      ...normalizeAccess({ ...DEFAULT_ACCESS, ...access }),
-      salt,
-      tokenHash: hashToken(salt, token),
-    };
-    await this.#write([...clients, client]);
-    return { client: publicClient(client), token };
+    return this.#mutate(async () => {
+      const clients = await this.#read();
+      if (clients.some((client) => client.name === name))
+        throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' already exists`);
+      const token = `${TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
+      const salt = randomBytes(16).toString("hex");
+      const client: StoredClient = {
+        name,
+        createdAt: now.toISOString(),
+        ...normalizeAccess({ ...DEFAULT_ACCESS, ...access }),
+        salt,
+        tokenHash: hashToken(salt, token),
+      };
+      await this.#write([...clients, client]);
+      return { client: publicClient(client), token };
+    });
   }
 
   async list(): Promise<ExternalClient[]> {
@@ -166,23 +174,27 @@ export class ExternalClientRegistry {
 
   /** Changes take effect on the next request; streams on networks no longer allowed are closed. */
   async setAccess(name: string, access: Partial<ClientAccess>): Promise<ExternalClient> {
-    const clients = await this.#read();
-    const current = clients.find((client) => client.name === name);
-    if (!current)
-      throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
-    const updated: StoredClient = {
-      ...current,
-      ...normalizeAccess({ ...accessOf(current), ...access }),
-    };
-    await this.#write(clients.map((client) => (client.name === name ? updated : client)));
-    return publicClient(updated);
+    return this.#mutate(async () => {
+      const clients = await this.#read();
+      const current = clients.find((client) => client.name === name);
+      if (!current)
+        throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
+      const updated: StoredClient = {
+        ...current,
+        ...normalizeAccess({ ...accessOf(current), ...access }),
+      };
+      await this.#write(clients.map((client) => (client.name === name ? updated : client)));
+      return publicClient(updated);
+    });
   }
 
   async remove(name: string): Promise<void> {
-    const clients = await this.#read();
-    if (!clients.some((client) => client.name === name))
-      throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
-    await this.#write(clients.filter((client) => client.name !== name));
+    return this.#mutate(async () => {
+      const clients = await this.#read();
+      if (!clients.some((client) => client.name === name))
+        throw new DelegationControlError("INVALID_ARGUMENT", `Client '${name}' does not exist`);
+      await this.#write(clients.filter((client) => client.name !== name));
+    });
   }
 
   /** The client the token belongs to, or undefined. Every entry is compared, so timing reveals nothing. */
@@ -208,18 +220,21 @@ export class ExternalClientRegistry {
 
   /** Records when and on which listener a client last made an allowed request. */
   async recordAccess(name: string, network: ClientNetwork, now: Date = new Date()): Promise<void> {
+    if (name === LOCAL_CLI_CLIENT_NAME) return;
     const previous = this.#lastRecorded.get(name);
     if (previous?.network === network && now.getTime() - previous.atMs < LAST_ACCESS_THROTTLE_MS) {
       return;
     }
-    const clients = await this.#read();
-    const current = clients.find((client) => client.name === name);
-    if (!current) return;
-    this.#lastRecorded.set(name, { network, atMs: now.getTime() });
-    const lastAccess: ClientLastAccess = { network, at: now.toISOString() };
-    await this.#write(
-      clients.map((client) => (client.name === name ? { ...client, lastAccess } : client)),
-    );
+    return this.#mutate(async () => {
+      const clients = await this.#read();
+      const current = clients.find((client) => client.name === name);
+      if (!current) return;
+      const lastAccess: ClientLastAccess = { network, at: now.toISOString() };
+      await this.#write(
+        clients.map((client) => (client.name === name ? { ...client, lastAccess } : client)),
+      );
+      this.#lastRecorded.set(name, { network, atMs: now.getTime() });
+    });
   }
 
   async #current(): Promise<StoredClient[]> {

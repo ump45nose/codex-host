@@ -21,6 +21,24 @@ The remote computer needs Node.js, npm and Codex CLI, with permission for your u
 
 ## Step 2: Add an SSH connection
 
+### Optional macOS desktop execution session
+
+Native Codex shell tools such as `gh` can fail to read a valid login-keychain credential from the default SSH security session. To use the remote Mac's logged-in desktop session, run on that Mac:
+
+```sh
+codexhost remote stop
+codexhost remote install --session desktop
+codexhost remote start
+```
+
+Stopping interrupts active remote tasks. Reconnect the remote project after starting. The choice is preserved by later installs, updates and repairs. `remote status` reports `executionSession: "desktop"` when selected; an absent field means the default SSH session. Use the same commands with `--session ssh` to restore the default background execution. Existing installations stay in SSH mode unless explicitly changed. The option is macOS-only.
+
+The desktop user must match the SSH user and remain logged in. Screen lock, a screen saver and turning off the display do not end that login session. Logging out, restarting or shutting down ends its tasks. System sleep pauses execution until wake. A separately locked keychain may still require user interaction; this mode does not unlock it automatically.
+
+The native startup bridge runs once in the desktop session, then exits and unloads its temporary LaunchAgent. Arguments, the SSH environment and the working directory pass through an owner-private local socket; they are not written into the plist. The managed listener retains its own native supervisor and existing verified stop path. Explicit desktop mode reports an unavailable desktop session rather than falling back to SSH. Existing Harness Aqua Brokers remain separate.
+
+### Add the connection
+
 1. Launch Codex Desktop through codexhost on your local computer.
 2. Open **codexhost settings → Remote connections** and click **Add connection**.
 3. Enter the connection details:

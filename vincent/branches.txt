@@ -16,6 +16,7 @@ af93130be4b8e67af68d6a1125c92072977102a0 # fix/antigravity-print-timeout; PR #76
 ae18c69cca104df005fc9ab322e68a67446252e8 # feat/external-client-access; PR #727 (contains PR #726 persist watches)
 4824876f1e7fde52dcfaa49eba89a70e91a3d511 # feat/remote-client-access; PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)
 6180969b4aedf30003e728b028b95d97cb8364d9 # codex/nas-mcp-rollout; PR #788 (headless Remote Host MCP; stable backport)
+e8f209a19bee77b60bf841d8a9055fed46d7cc6b # codex/task-result-files; PR #792 (authenticated MCP transfer of final result files)
 b2415e4c67eeca66a737d94eec5d3cd0c9010b24 # codex/stable-release-fixtures; align catalog and startup test lifecycles
 a1b09b76050d5a7f618e12ba43976a2487b408dc # feat/thread-watch-stall; local
 cfd9380855a1a1cc89b481524a90fc91510a3869 # feat/delegation-capacity; local

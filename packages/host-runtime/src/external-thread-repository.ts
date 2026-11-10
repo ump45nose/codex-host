@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -109,6 +110,29 @@ export function defaultMappingStoreDirectory(environment: NodeJS.ProcessEnv): st
   );
 }
 
+export function resolveSharedMappingStoreDirectory(environment: NodeJS.ProcessEnv): string {
+  const configured = defaultMappingStoreDirectory(environment);
+  const home = environment.HOME ? path.resolve(environment.HOME) : os.homedir();
+  const defaultRemoteMappingStore = path.join(
+    home,
+    ".codexhost",
+    "remote",
+    "data",
+    "mapping-store",
+  );
+  const localMappingStore = path.join(home, ".codexhost", "mapping-store");
+  if (path.resolve(configured) === defaultRemoteMappingStore) {
+    try {
+      if (statSync(localMappingStore).isDirectory()) {
+        return localMappingStore;
+      }
+    } catch {
+      /* Keep the remote directory when no local Mapping Store exists. */
+    }
+  }
+  return configured;
+}
+
 /** Names the Host process that owns a Mapping Store in lock contention diagnostics. */
 export type MappingStoreOwnerRole = "local Host Runtime" | "remote app-server listener";
 
@@ -116,7 +140,10 @@ export function createProductionExternalThreadStore(
   environment: NodeJS.ProcessEnv,
   ownerRole: MappingStoreOwnerRole = "local Host Runtime",
 ): ExternalThreadStore {
-  return new MappingStore({ directory: defaultMappingStoreDirectory(environment), ownerRole });
+  return new MappingStore({
+    directory: resolveSharedMappingStoreDirectory(environment),
+    ownerRole,
+  });
 }
 
 export class ExternalThreadRepository {

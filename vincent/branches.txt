@@ -31,3 +31,4 @@ feat/harness-subagent-codex-items            # PR #768
 fix/antigravity-resume-mismatch              # PR #775 (Fixes #774 agy resume into a lost Conversation); cherry-picked onto v0.17.3 lines
 feat/project-picker-default-dir              # local: default project picker directory to ~/Developer/Repos/Personal
 feat/vertical-screen-overlay-tabs-pets       # local: sidebar overlay drawer, top capsule tabs, and pets remote/expanded view
+fix/projects-and-shared-remote-threads       # local: refresh account-scoped projects on startup, deduplicate local projects, and share Mapping Store between Remote SSH and Local Desktop

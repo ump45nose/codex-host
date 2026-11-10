@@ -3,7 +3,14 @@ import path from "node:path";
 import { homedir } from "node:os";
 import type { JsonObject, JsonRpcRequest } from "@codexhost/protocol-core";
 import { classifyCreateRequestRoute } from "./app-server-host.js";
-import { threadOwnershipListResultSchema } from "@codexhost/shared-contracts";
+import { isSessionImportRequest } from "./session-import-requests.js";
+import {
+  IDLE_RELEASE_SETTINGS_METHOD,
+  LOADED_SESSIONS_METHOD,
+  THREAD_RELATION_LIST_METHOD,
+  USAGE_STATISTICS_METHOD,
+  threadOwnershipListResultSchema,
+} from "@codexhost/shared-contracts";
 import {
   storedSectionPlacementV1Schema,
   type StoredSectionPlacementV1,
@@ -137,17 +144,49 @@ export class SharedThreadBridge {
 
   async route(request: JsonRpcRequest): Promise<JsonObject | null> {
     const params = object(request.params) ? request.params : {};
-    const create = this.options.delegateCreates ? classifyCreateRequestRoute(request) : null;
-    let shared = create !== null && create.selectedHarness !== "codex";
+    const create = (() => {
+      if (!this.options.delegateCreates) return null;
+      try {
+        return classifyCreateRequestRoute(request);
+      } catch {
+        return null;
+      }
+    })();
+    let shared =
+      (create !== null && create.selectedHarness !== "codex") ||
+      (this.options.delegateCreates &&
+        (isSessionImportRequest(request.method) ||
+          request.method === LOADED_SESSIONS_METHOD ||
+          request.method === IDLE_RELEASE_SETTINGS_METHOD ||
+          request.method === THREAD_RELATION_LIST_METHOD ||
+          request.method === USAGE_STATISTICS_METHOD ||
+          request.method === "codexhost/harness/commands/inspect"));
     if (!shared && typeof params.threadId === "string") {
       shared =
         this.#known.has(params.threadId) ||
         (await this.ownership([params.threadId])).has(params.threadId);
     }
+    if (
+      !shared &&
+      request.method === "thread/section/move" &&
+      typeof params.beforeThreadId === "string"
+    ) {
+      shared =
+        this.#known.has(params.beforeThreadId) ||
+        (await this.ownership([params.beforeThreadId])).has(params.beforeThreadId);
+    }
     if (!shared) return null;
     const peer = await this.#connect();
     if (!peer) throw new Error("Shared Thread Host is disconnected");
-    return { ...(await peer.request(request.method, params)), id: request.id };
+    const reply = await peer.request(request.method, params);
+    if (object(reply.result)) {
+      if (object(reply.result.thread) && typeof reply.result.thread.id === "string") {
+        this.#known.add(reply.result.thread.id);
+      } else if (typeof reply.result.threadId === "string") {
+        this.#known.add(reply.result.threadId);
+      }
+    }
+    return { ...reply, id: request.id };
   }
 
   async #rows(peer: SharedThreadPeer, params: JsonObject): Promise<JsonObject[]> {

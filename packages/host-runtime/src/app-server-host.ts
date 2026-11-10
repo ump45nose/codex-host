@@ -1488,11 +1488,20 @@ export class AppServerHost {
       this.#options.sharedThreads &&
       (request.method.startsWith("thread/") ||
         request.method.startsWith("turn/") ||
-        request.method.startsWith("codexhost/thread/"))
+        request.method.startsWith("codexhost/thread/") ||
+        isSessionImportRequest(request.method) ||
+        request.method === LOADED_SESSIONS_METHOD ||
+        request.method === IDLE_RELEASE_SETTINGS_METHOD ||
+        request.method === USAGE_STATISTICS_METHOD ||
+        request.method === "codexhost/harness/commands/inspect")
     ) {
       try {
         const reply = await this.#options.sharedThreads.route(request);
         if (reply) {
+          if (request.method === "thread/archive") {
+            const archivedId = routingParams(request).threadId;
+            if (typeof archivedId === "string") this.#options.onThreadArchived?.(archivedId);
+          }
           await this.#writer.json(reply);
           return;
         }
@@ -1507,7 +1516,10 @@ export class AppServerHost {
         request.method.startsWith("thread/") ||
         request.method.startsWith("turn/") ||
         request.method.startsWith("codexhost/thread/") ||
-        request.method.startsWith("codexhost/harness/")
+        request.method.startsWith("codexhost/harness/") ||
+        request.method === LOADED_SESSIONS_METHOD ||
+        request.method === IDLE_RELEASE_SETTINGS_METHOD ||
+        request.method === USAGE_STATISTICS_METHOD
       )
     ) {
       await this.#writer.json(
@@ -4210,10 +4222,19 @@ export class AppServerHost {
       return;
     }
     try {
+      const unknownThreadIds: string[] = [];
+      for (const threadId of params.data.threadIds) {
+        if (!(await this.#repository.find(threadId))) {
+          unknownThreadIds.push(threadId);
+        }
+      }
       const result = await listThreadRelations({
         threadIds: params.data.threadIds,
         source: this.#repository,
-        sharedThreadIds: await this.#options.sharedThreads?.ownership(params.data.threadIds),
+        sharedThreadIds:
+          unknownThreadIds.length > 0
+            ? await this.#options.sharedThreads?.ownership(unknownThreadIds)
+            : undefined,
       });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch {

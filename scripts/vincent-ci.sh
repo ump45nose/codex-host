@@ -65,6 +65,11 @@ manifest_branches() {
   sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' -e '/^$/d' "$ROOT/vincent/branches.txt"
 }
 
+manifest_ref() {
+  if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then echo "$1"
+  else echo "refs/remotes/$CH_FORK_REMOTE/$1"; fi
+}
+
 # Merge one ref, reusing recorded resolutions (rerere). Upstream workflow files merge like
 # any other file; the fork disables those workflows in its Actions settings instead.
 merge_ref() {
@@ -93,7 +98,7 @@ merge_ref() {
 }
 
 cmd_merge() {
-  local tag="${1:?merge TAG}" b failed=0
+  local tag="${1:?merge TAG}" b ref failed=0
   export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Vincent}" GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-1729065730@qq.com}"
   export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-$GIT_AUTHOR_NAME}" GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-$GIT_AUTHOR_EMAIL}"
   git config rerere.enabled true
@@ -106,10 +111,12 @@ cmd_merge() {
   merge_ref "refs/tags/$tag" "Merge upstream $tag into vincent/release" || failed=1
   if ((failed == 0)); then
     for b in $(manifest_branches); do
-      if ! git rev-parse -q --verify "refs/remotes/$CH_FORK_REMOTE/$b^{commit}" >/dev/null; then
+      ref="$(manifest_ref "$b")"
+      if ! git rev-parse -q --verify "$ref^{commit}" >/dev/null; then
+        [[ ! "$b" =~ ^[0-9a-f]{40}$ ]] || die "missing pinned commit $b"
         log "skip $b: not on the fork"; continue
       fi
-      merge_ref "refs/remotes/$CH_FORK_REMOTE/$b" "Merge $b into vincent/release for $tag" || { failed=1; break; }
+      merge_ref "$ref" "Merge $b into vincent/release for $tag" || { failed=1; break; }
     done
   fi
   # A hand-resolved vincent/release-<tag> pushed by Vincent wins over a failed automatic merge.

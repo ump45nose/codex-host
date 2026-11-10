@@ -194,12 +194,20 @@ export function installRendererSidebarOverlay(
     const buttons = doc.querySelectorAll<HTMLButtonElement>(`[${SIDEBAR_PIN_BUTTON_ATTRIBUTE}]`);
     const { title, ariaLabel } = pinButtonLabels();
     const pinned = !overlayEffective;
+    const pinnedValue = pinned ? "true" : "false";
     for (const button of buttons) {
-      button.setAttribute("data-pinned", pinned ? "true" : "false");
-      button.setAttribute("aria-pressed", pinned ? "true" : "false");
-      button.title = title;
-      button.setAttribute("aria-label", ariaLabel);
-      button.innerHTML = pinned ? PIN_ICON_SVG : OVERLAY_ICON_SVG;
+      // Preserve the icon so our subtree observer does not keep triggering itself.
+      if (button.getAttribute("data-pinned") !== pinnedValue) {
+        button.setAttribute("data-pinned", pinnedValue);
+        button.innerHTML = pinned ? PIN_ICON_SVG : OVERLAY_ICON_SVG;
+      }
+      if (button.getAttribute("aria-pressed") !== pinnedValue) {
+        button.setAttribute("aria-pressed", pinnedValue);
+      }
+      if (button.title !== title) button.title = title;
+      if (button.getAttribute("aria-label") !== ariaLabel) {
+        button.setAttribute("aria-label", ariaLabel);
+      }
     }
   };
 

@@ -41,6 +41,12 @@ function parseRemoteCliArguments(arguments_: readonly string[]): {
     const value = arguments_[index + 1];
     if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
     switch (argument) {
+      case "--session":
+        if (command !== "install" || (value !== "ssh" && value !== "desktop")) {
+          throw new Error("Use remote install --session ssh|desktop");
+        }
+        options.executionSession = value;
+        break;
       case "--install-root":
         options.installRoot = value;
         break;
@@ -88,7 +94,7 @@ export async function runRemoteHostCli(input: {
       output.write(
         [
           "usage:",
-          "  codexhost remote install [--stock-codex PATH] [--share-local-data | --data-dir PATH]",
+          "  codexhost remote install [--stock-codex PATH] [--share-local-data | --data-dir PATH] [--session ssh|desktop]",
           "  codexhost remote start",
           "  codexhost remote stop",
           "  codexhost remote status",
@@ -97,6 +103,7 @@ export async function runRemoteHostCli(input: {
           "Installs and manages a headless codexhost Remote Host for SSH sessions.",
           "Use --share-local-data so Remote SSH lists the same harness threads/pins as local Desktop (~/.codexhost).",
           "Use --data-dir PATH to set CODEXHOST_DATA_DIR explicitly. Default remains ~/.codexhost/remote/data.",
+          "On macOS, --session desktop uses the logged-in desktop keychain. Locking the screen is supported; logging out stops its tasks.",
         ].join("\n") + "\n",
       );
       return 0;

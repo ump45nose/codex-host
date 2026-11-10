@@ -23,6 +23,8 @@ mod local_runtime_lease;
 mod process_identity;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod remote_lifecycle;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod remote_listener_process;
 
 use child_diagnostics::{copy_stream_with_last_line, host_runtime_failure_summary};
 use local_runtime_lease::{LocalRuntimeAdmission, admit_local_runtime};
@@ -654,7 +656,7 @@ fn launch_detached_remote_listener(arguments: &[OsString]) -> ShimResult<i32> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     configure_background_command(&mut command);
-    let mut child = command.spawn()?;
+    let mut child = remote_listener_process::RemoteListenerProcess::spawn(&mut command)?;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if let Some(status) = child.try_wait()? {
@@ -671,10 +673,10 @@ fn launch_detached_remote_listener(arguments: &[OsString]) -> ShimResult<i32> {
                     format!("managed remote listener exited after readiness: {status}").into(),
                 );
             }
+            child.detach();
             return Ok(0);
         }
         if Instant::now() >= deadline {
-            stop_detached_listener(&mut child);
             return Err(format!(
                 "managed remote listener did not become ready at {} within {} seconds",
                 socket_path.display(),
@@ -1021,6 +1023,16 @@ pub fn run_proxy(arguments: &[OsString]) -> ShimResult<i32> {
 
 pub fn run_from_environment() -> ShimResult<i32> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    #[cfg(target_os = "macos")]
+    if arguments.first().and_then(|argument| argument.to_str())
+        == Some(codexhost_platform::AQUA_SPAWN_ARGUMENT)
+    {
+        if arguments.len() != 2 {
+            return Err("Aqua spawn helper requires exactly one private socket path".into());
+        }
+        codexhost_platform::run_aqua_spawn_helper(Path::new(&arguments[1]))?;
+        return Ok(0);
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     if arguments.first().and_then(|argument| argument.to_str())
         == Some("--codexhost-remote-terminate")

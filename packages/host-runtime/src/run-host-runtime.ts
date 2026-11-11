@@ -32,6 +32,7 @@ import {
 import { ClientEventLog, eventRetentionDays } from "./external-client-events.js";
 import { externalClientMcp } from "./external-client-mcp.js";
 import { externalClientEventStream, externalClientRouter } from "./external-client-routes.js";
+import { HostInventory } from "./host-inventory.js";
 import { FileThreadRefsStore } from "./thread-refs.js";
 import { ExternalAccessSupervisor, externalAccessPaths } from "./external-client-access.js";
 import {
@@ -277,7 +278,12 @@ async function startExternalClients(
   if (port === undefined) return undefined;
   const clients = new ExternalClientRegistry(defaultExternalClientsPath(environment));
   const oauth = new ExternalClientOAuthStore(defaultExternalClientOAuthPath(environment));
-  const route = externalClientRouter({ api: registry, watchApi: registry, events });
+  const route = externalClientRouter({
+    api: registry,
+    watchApi: registry,
+    events,
+    inventory: new HostInventory(environment),
+  });
   const diagnose = (message: string) =>
     process.stderr.write(`codexhost external clients: ${message}\n`);
   const start = (options: {

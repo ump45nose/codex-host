@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
 import {
   NPM_PACKAGE_DESCRIPTION,
@@ -16,7 +17,13 @@ import {
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 export function expectedNpmMetaPackagePaths() {
-  return ["README.md", "bin/codexhost.js", "package.json"];
+  return [
+    "README.md",
+    "bin/codexhost-bot.js",
+    "bin/codexhost.js",
+    "package.json",
+    "share/codexhost-bot/SKILL.md",
+  ];
 }
 
 /**
@@ -53,8 +60,8 @@ export function createNpmMetaPackageManifest({ version, platformBaseUrl, platfor
     version,
     description: NPM_PACKAGE_DESCRIPTION,
     type: "module",
-    bin: { codexhost: "bin/codexhost.js" },
-    files: ["bin/**", "README.md"],
+    bin: { codexhost: "bin/codexhost.js", "codexhost-bot": "bin/codexhost-bot.js" },
+    files: ["bin/**", "share/**", "README.md"],
     engines: { node: NPM_NODE_ENGINE },
     optionalDependencies: npmMetaOptionalDependencies({
       version,
@@ -167,6 +174,9 @@ export async function validateNpmMetaPackage({ packageRoot }) {
   if (manifest.bin?.codexhost !== "bin/codexhost.js") {
     throw new Error("npm meta package must expose bin/codexhost.js");
   }
+  if (manifest.bin?.["codexhost-bot"] !== "bin/codexhost-bot.js") {
+    throw new Error("npm meta package must expose bin/codexhost-bot.js");
+  }
   if (manifest.os !== undefined || manifest.cpu !== undefined) {
     throw new Error("npm meta package must be architecture-neutral");
   }
@@ -190,6 +200,24 @@ export async function prepareNpmMetaPackage({
     "utf8",
   );
   await chmod(path.join(packageRoot, "bin", "codexhost.js"), 0o755);
+  await build({
+    absWorkingDir: root,
+    entryPoints: ["packages/bot-integration/src/cli.mjs"],
+    outfile: path.join(packageRoot, "bin", "codexhost-bot.js"),
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22",
+    sourcemap: false,
+    legalComments: "none",
+    logLevel: "silent",
+  });
+  await chmod(path.join(packageRoot, "bin", "codexhost-bot.js"), 0o755);
+  await mkdir(path.join(packageRoot, "share", "codexhost-bot"), { recursive: true });
+  await writeFile(
+    path.join(packageRoot, "share", "codexhost-bot", "SKILL.md"),
+    await readFile(path.join(root, "packages", "bot-integration", "skill", "SKILL.md")),
+  );
   await writeFile(
     path.join(packageRoot, "package.json"),
     `${JSON.stringify(

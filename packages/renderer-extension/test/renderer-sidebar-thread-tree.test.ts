@@ -12,7 +12,6 @@ import {
   installRendererSidebarThreadTree,
   layoutSidebarThreadTree,
   planSidebarThreadForest,
-  stickyMirrorLayouts,
   sidebarListRetainsNativePlacement,
   sidebarSectionHeadingForList,
   sidebarThreadDescendantKeys,
@@ -473,6 +472,27 @@ describe("Renderer sidebar Thread tree", () => {
     control.dispose();
   });
 
+  it("keeps retained children before the next root when their source unmounts", async () => {
+    const pinned = new FakeList([new FakeItem("parent"), new FakeItem("other")]);
+    const recents = new FakeList([new FakeItem("fork")]);
+    const dom = new FakeDom([pinned, recents]);
+    const control = installRendererSidebarThreadTree({
+      getClient: () => clientWith({ forks: { fork: "parent" } }),
+      dom,
+    });
+    await settle();
+    recents.mounted = [];
+    dom.change();
+    await settle();
+
+    expect(summary(pinned.mounted)).toEqual([
+      ["parent", 0, 0, false, { collapsed: false, children: 1 }],
+      ["other", 2, 0, false, null],
+    ]);
+    expect(mirrorSummary(pinned)).toEqual([[forkKey, "fork", 1, 1, false, null]]);
+    control.dispose();
+  });
+
   it("hides sticky mirrors when the remaining parent is collapsed", async () => {
     const pinned = new FakeList([new FakeItem("parent")]);
     const recents = new FakeList([new FakeItem("fork")]);
@@ -714,6 +734,40 @@ describe("planSidebarThreadForest", () => {
       [0, false],
       [1, false],
     ]);
+  });
+
+  it("prefers the pinned occurrence of a parent also shown with its child elsewhere", () => {
+    const [pinned, recents] = planSidebarThreadForest(
+      [[entry("parent")], [entry("parent"), entry("child", "parent")]],
+      new Set(),
+      { retainNativeList: [true, false] },
+    );
+    expect(pinned?.mirrors.map(({ plan }) => [plan.order, plan.depth])).toEqual([[1, 1]]);
+    expect(recents?.items?.map(({ mirrored }) => mirrored)).toEqual([false, true]);
+  });
+
+  it("shows one child under its pinned parent when the child occurs in multiple lists", () => {
+    const [pinned, recents, project] = planSidebarThreadForest(
+      [[entry("parent")], [entry("parent"), entry("child", "parent")], [entry("child", "parent")]],
+      new Set(),
+      { retainNativeList: [true, false, false] },
+    );
+    expect(pinned?.mirrors.map(({ list, index, plan }) => [list, index, plan.depth])).toEqual([
+      [1, 1, 1],
+    ]);
+    expect(recents?.items?.[1]?.mirrored).toBe(true);
+    expect(project?.items?.[0]?.mirrored).toBe(true);
+  });
+
+  it("does not mirror a child already present with its pinned parent", () => {
+    const [pinned, recents] = planSidebarThreadForest(
+      [[entry("parent"), entry("child", "parent")], [entry("child", "parent")]],
+      new Set(),
+      { retainNativeList: [true, false] },
+    );
+    expect(pinned?.mirrors).toEqual([]);
+    expect(pinned?.items?.[1]?.depth).toBe(1);
+    expect(recents?.items?.[0]?.mirrored).toBe(true);
   });
 
   it("does not move a Thread that Desktop shows in more than one list", () => {

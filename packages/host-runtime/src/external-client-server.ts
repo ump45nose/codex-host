@@ -5,13 +5,14 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 
 import { errorBody, jsonBody, writeJson } from "./delegation-control-server.js";
+import { readCliCredentials } from "./cli-credentials.js";
 import { DelegationControlError, EXTERNAL_CLIENT_PORT_ENV } from "./delegation-types.js";
 import {
   handlePublicOAuthRoute,
   resolvePublicBaseUrl,
   stripPublicPrefix,
-  type ExternalClientOAuthStore,
-} from "./external-client-oauth.js";
+} from "./external-client-oauth-http.js";
+import type { ExternalClientOAuthStore } from "./external-client-oauth.js";
 import {
   bearerToken,
   codexhostDataDirectory,
@@ -135,6 +136,7 @@ export async function startExternalClientServer(input: {
   oauth?: ExternalClientOAuthStore;
   /** Public base URL (e.g. https://<machine>.<tailnet>.ts.net/codexhost) for OAuth metadata. */
   publicBaseUrl?: () => string | undefined;
+  cliCredentials?: { path: string; token: string };
   diagnose?: (message: string) => void;
 }): Promise<ExternalClientServer | undefined> {
   const network = input.network ?? "local";
@@ -215,19 +217,43 @@ export async function startExternalClientServer(input: {
     pid: process.pid,
     startedAt: new Date().toISOString(),
   };
+  const removePublishedFiles = async () => {
+    // A newer Runtime may have published its own connection information.
+    const current = await readExternalClientDescriptor(descriptorPath);
+    if (
+      current?.pid === descriptor.pid &&
+      current.startedAt === descriptor.startedAt &&
+      current.endpoint === descriptor.endpoint
+    )
+      await rm(descriptorPath, { force: true });
+    if (input.cliCredentials) {
+      const credentials = await readCliCredentials(input.cliCredentials.path).catch(
+        () => undefined,
+      );
+      if (credentials?.token === input.cliCredentials.token)
+        await rm(input.cliCredentials.path, { force: true });
+    }
+  };
   try {
     await writePrivateJson(descriptorPath, descriptor);
+    if (input.cliCredentials)
+      await writePrivateJson(input.cliCredentials.path, {
+        ...descriptor,
+        token: input.cliCredentials.token,
+      });
   } catch (error) {
     await closeServer(server);
+    await removePublishedFiles();
     throw error;
   }
   return {
     endpoint,
     close: async () => {
-      await closeServer(server);
-      // Another Runtime may have taken over the port and written its own descriptor since.
-      const current = await readExternalClientDescriptor(descriptorPath);
-      if (current?.pid === process.pid) await rm(descriptorPath, { force: true });
+      try {
+        await closeServer(server);
+      } finally {
+        await removePublishedFiles();
+      }
     },
   };
 }

@@ -87,6 +87,11 @@ previous_release() { # newest vincent/release-vX.Y.Z (local or fork) older than 
 
 manifest_branches() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*//' "$MANIFEST"; }
 
+manifest_ref() {
+  if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then echo "$1"
+  else echo "$2/$1"; fi
+}
+
 parse_common() {
   TAG=""; FRESH=false; SKIP_CONFLICTS=false; NO_TEST=false; RUST=false; DRY_RUN=false; ARTIFACTS=""; ALLOW_MISMATCH=false
   REST=()
@@ -112,7 +117,7 @@ cmd_status() {
   echo "latest upstream tag: $tag"
   echo "last built tag:      $(cat "$CH_WORK/last-built-tag" 2>/dev/null || echo none)"
   for b in $(manifest_branches); do
-    local ref="$fork/$b" state
+    local ref state; ref="$(manifest_ref "$b" "$fork")"
     if ! g rev-parse -q --verify "$ref^{commit}" >/dev/null; then state="MISSING on fork"
     elif g merge-base --is-ancestor "$ref" "$tag"; then state="already in $tag (drop from manifest)"
     else state="$(g rev-list --count "$tag..$ref") commits to merge, $(g rev-list --count "$ref..$tag") behind"; fi
@@ -147,8 +152,11 @@ cmd_build() {
       g worktree add --quiet -b "$branch" "$wt" "$TAG"
     fi
     for b in $(manifest_branches); do
-      local ref="$fork/$b"
-      if ! git -C "$wt" rev-parse -q --verify "$ref^{commit}" >/dev/null; then log "skip $b: not on fork"; skipped+=("$b(missing)"); continue; fi
+      local ref; ref="$(manifest_ref "$b" "$fork")"
+      if ! git -C "$wt" rev-parse -q --verify "$ref^{commit}" >/dev/null; then
+        [[ ! "$b" =~ ^[0-9a-f]{40}$ ]] || die "missing pinned commit $b"
+        log "skip $b: not on fork"; skipped+=("$b(missing)"); continue
+      fi
       if git -C "$wt" merge-base --is-ancestor "$ref" HEAD; then log "skip $b: already contained"; continue; fi
       log "merging $b"
       if ! "${gw[@]}" merge --no-ff --no-edit -q "$ref"; then

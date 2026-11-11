@@ -27,6 +27,9 @@ function setup(
   } = {},
 ) {
   const rpc = {
+    getConversation: vi.fn(async () => ({ requests: [] })),
+    replyWithCommandExecutionApprovalDecision: vi.fn(async () => undefined),
+    replyWithFileChangeApprovalDecision: vi.fn(async () => undefined),
     sendRequest: vi.fn(async () => ({ entries: [] })),
     clearPrewarmedThreads: vi.fn(async () => undefined),
   };
@@ -154,6 +157,31 @@ async function install(fixture: ReturnType<typeof setup>): Promise<Routing> {
   return fixture.target.__codexhostHostRoutingV1 as Routing;
 }
 
+it("forwards remote approvals through native owner coordination and rejects retired RPC managers", async () => {
+  const f = setup({ hosts: ["local", "ssh:a", "ssh:b"] });
+  const routing = await install(f);
+  try {
+    const route = routing.forHost("ssh:a");
+    if (!route || !("kind" in route.manager)) throw new Error("RPC route missing");
+    await expect(route.manager.getConversation?.("same")).resolves.toEqual({ requests: [] });
+    await route.manager.replyWithCommandExecutionApprovalDecision?.("same", 7, "accept");
+    expect(f.rpc.replyWithCommandExecutionApprovalDecision).toHaveBeenCalledWith(
+      "same",
+      7,
+      "accept",
+    );
+    const connection = f.connections.get("ssh:a");
+    if (!connection) throw new Error("Fixture connection missing");
+    connection.status = "disconnected";
+    await expect(
+      route.manager.replyWithFileChangeApprovalDecision?.("same", 7, "decline"),
+    ).rejects.toThrow("retired");
+    expect(f.rpc.replyWithFileChangeApprovalDecision).not.toHaveBeenCalled();
+  } finally {
+    routing.dispose();
+  }
+});
+
 it("does not search Composer trees when reading or sending through a known RPC Host", async () => {
   vi.useFakeTimers();
   const f = setup();
@@ -235,7 +263,12 @@ it("reconciles a mounted Composer through the Controller's existing installation
   }
 });
 
-function creation(method: string, model: string, options: Record<string, unknown>) {
+function creation(
+  method: string,
+  model: string,
+  options: Record<string, unknown>,
+  config?: Record<string, unknown>,
+) {
   return [
     "push",
     [
@@ -247,6 +280,7 @@ function creation(method: string, model: string, options: Record<string, unknown
           input: [[{ type: "text", text: "hello" }]],
           collaborationMode: { mode: "default", settings: { model, reasoning_effort: "high" } },
           cwd: "/work",
+          ...(config ? { config } : {}),
         },
         options,
       ],
@@ -446,6 +480,7 @@ it.each(["disconnected", "connecting", "ambiguous", "unreadable"])(
       else state = failure;
       expect(() => before?.policy.requestTarget()).toThrow("retired");
       expect(routing.forHost(hostId)).toBeNull();
+      expect(routing.knownHostIds?.()).not.toContain(hostId);
       f.composerFiber.memoizedProps.executionTargetHostId = hostId;
       expect(routing.forComposer()).toBeNull();
       expect(f.rpc.sendRequest).not.toHaveBeenCalled();
@@ -456,6 +491,7 @@ it.each(["disconnected", "connecting", "ambiguous", "unreadable"])(
       const after = routing.forHost(hostId);
       expect(after).not.toBeNull();
       expect(after).not.toBe(before);
+      expect(routing.knownHostIds?.()).toContain(hostId);
       await after?.manager.sendRequest("model/list", {});
       expect(f.rpc.sendRequest).toHaveBeenCalledOnce();
     } finally {
@@ -590,11 +626,91 @@ it("applies an external draft's carrier only to that draft's creation call", asy
       mode: "default",
       settings: { model: carrier, reasoning_effort: "high" },
     });
+    expect(args[0]?.config).toEqual({ model: carrier });
     expect(args[1]).toEqual({ clientThreadId: "client-new-thread:external", onSettled: exported });
     expect(codex).toEqual(
       creation("startConversation", "gpt-6.1-sol", { clientThreadId: "client-new-thread:codex" }),
     );
     expect(request).toEqual(["push", ["pipeline", -188, ["sendRequest"], ["model/list", {}]]]);
+  } finally {
+    routing.dispose();
+  }
+});
+
+it.each(["local", "remote-ssh:other", "remote-control:legacy"])(
+  "keeps an external creation off %s's official prewarm after asynchronous preparation",
+  async (hostId) => {
+    const fixture = setup({ hosts: hostId === "local" ? ["local"] : ["local", hostId] });
+    const routing = await install(fixture);
+    try {
+      const policy = policyOf(routing.forHost(hostId));
+      policy.select(carrier, "client-new-thread:external");
+      // Model Desktop 26.1103's native admission: per-start config disables reuse.
+      // Clearing on selection cannot prevent this official prewarm arriving later.
+      const preparing = Promise.withResolvers<undefined>();
+      const consume = vi.fn(() => ({ thread: { id: "official-prewarm" }, model: "gpt-6.1-sol" }));
+      const create = vi.fn((model: string) => ({ thread: { id: "external-thread" }, model }));
+      const start = async (message: unknown[]) => {
+        const args = (message[1] as unknown[])[3] as [
+          {
+            config?: Record<string, unknown>;
+            collaborationMode: { settings: { model: string } };
+          },
+        ];
+        await preparing.promise;
+        return !args[0].config || Object.keys(args[0].config).length === 0
+          ? consume()
+          : create(args[0].collaborationMode.settings.model);
+      };
+      const request = creation("startConversation", "gpt-6.1-sol", {
+        clientThreadId: "client-new-thread:external",
+      });
+      fixture.post(request);
+      const external = start(fixture.sent.at(-1) as unknown[]);
+      // Another draft's selection must not change an already-dispatched creation.
+      policy.select("codexhost/pi-native", "client-new-thread:other");
+      const officialRequest = creation("startConversation", "gpt-6.1-sol", {
+        clientThreadId: "client-new-thread:official",
+      });
+      fixture.post(officialRequest);
+      const official = start(fixture.sent.at(-1) as unknown[]);
+      preparing.resolve(undefined);
+      await expect(external).resolves.toEqual({
+        thread: { id: "external-thread" },
+        model: carrier,
+      });
+      await expect(official).resolves.toEqual({
+        thread: { id: "official-prewarm" },
+        model: "gpt-6.1-sol",
+      });
+      expect(create).toHaveBeenCalledExactlyOnceWith(carrier);
+      expect(consume).toHaveBeenCalledOnce();
+      expect(fixture.sent.at(-1)).toBe(officialRequest);
+      expect(((request[1] as unknown[])[3] as unknown[])[0]).not.toHaveProperty("config");
+    } finally {
+      routing.dispose();
+    }
+  },
+);
+
+it("merges the external Model into per-start config without changing other overrides", async () => {
+  const fixture = setup();
+  const routing = await install(fixture);
+  try {
+    policyOf(routing.forComposer()).select(carrier, "client-new-thread:external");
+    const config = { model: "gpt-6.1-sol", "features.example": false };
+    const request = creation(
+      "startConversation",
+      "gpt-6.1-sol",
+      {
+        clientThreadId: "client-new-thread:external",
+      },
+      config,
+    );
+    fixture.post(request);
+    const args = ((fixture.sent.at(-1) as unknown[])[1] as unknown[])[3] as [{ config: unknown }];
+    expect(args[0].config).toEqual({ ...config, model: carrier });
+    expect(config).toEqual({ model: "gpt-6.1-sol", "features.example": false });
   } finally {
     routing.dispose();
   }
@@ -624,7 +740,12 @@ it.each(["disconnected", "replaced"])(
         creation("startConversation", "official", { clientThreadId: "client-new-thread:remote" }),
       );
       expect(fixture.sent.at(-1)).toEqual(
-        creation("startConversation", carrier, { clientThreadId: "client-new-thread:remote" }),
+        creation(
+          "startConversation",
+          carrier,
+          { clientThreadId: "client-new-thread:remote" },
+          { model: carrier },
+        ),
       );
       connection.status = "ready";
       const next = policyOf(routing.forHost("local"));
@@ -632,7 +753,12 @@ it.each(["disconnected", "replaced"])(
       oldPolicy.dispose();
       fixture.post(local);
       expect(fixture.sent.at(-1)).toEqual(
-        creation("startConversation", carrier, { clientThreadId: "client-new-thread:local" }),
+        creation(
+          "startConversation",
+          carrier,
+          { clientThreadId: "client-new-thread:local" },
+          { model: carrier },
+        ),
       );
       next.select(null);
       fixture.post(local);
@@ -641,7 +767,12 @@ it.each(["disconnected", "replaced"])(
         creation("startConversation", "official", { clientThreadId: "client-new-thread:remote" }),
       );
       expect(fixture.sent.at(-1)).toEqual(
-        creation("startConversation", carrier, { clientThreadId: "client-new-thread:remote" }),
+        creation(
+          "startConversation",
+          carrier,
+          { clientThreadId: "client-new-thread:remote" },
+          { model: carrier },
+        ),
       );
     } finally {
       routing.dispose();
@@ -830,3 +961,22 @@ it.each([true, false])(
     }
   },
 );
+
+it("excludes Desktop's reserved durable Host and disconnected catalog entries from knownHostIds", async () => {
+  const sshHostId = "remote-ssh-discovered:yuwk-201";
+  const disconnectedEnvId = "remote-control:env_e_6ac33e9d40788325a48a8c0aa62bc454";
+  const f = setup({
+    hosts: ["local", "durable", sshHostId, disconnectedEnvId],
+  });
+  const disconnected = f.connections.get(disconnectedEnvId);
+  if (!disconnected) throw new Error("Missing disconnected Remote Control fixture");
+  disconnected.status = "disconnected";
+  const routing = await install(f);
+  try {
+    expect(routing.forHost("durable")).toBeNull();
+    expect(routing.forHost(disconnectedEnvId)).toBeNull();
+    expect(routing.knownHostIds?.()).toEqual(["local", sshHostId]);
+  } finally {
+    routing.dispose();
+  }
+});

@@ -91,6 +91,13 @@ export interface HarnessInspectInput {
   harnessId: RoutedHarnessId;
   cwd?: string;
   refresh?: boolean;
+  /** Calling Thread; an official parent cannot inspect a Harness Desktop must not present. */
+  parentThreadId?: string;
+}
+
+export interface HarnessListInput {
+  /** Calling Thread; an official parent cannot list a Harness Desktop must not present. */
+  parentThreadId?: string;
 }
 
 export interface HarnessInspectResult {
@@ -331,7 +338,7 @@ export interface DelegationWatchApi {
 }
 
 export interface DelegationControlApi {
-  listHarnesses(): Promise<HarnessListResult>;
+  listHarnesses(input?: HarnessListInput): Promise<HarnessListResult>;
   inspect(input: HarnessInspectInput): Promise<HarnessInspectResult>;
   start(input: DelegationStartInput): Promise<DelegationStartResult>;
   send(input: ThreadSendInput): Promise<ThreadSendResult>;
@@ -372,7 +379,7 @@ export type DelegationControlErrorCode =
   | "RESPONSE_TOO_LARGE"
   | "RUNTIME_UNREACHABLE"
   | "DELEGATION_FAILED"
-  /** The client's scope does not allow the operation. */
+  /** The client scope or the Thread's exportable files do not allow the operation. */
   | "FORBIDDEN"
   /** The external client token is missing, unknown, or revoked. */
   | "UNAUTHORIZED"

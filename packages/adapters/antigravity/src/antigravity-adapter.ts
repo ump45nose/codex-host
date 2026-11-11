@@ -848,7 +848,8 @@ class AntigravitySession implements HarnessSession {
       };
     }
 
-    let questions: AntigravityQuestionBridge;
+    let questions: AntigravityQuestionBridge | undefined;
+    let includeRecoveredHistory = false;
     const hookDirectory = antigravityHookDirectory(this.#environment);
     // The Thread's Hook directory outlives each Turn, while the previous Turn's agy may still be
     // exiting and its bridge closing; the next bridge rewrites the directory after that cleanup,
@@ -883,12 +884,22 @@ class AntigravitySession implements HarnessSession {
     );
     try {
       questions = await this.#preparingQuestions;
+      if (!this.#closed && this.#nativeRef) {
+        const priorTurns = this.#history.snapshot();
+        const ensured = await ensureNativeConversationDb(
+          this.#nativeRef.nativeSessionId,
+          antigravityHome({ ...this.#environment, ...questions.environment }),
+          priorTurns.length > 0,
+        );
+        includeRecoveredHistory = ensured.emptySteps && priorTurns.length > 0;
+      }
     } catch (error) {
+      await questions?.dispose();
       return {
         ok: false,
         error: {
           code: "nativeFailure",
-          message: `Question bridge setup failed: ${errorMessage(error)}`,
+          message: `Antigravity Turn setup failed: ${errorMessage(error)}`,
           retryable: true,
         },
       };
@@ -900,8 +911,6 @@ class AntigravitySession implements HarnessSession {
       return { ok: false, error: invalidState("Antigravity Session is closed") };
     }
     const environment = { ...this.#environment, ...questions.environment };
-    const homedir = antigravityHome(environment);
-    let includeRecoveredHistory = false;
     const logPath = path.join(os.tmpdir(), `codexhost-antigravity-${randomUUID()}.log`);
     const arguments_ = [
       "--input-format",
@@ -912,13 +921,6 @@ class AntigravitySession implements HarnessSession {
       this.#printTimeout,
     ];
     if (this.#nativeRef) {
-      const priorTurns = this.#history.snapshot();
-      const ensured = await ensureNativeConversationDb(
-        this.#nativeRef.nativeSessionId,
-        homedir,
-        priorTurns.length > 0,
-      );
-      includeRecoveredHistory = ensured.emptySteps && priorTurns.length > 0;
       arguments_.unshift("--conversation", this.#nativeRef.nativeSessionId);
     }
     arguments_.push(...antigravityModelArguments(this.#model, this.#thinkingOptionId));
@@ -1204,10 +1206,7 @@ class AntigravitySession implements HarnessSession {
       this.#completeIdentitylessTurn(active, event);
       return;
     }
-    const safeTurnId =
-      event.result.num_turns !== undefined && event.result.num_turns !== null
-        ? `turn:${event.result.num_turns}`
-        : `turn:${this.#history.snapshot().length + 1}`;
+    const safeTurnId = this.#uniqueNativeTurnKey(event.result.num_turns);
 
     const nativeTurnRef = nativeTurnRefSchema.parse({
       harnessId: this.harnessId,
@@ -1279,6 +1278,19 @@ class AntigravitySession implements HarnessSession {
         this.#completeTurn(active, { status: "failed", error, checkpoint }, nativeTurnRef);
       }
     }
+  }
+
+  #uniqueNativeTurnKey(numTurns: number | undefined): string {
+    const ordinal =
+      numTurns !== undefined && numTurns !== null ? numTurns : this.#history.snapshot().length + 1;
+    const base = `turn:${ordinal}`;
+    const used = new Set(
+      this.#history.snapshot().map(({ nativeTurnRef }) => nativeTurnRef.nativeTurnKey),
+    );
+    if (!used.has(base)) return base;
+    let duplicate = 2;
+    while (used.has(`${base}:${duplicate}`)) duplicate += 1;
+    return `${base}:${duplicate}`;
   }
 
   /** A Turn agy ended without a Conversation keeps its native outcome but no native identity. */

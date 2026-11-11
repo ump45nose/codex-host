@@ -207,10 +207,10 @@ export async function runDelegationCli(input: {
           "INVALID_ARGUMENT",
           "events accepts no positional arguments",
         );
-      if (!usesExternalClient(environment))
+      if (!(await usesExternalClient(environment)))
         throw new DelegationControlError(
           "INVALID_ARGUMENT",
-          "events are kept for external clients; set CODEXHOST_CLIENT_TOKEN to a token from 'codexhost client add'",
+          "events are kept for external clients; use local CLI credentials or an explicit external client token",
         );
       const follow = value(options, "--follow");
       if (follow !== undefined && follow !== "true" && follow !== "false")
@@ -317,12 +317,13 @@ export async function runDelegationCli(input: {
           "harness list accepts no positional arguments",
         );
       }
+      const caller = callerThreadId(environment);
       writeResult(
         "harness list",
         await requestRuntime({
           environment,
           path: "/v1/harness/list",
-          body: {},
+          body: caller ? { parentThreadId: normalizeThreadId(caller) } : {},
           ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
         }),
       );
@@ -344,6 +345,7 @@ export async function runDelegationCli(input: {
       if (refresh !== undefined && refresh !== "true" && refresh !== "false") {
         throw new DelegationControlError("INVALID_ARGUMENT", "--refresh must be true or false");
       }
+      const caller = callerThreadId(environment);
       writeResult(
         "harness inspect",
         await requestRuntime({
@@ -351,6 +353,7 @@ export async function runDelegationCli(input: {
           path: "/v1/harness/inspect",
           body: {
             harnessId,
+            ...(caller ? { parentThreadId: normalizeThreadId(caller) } : {}),
             ...(cwdOption(parsed) ? { cwd: cwdOption(parsed) } : {}),
             ...(refresh !== undefined ? { refresh: refresh === "true" } : {}),
           },
@@ -570,7 +573,7 @@ export async function runDelegationCli(input: {
         throw new DelegationControlError("INVALID_ARGUMENT", "Thread identifier is required");
       const notifyThread = value(parsed, "--notify") ?? callerThreadId(environment);
       // An external client is notified itself; the Runtime fills that in.
-      const external = usesExternalClient(environment);
+      const external = await usesExternalClient(environment);
       if (!notifyThread && !external)
         throw new DelegationControlError(
           "INVALID_ARGUMENT",
@@ -650,7 +653,7 @@ export async function runDelegationCli(input: {
       const client = value(parsed, "--client");
       const ref = value(parsed, "--ref");
       // An external client has no workspace of its own, so it lists every workspace by default.
-      const external = usesExternalClient(environment);
+      const external = await usesExternalClient(environment);
       const cwd = cwdOption(parsed) ?? (external || client || ref ? undefined : process.cwd());
       writeResult(
         "thread list",

@@ -1,7 +1,12 @@
 import { z } from "zod";
+export * from "./client-channel.js";
+export * from "./thread-catalog.js";
+export * from "./voice.js";
+export * from "./web-access-tokens.js";
 export * from "./delegation-read.js";
 export * from "./credential-imports.js";
 export * from "./harness-display-settings.js";
+export * from "./harness-preferences.js";
 export * from "./harness-user-instructions-settings.js";
 export * from "./harness-presentation.js";
 export * from "./account-credits-presentation.js";
@@ -9,6 +14,8 @@ export * from "./model-price-overrides.js";
 export * from "./usage-statistics.js";
 export * from "./thread-prewarm.js";
 export * from "./thread-questions.js";
+export * from "./web.js";
+export * from "./web-tool-output.js";
 export * from "./thread-relations.js";
 export {
   CONSOLE_HOST_METHODS,
@@ -90,12 +97,15 @@ export {
   harnessPluginListParamsSchema,
   harnessPluginListResultSchema,
   harnessPluginManifestSchema,
+  installedHarnessPluginIdSchema,
+  isHarnessPluginInScope,
 } from "./harness-plugins.js";
 export type {
   HarnessPluginConfiguration,
   HarnessPluginDescriptor,
   HarnessPluginListResult,
   HarnessPluginManifest,
+  HarnessPluginScope,
 } from "./harness-plugins.js";
 export * from "./harness-launch-settings.js";
 export * from "./harness-installation.js";
@@ -396,4 +406,25 @@ export {
   type CodexSshDraft,
 } from "./remote-connections.js";
 
+export { usageMeasurementsSchema, type UsageMeasurementsSnapshot } from "./thread-usage.js";
+
+export {
+  webUiExtensionIdSchema,
+  webUiExtensionMetaSchema,
+  webUiExtensionSchema,
+  webUiExtensionsStateSchema,
+  webUiExtensionRegistrySchema,
+  webUiExtensionInstallSchema,
+  webUiExtensionEnabledSchema,
+  webUiExtensionRemoveSchema,
+  type WebUiExtension,
+  type WebUiExtensionMeta,
+  type WebUiExtensionsState,
+} from "./web-ui-extensions.js";
 export * from "./sidebar-stash.js";
+export {
+  remoteSessionOperationSchema,
+  remoteSessionRequestBytes,
+  REMOTE_CONTROLLER_REQUEST_MAX_BYTES,
+  type RemoteSessionOperation,
+} from "./remote-sessions.js";

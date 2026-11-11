@@ -177,6 +177,51 @@ describe("DelegationControlRegistry", () => {
     await registry.listHarnesses();
     expect(native.listHarnesses).toHaveBeenCalledOnce();
   });
+  it("resolves shared native parent Threads through the catalog when multiple sessions observe the same Thread", async () => {
+    const registry = new DelegationControlRegistry();
+    const owner = registration("native-parent");
+    const sessionA = registration("native-parent");
+    const sessionB = registration("native-parent");
+    registry.register(sessionA);
+    registry.register(owner, { harnessCatalog: true });
+    registry.register(sessionB);
+
+    await registry.start({
+      harnessId: "pi" as const,
+      task: "review",
+      cwd: "/synthetic",
+      parentThreadId: "native-parent",
+    });
+    await registry.read({ threadId: "native-parent", view: "result" });
+    await registry.send({ threadId: "native-parent", message: "continue" });
+
+    expect(owner.start).toHaveBeenCalledOnce();
+    expect(sessionA.start).not.toHaveBeenCalled();
+    expect(sessionB.start).not.toHaveBeenCalled();
+    expect(owner.read).toHaveBeenCalledOnce();
+    expect(owner.send).toHaveBeenCalledOnce();
+  });
+  it("resolves shared-backend WebSocket sessions observing the same parent Thread in peer mode", async () => {
+    const registry = new DelegationControlRegistry();
+    const sessionA = registration("native-parent");
+    const sessionB = registration("native-parent");
+    registry.register(sessionA, { sharedBackend: true });
+    registry.register(sessionB, { sharedBackend: true });
+
+    await registry.start({
+      harnessId: "codex" as const,
+      task: "review",
+      cwd: "/synthetic",
+      parentThreadId: "native-parent",
+    });
+    await registry.read({ threadId: "native-parent", view: "result" });
+    await registry.send({ threadId: "native-parent", message: "continue" });
+
+    expect(sessionA.start).toHaveBeenCalledOnce();
+    expect(sessionB.start).not.toHaveBeenCalled();
+    expect(sessionA.read).toHaveBeenCalledOnce();
+    expect(sessionA.send).toHaveBeenCalledOnce();
+  });
   it("discovers targets from the active session without inspecting Models", async () => {
     const registry = new DelegationControlRegistry();
     const session = registration("parent");
@@ -485,7 +530,7 @@ describe("DelegationControlRegistry list paging across sessions", () => {
     rebuilt.close();
   });
 
-  it.each(["parent", "catalog"])("does not forward merged cursors to a %s list", async (target) => {
+  it("does not forward Registry-merged cursors to a catalog list", async () => {
     const registry = new DelegationControlRegistry();
     const a = session("a", threads("a", 10, 0));
     const b = session("b", threads("b", 10, 1));
@@ -495,14 +540,13 @@ describe("DelegationControlRegistry list paging across sessions", () => {
       const first = await registry.list({ cwd: "/synthetic", limit: 2, sort: "created-desc" });
       vi.mocked(a.list).mockClear();
       vi.mocked(b.list).mockClear();
-      if (target === "catalog") registry.register(a, { harnessCatalog: true });
+      registry.register(a, { harnessCatalog: true });
       await expect(
         registry.list({
           cwd: "/synthetic",
           limit: 2,
           sort: "created-desc",
           cursor: first.nextCursor ?? "",
-          ...(target === "parent" ? { parentThreadId: "parent-a" } : {}),
         }),
       ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
       expect(a.list).not.toHaveBeenCalled();

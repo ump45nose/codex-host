@@ -337,7 +337,12 @@ export type ThreadInspectionParams = z.infer<typeof threadInspectionParamsSchema
 const codexThreadInspectionSchema = z
   .object({
     owner: z.literal("codex"),
-    locked: z.literal(true),
+    locked: z.boolean(),
+    effectiveModel: harnessModelRefSchema.optional(),
+    resolvedModelLabel: harnessResolvedModelLabelSchema.optional(),
+    effectiveThinkingOptionId: harnessThinkingOptionIdSchema.optional(),
+    effectivePermissionModeId: harnessPermissionModeIdSchema.optional(),
+    history: harnessHistoryCapabilitiesSchema.optional(),
     supportsThreadReferences: z.literal(true).optional(),
   })
   .strict();
@@ -352,6 +357,8 @@ const externalThreadInspectionSchema = z
     effectiveThinkingOptionId: harnessThinkingOptionIdSchema.optional(),
     availableThinkingOptions: harnessThinkingOptionsSchema.optional(),
     effectivePermissionModeId: harnessPermissionModeIdSchema.optional(),
+    /** Live Session catalog when it, not the Adapter inspection, contains `effectiveModel`. */
+    catalog: harnessModelCatalogSchema.optional(),
     history: harnessHistoryCapabilitiesSchema,
     usage: threadUsageSnapshotSchema.optional(),
     locked: z.literal(true),

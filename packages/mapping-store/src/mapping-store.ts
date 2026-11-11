@@ -1,3 +1,7 @@
+import {
+  usageMeasurementsSchema,
+  type UsageMeasurementsSnapshot,
+} from "@codexhost/shared-contracts";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -179,8 +183,8 @@ function threadMetadataOf(record: StoredThreadRecordV1): StoredThreadMetadataV1 
 
 /** The record as written to the Thread file, which older releases must still accept. */
 function withoutThreadMetadata(record: StoredThreadRecordV1): StoredThreadRecordV1 {
-  const { projectId, daybreakEnabled, gitInfo, ...core } = record;
-  void [projectId, daybreakEnabled, gitInfo];
+  const { preview, projectId, projectlessWorkspace, daybreakEnabled, gitInfo, ...core } = record;
+  void [preview, projectId, projectlessWorkspace, daybreakEnabled, gitInfo];
   return core;
 }
 
@@ -200,9 +204,17 @@ function applyThreadMetadataPatch(
   patch: ThreadMetadataPatch,
 ): StoredThreadRecordV1 {
   const next = { ...current };
+  if (patch.preview !== undefined) {
+    if (patch.preview === null) delete next.preview;
+    else next.preview = patch.preview;
+  }
   if (patch.projectId !== undefined) {
     if (patch.projectId === null) delete next.projectId;
     else next.projectId = patch.projectId;
+  }
+  if (patch.projectlessWorkspace !== undefined) {
+    if (patch.projectlessWorkspace === null) delete next.projectlessWorkspace;
+    else next.projectlessWorkspace = patch.projectlessWorkspace;
   }
   if (patch.daybreakEnabled !== undefined) next.daybreakEnabled = patch.daybreakEnabled;
   if (patch.gitInfo !== undefined) {
@@ -402,6 +414,7 @@ export class MappingStore {
     await this.#acquireLock();
     try {
       await this.#cleanupResidue();
+      await this.#recoverInterruptedQuarantines();
       const names = (await readdir(this.#threadsDirectory)).filter((name) =>
         name.endsWith(".json"),
       );
@@ -446,7 +459,7 @@ export class MappingStore {
             continue;
           }
         }
-        if (record.state === "creating" && !record.nativeSessionRef) {
+        if (record.state === "creating" && !record.nativeSessionRef && !record.importSourceRef) {
           await rm(primary, { force: true });
           await rm(backup, { force: true });
           await rm(this.#metadataPath(record.hostThreadId), { force: true });
@@ -683,6 +696,7 @@ export class MappingStore {
         hostThreadId: input.hostThreadId,
         createRequestId: input.createRequestId,
         harnessId: input.harnessId,
+        ...(input.importSourceRef ? { importSourceRef: input.importSourceRef } : {}),
         state: "creating",
         cwd: input.cwd,
         title: input.title ?? "",
@@ -690,6 +704,7 @@ export class MappingStore {
         transportModelId: input.transportModelId,
         ephemeral: input.ephemeral,
         historyMode: input.historyMode,
+        ...(input.projectlessWorkspace ? { projectlessWorkspace: input.projectlessWorkspace } : {}),
         ...(input.forkSource ? { forkSource: input.forkSource } : {}),
         ...(input.subagent ? { subagent: input.subagent } : {}),
         turnMappings: [],
@@ -829,6 +844,52 @@ export class MappingStore {
     });
   }
 
+  /** Optional telemetry updates only the existing metadata file, never activity or identity. */
+  async saveUsageMeasurements(
+    hostThreadId: HostThreadId,
+    expectedNativeSessionRef: NativeSessionRef,
+    values: UsageMeasurementsSnapshot,
+  ): Promise<StoredThreadRecordV1> {
+    this.#requireInitialized();
+    const parsed = usageMeasurementsSchema.parse(values);
+    let result: StoredThreadRecordV1 | undefined;
+    await this.#enqueue(async () => {
+      const current = this.#records.get(hostThreadId);
+      if (!current)
+        throw new MappingStoreError("THREAD_NOT_FOUND", "External Thread was not found");
+      result = current;
+      if (
+        current.state !== "ready" ||
+        !sameJson(current.nativeSessionRef, expectedNativeSessionRef)
+      )
+        return;
+      const retained = new Set<string>(current.turnMappings.map((mapping) => mapping.hostTurnId));
+      const prior = current.usageMeasurements;
+      const merged: UsageMeasurementsSnapshot = {};
+      if (prior && sameJson(prior.nativeSessionRef, expectedNativeSessionRef)) {
+        for (const field of ["outputTokensPerSecond", "timeToFirstOutputMs"] as const) {
+          const value = prior.values[field];
+          if (value && retained.has(value.turnId)) merged[field] = value;
+        }
+      }
+      for (const field of ["outputTokensPerSecond", "timeToFirstOutputMs"] as const) {
+        const value = parsed[field];
+        if (value && retained.has(value.turnId) && (!merged[field] || value.at >= merged[field].at))
+          merged[field] = value;
+      }
+      const next = { ...current };
+      if (Object.keys(merged).length)
+        next.usageMeasurements = { nativeSessionRef: expectedNativeSessionRef, values: merged };
+      else delete next.usageMeasurements;
+      if (sameJson(current.usageMeasurements, next.usageMeasurements)) return;
+      await this.#writeMetadataFile(hostThreadId, threadMetadataOf(next));
+      this.#records.set(hostThreadId, next);
+      result = next;
+    });
+    if (!result) throw new MappingStoreError("IO_ERROR", "Measurement update produced no record");
+    return cloneRecord(result);
+  }
+
   async upsertTurnMappings(
     hostThreadId: HostThreadId,
     mappings: StoredTurnMappingV1[],
@@ -914,13 +975,18 @@ export class MappingStore {
     patch: ThreadMetadataPatch,
     options: { ifProjectId?: string } = {},
   ): Promise<StoredThreadRecordV1> {
-    return this.#update(hostThreadId, (current) => {
-      if (options.ifProjectId !== undefined && current.projectId !== options.ifProjectId) {
-        return null;
-      }
-      const next = applyThreadMetadataPatch(current, patch);
-      return sameJson(next, current) ? null : next;
-    });
+    return this.#update(
+      hostThreadId,
+      (current) => {
+        if (options.ifProjectId !== undefined && current.projectId !== options.ifProjectId) {
+          return null;
+        }
+        const next = applyThreadMetadataPatch(current, patch);
+        return sameJson(next, current) ? null : next;
+      },
+      // Backfilling a display hint is not new conversation activity.
+      Object.keys(patch).every((key) => key === "preview"),
+    );
   }
 
   /** Section placements of stored External Threads, in insertion order. */
@@ -1064,6 +1130,7 @@ export class MappingStore {
   async #update(
     hostThreadId: HostThreadId,
     change: (current: StoredThreadRecordV1) => StoredThreadRecordV1 | null,
+    preserveUpdatedAt = false,
   ): Promise<StoredThreadRecordV1> {
     this.#requireInitialized();
     let result: StoredThreadRecordV1 | null = null;
@@ -1079,7 +1146,7 @@ export class MappingStore {
       const next = storedThreadRecordV1Schema.parse({
         ...changed,
         revision: current.revision + 1,
-        updatedAt: this.#now().toISOString(),
+        updatedAt: preserveUpdatedAt ? current.updatedAt : this.#now().toISOString(),
       }) as StoredThreadRecordV1;
       this.#validateGlobal(next, hostThreadId);
       await this.#replaceFile(this.#recordPath(hostThreadId), next, true);
@@ -1144,7 +1211,17 @@ export class MappingStore {
 
   async #writeNew(record: StoredThreadRecordV1): Promise<void> {
     this.#validateGlobal(record, null);
-    await this.#replaceFile(this.#recordPath(record.hostThreadId), record, false);
+    // Publish placement metadata first. A crash may leave an orphan sidecar
+    // (initialize removes it), never an admitted Thread missing its no-project fact.
+    const metadata = threadMetadataOf(record);
+    if (metadata) await this.#writeMetadataFile(record.hostThreadId, metadata);
+    try {
+      await this.#replaceFile(this.#recordPath(record.hostThreadId), record, false);
+    } catch (error) {
+      if (metadata)
+        await rm(this.#metadataPath(record.hostThreadId), { force: true }).catch(() => undefined);
+      throw error;
+    }
     this.#records.set(record.hostThreadId, record);
     this.#rebuildIndexes();
   }
@@ -1208,6 +1285,51 @@ export class MappingStore {
       throw new MappingStoreError("IO_ERROR", "Thread metadata atomic replacement failed", {
         cause: error,
       });
+    }
+  }
+
+  /** Restores moved sidecars; copied sidecars stay intact for the normal quarantine retry. */
+  async #recoverInterruptedQuarantines(): Promise<void> {
+    const names = await readdir(this.#quarantineDirectory);
+    const orphanMetadata = names.filter((name) => name.endsWith(".invalid.metadata"));
+    for (const metadataName of orphanMetadata) {
+      const recordName = metadataName.slice(0, -".metadata".length);
+      if (names.includes(recordName)) continue; // pair already complete
+      // recordName is `<id>.json.<ms>.invalid`
+      if (!recordName.endsWith(".invalid")) continue;
+      const withoutInvalid = recordName.slice(0, -".invalid".length);
+      // withoutInvalid is `<id>.json.<ms>`
+      const jsonIdx = withoutInvalid.indexOf(".json.");
+      if (jsonIdx < 0) continue;
+      const threadFileName = withoutInvalid.slice(0, jsonIdx + ".json".length); // `<id>.json`
+      const primary = path.join(this.#threadsDirectory, threadFileName);
+      const metadataQuarantine = path.join(this.#quarantineDirectory, metadataName);
+      const recordQuarantine = path.join(this.#quarantineDirectory, recordName);
+      const metadataLive = path.join(this.#metadataDirectory, threadFileName);
+      // A non-file at the orphan name (e.g. a directory used to block a rename) is not a real quarantine marker.
+      const orphanStat = await stat(metadataQuarantine).catch(() => null);
+      if (!orphanStat?.isFile()) continue;
+      // A live sidecar means the archive may be an incomplete copy, not a moved original.
+      if (await exists(metadataLive)) continue;
+
+      let recordReadable = false;
+      try {
+        await this.#readRecord(primary, threadFileName);
+        recordReadable = true;
+      } catch {
+        // missing or still invalid — finish quarantine when the primary exists
+      }
+
+      if (recordReadable) {
+        // User repaired the record; put metadata back so initialize can load the pair.
+        await rename(metadataQuarantine, metadataLive).catch(() => undefined);
+        continue;
+      }
+
+      if (await exists(primary)) {
+        await rename(primary, recordQuarantine).catch(() => undefined);
+      }
+      // If the primary is already gone, leave the orphan metadata in quarantine.
     }
   }
 

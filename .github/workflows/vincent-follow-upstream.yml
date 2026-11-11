@@ -11,11 +11,15 @@ name: Follow upstream release
 
 on:
   schedule:
-    - cron: "41 */3 * * *"
+    - cron: "41 */6 * * *"
   workflow_dispatch:
     inputs:
       tag:
         description: "Upstream tag to build (default: newest stable upstream tag)"
+        required: false
+        type: string
+      source_ref:
+        description: "Prepared integration branch or commit (default: vincent/release)"
         required: false
         type: string
       force:
@@ -48,10 +52,10 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       sha: ${{ steps.merge.outputs.sha }}
     steps:
-      - name: Checkout ${{ env.RELEASE_BRANCH }}
+      - name: Checkout release source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ env.RELEASE_BRANCH }}
+          ref: ${{ inputs.source_ref || env.RELEASE_BRANCH }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -109,23 +113,30 @@ jobs:
         if: steps.plan.outputs.skip != 'true'
         run: npm install --global npm@11.8.0
 
+      - name: Setup Rust
+        if: steps.plan.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+
       - name: Install dependencies
         if: steps.plan.outputs.skip != 'true'
         run: npm ci --no-audit --no-fund
 
       - name: Typecheck
         if: steps.plan.outputs.skip != 'true'
-        run: npm run build:typescript && npm run typecheck
+        run: npm run format:check && npm run lint && npm run build:typescript && npm run typecheck
 
       - name: Test TypeScript (known flake tolerated)
         if: steps.plan.outputs.skip != 'true'
-        run: npm run build:renderer && scripts/vincent-ci.sh test
+        run: npm run build:renderer && scripts/vincent-ci.sh test && npm run test:web
 
-      - name: Test updater
+      - name: Check native Rust
         if: steps.plan.outputs.skip != 'true'
         env:
           RUSTUP_TOOLCHAIN: 1.97.1
-        run: cargo test --locked -p codexhost-updater
+        run: npm run check:rust
 
   build:
     name: Build ${{ matrix.target }}

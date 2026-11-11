@@ -2,20 +2,30 @@
 
 外部客户端是不由 Host 拉起、但需要委派和跟进工作的本机进程，例如终端脚本、Claude Desktop、常驻 bot 的本机代理。它们通过一个固定端口的本机监听使用与 Host 内部相同的委派与 Thread 操作，并以持久事件日志获得完成通知。行为契约见 `openspec/changes/add-external-client-access`。
 
+## 本机 CLI
+
+同一系统用户运行的终端脚本或 bot 可直接使用 `codexhost harness`、`delegate`、`thread` 和 `events`，无需 `client add` 或令牌环境变量。Host 必须已运行且外部监听已启用，CLI 不会自动启动 Host。
+
+- Host 成功开启本机监听后，原子写入 `<数据目录>/cli-credentials.json`（默认 `~/.codexhost/cli-credentials.json`），包含端点、短期令牌和进程信息。文件以 0600 创建；CLI 在 POSIX 上检查当前用户所有权和私有权限，并拒绝符号链接、非回环地址及已退出进程的凭据。Windows 依赖用户数据目录的 ACL，不能把数据目录设为其他用户可读写的共享目录。
+- 该令牌只存在于当前监听的内存及私有凭据文件，不写入命名客户端注册表。Host 重启会更换令牌；正常关闭仅删除自己发布的凭据。原有 `external-client-endpoint.json` 仍不包含令牌。
+- 自动认证的 CLI 共用 `client:local-cli` 来源及事件日志，可用 `thread list --client local-cli` 查找任务；`local-cli` 是保留名称。需要独立应用身份时，仍可显式登记命名客户端。
+- 连接优先级：完整的 Host 注入参数 → 显式客户端令牌／令牌文件 → 本机私有凭据。部分缺失的 Host 参数仍报错，不自动改变内部会话身份；显式令牌无效时不会回退到本机凭据。
+- HTTP／MCP 不免认证，仍须显式提供 Bearer 令牌。
+
 ## 登记与认证
 
 - `codexhost client add <name>` 生成 `chc_` 开头的随机令牌并只输出一次；`client list` 列出名称与登记时间；`client remove` 立即吊销。
 - 登记保存在 `<数据目录>/external-clients.json`（默认 `~/.codexhost`，仅当前用户可读写），只存加盐 SHA-256 摘要。CLI 直接编辑该文件，因此 Runtime 未运行时也能登记；Runtime 按文件修改时间重读，删除在下一次请求生效。
-- 名称只允许小写字母、数字和连字符，同时用作事件日志的目录名。
+- 名称只允许小写字母、数字和连字符，同时用作事件日志的目录名；`local-cli` 保留给自动认证的本机 CLI。
 
 ## 监听与发现
 
-- 本机 Desktop Runtime 与受管 Remote Host 均在 `127.0.0.1:4398` 提供外部监听；`CODEXHOST_EXTERNAL_CLIENT_PORT` 改端口，`off` 关闭。端口被占用时只停用外部监听并写诊断，Host 的其他功能不受影响。Remote Host 不要求 Desktop 保持连接，委派使用其共享执行会话。
-- Remote Host 的客户端登记、访问设置、事件与 webhook 使用该 Host 的数据目录（默认 `~/.codexhost/remote/data`）。运行 `codexhost client` 时须使用相同的 `CODEXHOST_DATA_DIR`；修改 `~/.codexhost` 下的登记不会配置另一个数据目录的 Host。
+- 本机共享后台 Host、本机 Desktop Runtime 与受管 Remote Host 均在 `127.0.0.1:4398` 提供外部监听；`CODEXHOST_EXTERNAL_CLIENT_PORT` 改端口，`off` 关闭。端口被占用时只停用外部监听并写诊断，Host 的其他功能不受影响。不要求 GUI 或 Web 页面保持打开，Remote Host 的委派使用其共享执行会话。
+- Remote Host 的客户端登记、凭据与事件使用该 Host 的数据目录（默认 `~/.codexhost/remote/data`）。运行 `codexhost client` 时须使用相同的 `CODEXHOST_DATA_DIR`。
 - 无界面的共享执行会话在首次原生 Codex 委派前协商官方协议；使用默认模型无需先查询模型目录或打开 Desktop。
 - 监听只接受客户端令牌，不接受 Host 内部令牌；令牌缺失、未知或已吊销都返回相同的 `UNAUTHORIZED`，不透露客户端名称。
 - Runtime 写出 `<数据目录>/external-client-endpoint.json`（端点、进程标识、启动时间，不含令牌），退出时只删除自己写的那份。
-- CLI 有 Host 提供的连接参数时照旧使用；没有时，若设置了 `CODEXHOST_CLIENT_TOKEN` 或 `CODEXHOST_CLIENT_TOKEN_FILE`，经描述文件或配置端口连接外部监听。两者都没有时，错误详情的 `externalClient` 给出这两个变量和登记命令。
+- CLI 有 Host 提供的连接参数时照旧使用；没有时，显式 `CODEXHOST_CLIENT_TOKEN` 或 `CODEXHOST_CLIENT_TOKEN_FILE` 经描述文件或配置端口连接外部监听；都未配置时读取本机私有凭据。没有可用凭据时提示启动或更新 Host，也可配置命名客户端令牌。
 - Host 内部控制服务与外部监听共用 `routeDelegationRequest` 路由表，语义不会分叉。
 
 ## 客户端作为来源
@@ -97,6 +107,7 @@
 - 每个客户端有权限范围 `read`（读取、列举、等待、watch 列表、事件）或 `dispatch`（另含委派、发送、取消、注册 watch），以及允许的网络 `local`、`tailnet`、`public`。没有这两个字段的旧登记视为 `dispatch` + `local`。`client add|set --scope --network` 修改，下一次请求生效。
 - 请求的网络由它到达的监听决定，不看请求内容。不允许的网络返回与未知令牌相同的 `UNAUTHORIZED`；`read` 客户端调用派发路由返回 `FORBIDDEN`（HTTP 403，MCP 中为工具错误）。事件流在心跳时检查网络，收窄后关闭。
 - 客户端通过校验的请求会记录最近访问网络与时间（`lastAccess`，按 5 秒节流写入 `external-clients.json`），供 `client list` 与控制台展示。
+- 登记、权限修改、撤销与访问时间回写使用同一跨进程文件事务；访问记录不会恢复已删除的客户端或覆盖收紧后的权限。
 
 ## tailnet 与公网
 
@@ -110,6 +121,7 @@
   - 未认证请求返回 `401` 与 `WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource"`，并在公网入口提供 `/.well-known/oauth-protected-resource`、`/.well-known/oauth-authorization-server`、`/oauth/register`（动态客户端注册）、`/oauth/authorize`、`/oauth/token`。
   - 用户在本机运行 `codexhost client pair <name>` 生成 10 分钟有效、仅可使用一次的配对码（保存在 `<数据目录>/external-client-oauth.json`，仅存加盐 SHA-256 摘要）；授权页只包含配对码输入框，不显示任何客户端、Thread 或工作目录列表；连续 5 次配对失败会使当前配对码立即失效。
   - 授权成功后签发的访问令牌（1 小时）与刷新令牌（30 天，轮换制）均以哈希保存并绑定到对应客户端，继承其权限范围；执行 `codexhost client remove <name>` 会立即使该客户端的全部访问令牌与刷新令牌失效。
+  - 配对码与授权码的消费、刷新令牌轮换和撤销使用跨进程文件事务串行处理，CLI 与监听共用存储时不会覆盖彼此的修改。
 
 ## webhook 推送
 

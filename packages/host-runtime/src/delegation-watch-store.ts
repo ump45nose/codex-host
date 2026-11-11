@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ThreadWatchEntry, ThreadWatchOutcome } from "./delegation-types.js";
+import { withRemoteAppServerSocketInitializationLock as withFileMutationLock } from "./remote-socket-lock.js";
 
 /** A watch as kept on disk. Holds identifiers, deadlines and reasons only, never Thread content. */
 export interface PersistedWatch extends ThreadWatchEntry {
@@ -155,7 +156,9 @@ export class FileDelegationWatchStore implements DelegationWatchStore {
       const claimer =
         claimAt >= 0 ? Number(name.slice(claimAt + CLAIM_MARKER.length).split(".")[0]) : NaN;
       if (!isRecord && !(Number.isSafeInteger(claimer) && !processAlive(claimer))) continue;
-      const watch = await this.#adoptFile(name).catch((error: unknown) => {
+      const watch = await withFileMutationLock(`${this.#directory}.adoption`, () =>
+        this.#adoptFile(name),
+      ).catch((error: unknown) => {
         this.#diagnose(error);
         return undefined;
       });
@@ -208,7 +211,9 @@ export class FileDelegationWatchStore implements DelegationWatchStore {
     // live record, so hand it back instead of adopting it a second time. `link`
     // does not replace a record its owner has written since.
     if ((await readFile(claim, "utf8").catch(() => undefined)) !== text) {
-      await link(claim, source).catch(() => undefined);
+      await link(claim, source).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      });
       await rm(claim, { force: true });
       return undefined;
     }

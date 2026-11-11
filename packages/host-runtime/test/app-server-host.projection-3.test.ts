@@ -240,25 +240,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
-  it("rejects fixed Model control for an unknown or Codex-owned Thread locally", async () => {
-    const fixture = createFixture();
-    const officialWrite = vi.fn();
-    fixture.official.stdin.on("data", officialWrite);
-    const model = fixture.adapter.catalog.models[0]?.ref;
-    if (!model) throw new Error("Fake catalog is empty");
-
-    writeRequest(fixture.desktopInput, {
-      id: 35,
-      method: "codexhost/thread/model/select",
-      params: { threadId: "official-thread", model },
-    });
-    await expect(
-      fixture.collector.waitFor((message) => requestId(message, 35)),
-    ).resolves.toMatchObject({ error: { code: -32078 } });
-    expect(officialWrite).not.toHaveBeenCalled();
-    await stopFixture(fixture);
-  });
-
   it("rejects a Pi Model selection while its Turn is active", async () => {
     const fixture = createFixture();
     const threadId = await startPiThread(fixture);
@@ -1384,6 +1365,203 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
+  it("retains injected Side Chat context through a rejected first external Turn", async () => {
+    const fixture = createFixture();
+    try {
+      const sourceThreadId = await startPiThread(fixture);
+      await completePiTurn(fixture, sourceThreadId, 2);
+
+      writeRequest(fixture.desktopInput, {
+        id: 10,
+        method: "thread/fork",
+        params: { threadId: sourceThreadId },
+      });
+      const forkResponse = await fixture.collector.waitFor((message) => requestId(message, 10));
+      const derivedId = ((forkResponse.result as JsonObject).thread as JsonObject).id;
+      if (typeof derivedId !== "string") throw new Error("Fork response has no derived Thread ID");
+
+      writeRequest(fixture.desktopInput, {
+        id: 11,
+        method: "thread/inject_items",
+        params: {
+          threadId: derivedId,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Side conversation boundary." }],
+            },
+          ],
+        },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 11)),
+      ).resolves.toMatchObject({ result: {} });
+      writeRequest(fixture.desktopInput, {
+        id: 12,
+        method: "thread/inject_items",
+        params: {
+          threadId: derivedId,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Side conversation boundary." }],
+            },
+          ],
+        },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 12)),
+      ).resolves.toMatchObject({ result: {} });
+
+      const derivedSession = fixture.adapter.sessions[1];
+      if (!derivedSession) throw new Error("Fake derived Session was not opened");
+      derivedSession.rejectNextTurn({
+        code: "nativeFailure",
+        message: "synthetic start failure",
+        retryable: false,
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 13,
+        method: "turn/start",
+        params: { threadId: derivedId, input: [{ type: "text", text: "synthetic" }] },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 13)),
+      ).resolves.toMatchObject({ error: { code: -32073 } });
+
+      const turnId = await startPiTurn(fixture, derivedId, 14);
+      await fixture.collector.waitFor((message) => turnEvent(message, "turn/started", turnId));
+      derivedSession.appendText("side answer");
+      derivedSession.succeedTurn();
+      await fixture.collector.waitFor((message) => turnEvent(message, "turn/completed", turnId));
+      await expect(derivedSession.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: {
+          turns: [
+            {},
+            {
+              input: [
+                {
+                  type: "text",
+                  text: "Side conversation boundary.\n\nSide conversation boundary.\n\nsynthetic",
+                },
+              ],
+            },
+          ],
+        },
+      });
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it("rejects Side Chat context injected after a Turn starts", async () => {
+    const fixture = createFixture();
+    try {
+      const sourceThreadId = await startPiThread(fixture);
+      await completePiTurn(fixture, sourceThreadId, 2);
+      writeRequest(fixture.desktopInput, {
+        id: 10,
+        method: "thread/fork",
+        params: { threadId: sourceThreadId },
+      });
+      const forkResponse = await fixture.collector.waitFor((message) => requestId(message, 10));
+      const derivedId = ((forkResponse.result as JsonObject).thread as JsonObject).id;
+      if (typeof derivedId !== "string") throw new Error("Fork response has no derived Thread ID");
+      writeRequest(fixture.desktopInput, {
+        id: 11,
+        method: "thread/inject_items",
+        params: {
+          threadId: derivedId,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Side conversation boundary." }],
+            },
+          ],
+        },
+      });
+      await fixture.collector.waitFor((message) => requestId(message, 11));
+
+      const derivedSession = fixture.adapter.sessions[1];
+      if (!derivedSession) throw new Error("Fake derived Session was not opened");
+      const realExecute = derivedSession.execute.bind(derivedSession);
+      const startEntered = Promise.withResolvers<undefined>();
+      const releaseStart = Promise.withResolvers<undefined>();
+      vi.spyOn(derivedSession, "execute").mockImplementationOnce(async (command) => {
+        startEntered.resolve(undefined);
+        await releaseStart.promise;
+        return realExecute(command);
+      });
+
+      const starting = startPiTurn(fixture, derivedId, 12);
+      await startEntered.promise;
+      writeRequest(fixture.desktopInput, {
+        id: 13,
+        method: "thread/inject_items",
+        params: {
+          threadId: derivedId,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Late context." }],
+            },
+          ],
+        },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 13)),
+      ).resolves.toMatchObject({ error: { code: -32072 } });
+      releaseStart.resolve(undefined);
+
+      const turnId = await starting;
+      derivedSession.appendText("side answer");
+      derivedSession.succeedTurn();
+      await fixture.collector.waitFor((message) => turnEvent(message, "turn/completed", turnId));
+      await expect(derivedSession.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: {
+          turns: [
+            {},
+            { input: [{ type: "text", text: "Side conversation boundary.\n\nsynthetic" }] },
+          ],
+        },
+      });
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it("rejects non-text External Side Chat context items", async () => {
+    const fixture = createFixture();
+    try {
+      const threadId = await startPiThread(fixture);
+      writeRequest(fixture.desktopInput, {
+        id: 10,
+        method: "thread/inject_items",
+        params: {
+          threadId,
+          items: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }],
+            },
+          ],
+        },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 10)),
+      ).resolves.toMatchObject({ error: { code: -32602 } });
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("rejects a running source that has no completed Fork Checkpoint", async () => {
     const fixture = createFixture();
     const sourceThreadId = await startPiThread(fixture);
@@ -1926,6 +2104,56 @@ describe("AppServerHost HarnessAdapter projection", () => {
     ).resolves.toMatchObject({
       turnMappings: [{ hostTurnId: derivedTurns[0]?.id }],
     });
+    await stopFixture(fixture);
+  });
+
+  it("rejects rollback of every Turn when no native Checkpoint precedes the first", async () => {
+    const fixture = createFixture();
+    const threadId = await startPiThread(fixture);
+    await completePiTurn(fixture, threadId, 2);
+    await completePiTurn(fixture, threadId, 3);
+    const before = await fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId));
+
+    writeRequest(fixture.desktopInput, {
+      id: 10,
+      method: "thread/rollback",
+      params: { threadId, numTurns: 2 },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 10)),
+    ).resolves.toMatchObject({ error: { code: -32080 } });
+    await expect(
+      fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId)),
+    ).resolves.toEqual(before);
+    expect(fixture.adapter.sessions).toHaveLength(1);
+    await stopFixture(fixture);
+  });
+
+  it("reverts an earlier Turn of a paginated External Thread", async () => {
+    const adapter = rollbackCapableAdapter();
+    const fixture = createFixture({ externalAdapters: new Map([["pi", adapter]]) });
+    const threadId = await startExternalThread(fixture, "codexhost/pi-native", 1, {
+      historyMode: "paginated",
+    });
+    const firstTurnId = await completePiTurn(fixture, threadId, 2);
+    const secondTurnId = await completePiTurn(fixture, threadId, 3);
+    await completePiTurn(fixture, threadId, 4);
+
+    writeRequest(fixture.desktopInput, {
+      id: 10,
+      method: "thread/revert",
+      params: { threadId, beforeTurnId: secondTurnId },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 10)),
+    ).resolves.toMatchObject({ result: { thread: { id: threadId } } });
+    await expect(
+      fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId)),
+    ).resolves.toMatchObject({
+      nativeSessionRef: { nativeSessionId: "fake-session-2" },
+      turnMappings: [{ hostTurnId: firstTurnId }],
+    });
+    expect(adapter.sessions).toHaveLength(2);
     await stopFixture(fixture);
   });
 

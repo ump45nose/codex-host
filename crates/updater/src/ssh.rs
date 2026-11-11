@@ -91,9 +91,21 @@ node -e 'const [major, minor] = process.versions.node.split(".").map(Number); pr
         }
         // A damaged installation is exactly what the CLI refuses to stop, so the first stop is
         // best effort; once the installation is rewritten, the second one must succeed.
-        "repair" => Ok(format!(
-            "{node}set -e; command -v codexhost >/dev/null 2>&1 || exit 58; {lock}codexhost remote stop >/dev/null 2>&1 || true; codexhost remote uninstall >/dev/null 2>&1 || exit 51; codexhost remote install >/dev/null 2>&1 || exit 47; codexhost remote stop >/dev/null 2>&1 || {stock} || exit 50; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
-        )),
+        "repair" => {
+            // Uninstall removes the manifest. Read the opt-ins before any service mutation;
+            // leave legacy SSH installs on the command line their CLI already supports.
+            let session = r#"CH_SESSION=$(node -e 'const fs = require("node:fs"); try { const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).executionSession; if (session !== undefined && session !== "ssh" && session !== "desktop") process.exit(1); if (session === "desktop") process.stdout.write(session); } catch (error) { if (error.code !== "ENOENT") process.exit(1); }' "$HOME/.codexhost/remote/manifest.json" 2>/dev/null) || exit 47; "#;
+            // A custom shared Host directory is otherwise recovered only from the profile
+            // environment, which a damaged installation may have lost. Without it the
+            // reinstalled SSH Host would silently bridge to a different shared owner.
+            let shared = r#"CH_SHARED=$(node -e 'const fs = require("node:fs"), path = require("node:path"); try { const shared = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).sharedDataDirectory; if (shared === undefined) process.exit(0); if (typeof shared !== "string" || !path.isAbsolute(shared) || /[\0\n\r]/.test(shared)) process.exit(1); process.stdout.write(shared); } catch (error) { if (error.code !== "ENOENT") process.exit(1); }' "$HOME/.codexhost/remote/manifest.json" 2>/dev/null) || exit 47; "#;
+            // Fork: `--share-local-data` / `--data-dir` are recorded only in the manifest. Pass a
+            // non-default directory back so repair keeps the Mapping Store that owns the Threads.
+            let data = r#"CH_DATA=$(node -e 'const fs = require("node:fs"), os = require("node:os"), path = require("node:path"); try { const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).dataDirectory; if (data === undefined) process.exit(0); if (typeof data !== "string" || !path.isAbsolute(data) || /[\0\n\r]/.test(data)) process.exit(1); if (path.resolve(data) !== path.join(os.homedir(), ".codexhost", "remote", "data")) process.stdout.write(path.resolve(data)); } catch (error) { if (error.code !== "ENOENT") process.exit(1); }' "$HOME/.codexhost/remote/manifest.json" 2>/dev/null) || exit 47; "#;
+            Ok(format!(
+                "{node}set -e; command -v codexhost >/dev/null 2>&1 || exit 58; {lock}{session}{shared}{data}set -- remote install; [ \"$CH_SESSION\" != desktop ] || set -- \"$@\" --session desktop; [ -z \"$CH_SHARED\" ] || set -- \"$@\" --shared-data \"$CH_SHARED\"; [ -z \"$CH_DATA\" ] || set -- \"$@\" --data-dir \"$CH_DATA\"; codexhost remote stop >/dev/null 2>&1 || true; codexhost remote uninstall >/dev/null 2>&1 || exit 51; codexhost \"$@\" >/dev/null 2>&1 || exit 47; codexhost remote stop >/dev/null 2>&1 || {stock} || exit 50; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
+            ))
+        }
         "uninstall" => {
             let package_check = if request.uninstall_package {
                 r#"command -v npm >/dev/null 2>&1 || exit 56;

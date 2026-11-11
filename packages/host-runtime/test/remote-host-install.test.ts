@@ -55,6 +55,59 @@ function shellQuote(value: string): string {
 }
 
 describe("remote SSH Host installation", () => {
+  it("preserves the shared directory and desktop session across updates and switching back to SSH", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "remote-session-"));
+    try {
+      const sharedDataDirectory = path.join(home, "shared-host");
+      const options = {
+        home,
+        stockCodexPath: await executable(path.join(home, "codex")),
+        nodePath: await executable(path.join(home, "node")),
+        shimPath: await executable(path.join(home, "shim")),
+        hostRuntimePath: await regularFile(path.join(home, "runtime.mjs")),
+        platform: "darwin" as const,
+        environment: { HOME: home, SHELL: "/bin/zsh" },
+      };
+      const original = await installRemoteHost({ ...options, sharedDataDirectory });
+      expect(original.executionSession).toBeUndefined();
+      expect(await readFile(original.profilePath, "utf8")).not.toContain(
+        "REMOTE_EXECUTION_SESSION",
+      );
+      await installRemoteHost({ ...options, executionSession: "desktop" });
+      const updated = await installRemoteHost(options);
+      expect(updated.executionSession).toBe("desktop");
+      expect(await inspectRemoteHostInstallation(options)).toMatchObject({
+        state: "ready",
+        executionSession: "desktop",
+        sharedDataDirectory,
+      });
+      expect(await readFile(updated.profilePath, "utf8")).toContain(
+        "CODEXHOST_REMOTE_EXECUTION_SESSION='desktop'",
+      );
+      expect(await readFile(updated.profilePath, "utf8")).toContain(
+        `CODEXHOST_SHARED_DATA_DIR=${shellQuote(sharedDataDirectory)}`,
+      );
+      const reset = await installRemoteHost({ ...options, executionSession: "ssh" });
+      expect(reset.executionSession).toBeUndefined();
+      expect(reset.sharedDataDirectory).toBe(sharedDataDirectory);
+      expect(await readFile(reset.profilePath, "utf8")).not.toContain("REMOTE_EXECUTION_SESSION");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects desktop execution on Linux before creating installation files", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "remote-session-linux-"));
+    try {
+      await expect(
+        installRemoteHost({ home, platform: "linux", executionSession: "desktop" }),
+      ).rejects.toThrow("requires macOS");
+      await expect(lstat(path.join(home, ".codexhost"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("uses the startup file read by non-interactive zsh SSH commands", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-remote-zsh-"));
     try {
@@ -875,6 +928,60 @@ describe("remote SSH Host installation", () => {
     }
   });
 
+  it("keeps the data directory exported by the managed profile across uninstall and reinstall", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-remote-repair-data-"));
+    const localData = path.join(home, ".codexhost");
+    const resources = {
+      home,
+      stockCodexPath: await executable(path.join(home, "stock-codex")),
+      nodePath: await executable(path.join(home, "node")),
+      shimPath: await executable(path.join(home, "codexhost-shim")),
+      hostRuntimePath: await regularFile(path.join(home, "host-runtime.mjs")),
+      platform: "darwin" as const,
+    };
+    const defaultData = path.join(home, ".codexhost", "remote", "data");
+    try {
+      const installed = await installRemoteHost({
+        ...resources,
+        shareLocalData: true,
+        environment: { HOME: home, SHELL: "/bin/zsh" },
+      });
+      expect(installed.dataDirectory).toBe(localData);
+
+      // Desktop repair: `remote uninstall` deletes the manifest, then a bare `remote install`
+      // runs in the same SSH shell, which still exports the managed block's values.
+      const managedShell = {
+        HOME: home,
+        SHELL: "/bin/zsh",
+        CODEXHOST_REMOTE_SSH_MANAGED: "1",
+        CODEXHOST_DATA_DIR: localData,
+      };
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const repaired = await installRemoteHost({ ...resources, environment: managedShell });
+      expect(repaired.dataDirectory).toBe(localData);
+      expect(await readFile(repaired.profilePath, "utf8")).toContain(
+        `CODEXHOST_DATA_DIR='${localData}'`,
+      );
+
+      // A CODEXHOST_DATA_DIR that the managed block did not export is not an install choice.
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const unmanaged = await installRemoteHost({
+        ...resources,
+        environment: { HOME: home, SHELL: "/bin/zsh", CODEXHOST_DATA_DIR: localData },
+      });
+      expect(unmanaged.dataDirectory).toBe(defaultData);
+
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const relative = await installRemoteHost({
+        ...resources,
+        environment: { ...managedShell, CODEXHOST_DATA_DIR: "relative/data" },
+      });
+      expect(relative.dataDirectory).toBe(defaultData);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("accepts an explicit dataDirectory override", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-remote-data-dir-"));
     const customData = path.join(home, "shared-codexhost-data");
@@ -932,4 +1039,60 @@ describe("remote SSH Host installation", () => {
       }
     },
   );
+});
+
+it("persists a custom shared directory separately from the SSH store across reinstalls", async () => {
+  const home = await mkdtemp(path.join(os.tmpdir(), "shared-directory-"));
+  try {
+    const options = {
+      home,
+      stockCodexPath: await executable(path.join(home, "codex")),
+      nodePath: await executable(path.join(home, "node")),
+      shimPath: await executable(path.join(home, "shim")),
+      hostRuntimePath: await regularFile(path.join(home, "runtime.mjs")),
+      platform: "darwin" as const,
+      environment: {
+        HOME: home,
+        SHELL: "/bin/zsh",
+        CODEXHOST_DATA_DIR: path.join(home, "custom-host"),
+      },
+    };
+    const first = await installRemoteHost(options);
+    expect(first.sharedDataDirectory).toBe(path.join(home, "custom-host"));
+    expect(first.dataDirectory).toBe(path.join(home, ".codexhost/remote/data"));
+    expect(await readFile(first.profilePath, "utf8")).toContain(
+      "CODEXHOST_SHARED_DATA_DIR=" + shellQuote(first.sharedDataDirectory ?? ""),
+    );
+    const next = await installRemoteHost({
+      ...options,
+      environment: { HOME: home, SHELL: "/bin/zsh" },
+    });
+    expect(next.sharedDataDirectory).toBe(first.sharedDataDirectory);
+    const emptyEnv = await installRemoteHost({
+      ...options,
+      environment: {
+        HOME: home,
+        SHELL: "/bin/zsh",
+        CODEXHOST_SHARED_DATA_DIR: "",
+        CODEXHOST_DATA_DIR: "  ",
+      },
+    });
+    expect(emptyEnv.sharedDataDirectory).toBe(first.sharedDataDirectory);
+    await expect(installRemoteHost({ ...options, sharedDataDirectory: "" })).rejects.toThrow(
+      "absolute path",
+    );
+    await expect(
+      installRemoteHost({ ...options, sharedDataDirectory: "relative" }),
+    ).rejects.toThrow("absolute path");
+    const overridden = await installRemoteHost({
+      ...options,
+      sharedDataDirectory: path.join(home, "explicit-host"),
+    });
+    expect(overridden.sharedDataDirectory).toBe(path.join(home, "explicit-host"));
+    await expect(
+      installRemoteHost({ ...options, sharedDataDirectory: first.dataDirectory }),
+    ).rejects.toThrow("must differ");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

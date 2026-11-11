@@ -84,6 +84,31 @@ describe("external clients", () => {
     });
   });
 
+  it("preserves concurrent registration, revocation and access restrictions while recording access", async () => {
+    const filePath = defaultExternalClientsPath(environment);
+    const runtime = new ExternalClientRegistry(filePath);
+    const cliRegistry = new ExternalClientRegistry(filePath);
+    const [alpha, beta] = await Promise.all([
+      runtime.add("alpha", { scope: "dispatch", networks: ["public"] }),
+      cliRegistry.add("beta", { scope: "dispatch", networks: ["public"] }),
+    ]);
+    expect((await cliRegistry.list()).map(({ name }) => name).sort()).toEqual(["alpha", "beta"]);
+
+    await Promise.all([runtime.recordAccess("alpha", "public"), cliRegistry.remove("alpha")]);
+    await expect(runtime.authenticate(alpha.token)).resolves.toBeUndefined();
+    expect((await cliRegistry.list()).map(({ name }) => name)).toEqual(["beta"]);
+
+    await Promise.all([
+      runtime.recordAccess("beta", "public"),
+      cliRegistry.setAccess("beta", { scope: "read", networks: ["local"] }),
+    ]);
+    await expect(runtime.authenticate(beta.token)).resolves.toEqual({
+      name: "beta",
+      scope: "read",
+      networks: ["local"],
+    });
+  });
+
   it("authenticates tokens and sees a removal made by another process", async () => {
     const filePath = defaultExternalClientsPath(environment);
     const cliRegistry = new ExternalClientRegistry(filePath);

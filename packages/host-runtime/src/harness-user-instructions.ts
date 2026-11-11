@@ -28,6 +28,7 @@ const backupManifestSchema = z.strictObject({
   hadOriginal: z.boolean(),
   originalContent: z.string().optional(),
   syncedDigest: z.string().min(1),
+  targetPath: z.string().optional(),
 });
 
 type StoredUserInstructionsSettings = z.infer<typeof storedSettingsSchema>;
@@ -87,6 +88,9 @@ export function resolveExternalUserInstructionsTargets(
   const claudeRoot = environment.CLAUDE_CONFIG_DIR
     ? path.resolve(environment.CLAUDE_CONFIG_DIR)
     : path.join(home, ".claude");
+  const dshRoot = environment.DSH_HOME
+    ? path.resolve(environment.DSH_HOME)
+    : path.join(home, ".dsh");
   const grokRoot = environment.GROK_HOME
     ? path.resolve(environment.GROK_HOME)
     : path.join(home, ".grok");
@@ -164,9 +168,9 @@ export function resolveExternalUserInstructionsTargets(
     },
     {
       id: "deepseek-harness",
-      displayPath: "~/.deepseek/AGENTS.md",
-      rootDir: path.join(home, ".deepseek"),
-      filePath: path.join(home, ".deepseek", "AGENTS.md"),
+      displayPath: "~/.dsh/AGENTS.md",
+      rootDir: dshRoot,
+      filePath: path.join(dshRoot, "AGENTS.md"),
     },
     {
       id: "devin",
@@ -325,8 +329,15 @@ export class HarnessUserInstructionsStore {
     }
   }
 
-  async #writeBackup(harnessId: HarnessId, manifest: BackupManifest): Promise<void> {
-    await atomicWriteFile(this.#backupPath(harnessId), `${JSON.stringify(manifest)}\n`);
+  async #writeBackup(
+    target: ExternalUserInstructionsTarget,
+    manifest: BackupManifest,
+  ): Promise<void> {
+    const saved =
+      target.harnessId === "deepseek-harness"
+        ? { ...manifest, targetPath: target.filePath }
+        : manifest;
+    await atomicWriteFile(this.#backupPath(target.harnessId), `${JSON.stringify(saved)}\n`);
   }
 
   async #removeBackup(harnessId: HarnessId): Promise<void> {
@@ -405,7 +416,16 @@ export class HarnessUserInstructionsStore {
     codexContent: string | null,
     createMissingRoot: boolean,
   ): Promise<void> {
-    const existingBackup = await this.#readBackup(target.harnessId);
+    let existingBackup = await this.#readBackup(target.harnessId);
+    if (target.harnessId === "deepseek-harness" && existingBackup) {
+      const previousPath =
+        existingBackup.targetPath ??
+        path.join(resolveHome(this.#environment), ".deepseek", "AGENTS.md");
+      if (previousPath !== target.filePath) {
+        await this.#restoreTarget({ ...target, filePath: previousPath }, existingBackup);
+        existingBackup = null;
+      }
+    }
     if (active && codexContent !== null) {
       if (!createMissingRoot && !existingBackup && !(await directoryExists(target.rootDir))) {
         return;
@@ -414,7 +434,7 @@ export class HarnessUserInstructionsStore {
       const nextDigest = digest(codexContent);
       if (!existingBackup) {
         await this.#writeBackup(
-          target.harnessId,
+          target,
           currentContent === null
             ? { hadOriginal: false, syncedDigest: nextDigest }
             : { hadOriginal: true, originalContent: currentContent, syncedDigest: nextDigest },
@@ -425,13 +445,16 @@ export class HarnessUserInstructionsStore {
         digest(currentContent) !== existingBackup.syncedDigest
       ) {
         // Preserve manual edits made to the native file while sync was active.
-        await this.#writeBackup(target.harnessId, {
+        await this.#writeBackup(target, {
           hadOriginal: true,
           originalContent: currentContent,
           syncedDigest: nextDigest,
         });
-      } else if (existingBackup.syncedDigest !== nextDigest) {
-        await this.#writeBackup(target.harnessId, {
+      } else if (
+        existingBackup.syncedDigest !== nextDigest ||
+        (target.harnessId === "deepseek-harness" && !existingBackup.targetPath)
+      ) {
+        await this.#writeBackup(target, {
           ...existingBackup,
           syncedDigest: nextDigest,
         });
@@ -442,7 +465,13 @@ export class HarnessUserInstructionsStore {
       return;
     }
 
-    if (!existingBackup) return;
+    if (existingBackup) await this.#restoreTarget(target, existingBackup);
+  }
+
+  async #restoreTarget(
+    target: ExternalUserInstructionsTarget,
+    existingBackup: BackupManifest,
+  ): Promise<void> {
     const currentContent = await readOptionalFile(target.filePath);
     const unmodifiedSinceSync =
       currentContent === null || digest(currentContent) === existingBackup.syncedDigest;

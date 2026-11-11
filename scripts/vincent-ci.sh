@@ -39,9 +39,10 @@ cmd_plan() {
   done
   fetch_upstream
   [[ -n "$tag" ]] || tag="$(latest_tag)"
-  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable upstream tag: '$tag'"
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || die "not an upstream release tag: '$tag'"
   git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null || die "upstream has no tag $tag"
   local core="${tag#v}" builds n=0 b
+  core="${core%%-*}"
   builds="$(gh release list -R "$CH_FORK_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' |
     sed -n "s/^v${core//./\\.}-${CHANNEL}\\.\\([0-9][0-9]*\\)\$/\\1/p")"
   for b in $builds; do ((b > n)) && n="$b"; done
@@ -54,7 +55,7 @@ cmd_plan() {
 
 cmd_verify_version() {
   local tag="${1:?verify-version TAG}" source_version
-  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a stable upstream tag: $tag"
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || die "not an upstream release tag: $tag"
   source_version="$(node -p 'require("./package.json").version')" || die "cannot read source version"
   [[ "$source_version" == "${tag#v}" ]] ||
     die "refusing to publish $tag: source package.json is $source_version; select the matching upstream release"
@@ -63,6 +64,11 @@ cmd_verify_version() {
 
 manifest_branches() {
   sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' -e '/^$/d' "$ROOT/vincent/branches.txt"
+}
+
+manifest_ref() {
+  if [[ "$1" =~ ^[0-9a-f]{40}$ ]]; then echo "$1"
+  else echo "refs/remotes/$CH_FORK_REMOTE/$1"; fi
 }
 
 # Merge one ref, reusing recorded resolutions (rerere). Upstream workflow files merge like
@@ -93,7 +99,7 @@ merge_ref() {
 }
 
 cmd_merge() {
-  local tag="${1:?merge TAG}" b failed=0
+  local tag="${1:?merge TAG}" b ref failed=0
   export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Vincent}" GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-1729065730@qq.com}"
   export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-$GIT_AUTHOR_NAME}" GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-$GIT_AUTHOR_EMAIL}"
   git config rerere.enabled true
@@ -106,10 +112,12 @@ cmd_merge() {
   merge_ref "refs/tags/$tag" "Merge upstream $tag into vincent/release" || failed=1
   if ((failed == 0)); then
     for b in $(manifest_branches); do
-      if ! git rev-parse -q --verify "refs/remotes/$CH_FORK_REMOTE/$b^{commit}" >/dev/null; then
+      ref="$(manifest_ref "$b")"
+      if ! git rev-parse -q --verify "$ref^{commit}" >/dev/null; then
+        [[ ! "$b" =~ ^[0-9a-f]{40}$ ]] || die "missing pinned commit $b"
         log "skip $b: not on the fork"; continue
       fi
-      merge_ref "refs/remotes/$CH_FORK_REMOTE/$b" "Merge $b into vincent/release for $tag" || { failed=1; break; }
+      merge_ref "$ref" "Merge $b into vincent/release for $tag" || { failed=1; break; }
     done
   fi
   # A hand-resolved vincent/release-<tag> pushed by Vincent wins over a failed automatic merge.

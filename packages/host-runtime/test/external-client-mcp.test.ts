@@ -19,6 +19,7 @@ import {
   type ExternalClientServer,
 } from "../src/external-client-server.js";
 import { ExternalClientRegistry } from "../src/external-clients.js";
+import { HostInventory } from "../src/host-inventory.js";
 
 describe("external client MCP endpoint", () => {
   let directory: string;
@@ -80,6 +81,11 @@ describe("external client MCP endpoint", () => {
       api: api as unknown as DelegationControlApi,
       watchApi: { watch, watches: vi.fn(async () => ({ watches: [] })) },
       events,
+      inventory: new HostInventory({
+        ...process.env,
+        CODEXHOST_DATA_DIR: directory,
+        HOME: directory,
+      }),
     });
     server = await startExternalClientServer({
       port: 0,
@@ -98,6 +104,8 @@ describe("external client MCP endpoint", () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
+      "host_info",
+      "project_list",
       "harness_list",
       "harness_inspect",
       "delegate_start",
@@ -116,6 +124,31 @@ describe("external client MCP endpoint", () => {
         tools.find((tool) => tool.name === name)?.inputSchema.properties?.stallAfterMs,
       ).toMatchObject({ type: "integer", minimum: 1 });
     }
+    await client.close();
+  });
+
+  it("allows read clients to discover projects while retaining dispatch restrictions", async () => {
+    await writeFile(
+      path.join(directory, "host-inventory.json"),
+      JSON.stringify({
+        id: "test-host",
+        projectRoots: [],
+      }),
+    );
+    const clients = new ExternalClientRegistry(path.join(directory, "clients.json"));
+    const reader = await clients.add("inventory-reader", { scope: "read" });
+    const client = await connect(`Bearer ${reader.token}`);
+    await expect(client.callTool({ name: "project_list", arguments: {} })).resolves.toMatchObject({
+      isError: false,
+      structuredContent: { deviceId: "test-host", projects: [], total: 0, nextOffset: null },
+    });
+    const invalid = await client.callTool({ name: "project_list", arguments: { limit: 101 } });
+    expect(invalid.isError).toBe(true);
+    const dispatched = await client.callTool({
+      name: "delegate_start",
+      arguments: { harnessId: "codex", task: "no" },
+    });
+    expect(dispatched.isError).toBe(true);
     await client.close();
   });
 

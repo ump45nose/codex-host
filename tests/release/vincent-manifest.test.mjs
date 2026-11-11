@@ -15,6 +15,7 @@ function fixture() {
   git("init", "--quiet", "--initial-branch=release");
   git("config", "user.name", "Release test");
   git("config", "user.email", "release@example.invalid");
+  git("config", "core.autocrlf", "false");
   mkdirSync(path.join(directory, "scripts"));
   mkdirSync(path.join(directory, "vincent"));
   for (const name of ["vincent-ci.sh", "vincent-release.sh"]) {

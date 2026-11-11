@@ -319,6 +319,88 @@ codexhost(){
 
 #[cfg(unix)]
 #[test]
+fn repair_preserves_a_non_default_data_directory_recorded_by_the_fork() {
+    let root = std::env::temp_dir().join(format!("ssh-repair-data-{}", std::process::id()));
+    let mocks = r#"
+codexhost(){
+  printf '%s\n' "$*" >> "$HOME/calls"
+  if [ "$2" = install ]; then printf '%s\n' "$#" >> "$HOME/argc"; fi
+  if [ "$2" = uninstall ]; then rm -f "$HOME/.codexhost/remote/manifest.json"; fi
+  return 0
+}
+"#;
+    for name in ["shared", "default", "custom", "relative"] {
+        let home = root.join(name);
+        let manifest = home.join(".codexhost/remote/manifest.json");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let shared = home.join(".codexhost");
+        let custom = home.join("codex host data");
+        let (value, expected_install, expected_argc, code) = match name {
+            "shared" => (
+                shared.to_string_lossy().into_owned(),
+                format!("remote install --data-dir {}", shared.display()),
+                "4",
+                0,
+            ),
+            "default" => (
+                home.join(".codexhost/remote/data")
+                    .to_string_lossy()
+                    .into_owned(),
+                "remote install".to_owned(),
+                "2",
+                0,
+            ),
+            "custom" => (
+                custom.to_string_lossy().into_owned(),
+                format!("remote install --data-dir {}", custom.display()),
+                "4",
+                0,
+            ),
+            _ => ("relative/data".to_owned(), String::new(), "", 47),
+        };
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({ "dataDirectory": value })).unwrap(),
+        )
+        .unwrap();
+        let mut request = request();
+        request.action = "repair".into();
+        let result = Command::new("/bin/sh")
+            .args(["-c", &format!("{mocks}{}", script(&request).unwrap())])
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(code),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        if code == 0 {
+            assert_eq!(
+                std::fs::read_to_string(home.join("calls")).unwrap(),
+                format!(
+                    "remote stop\nremote uninstall\n{expected_install}\nremote stop\nremote start\n"
+                ),
+                "{name}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join("argc")).unwrap(),
+                format!("{expected_argc}\n"),
+                "{name}"
+            );
+        } else {
+            assert!(!home.join("calls").exists(), "{name}");
+            assert!(manifest.exists(), "{name}");
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn uninstall_stops_before_removing_setup_and_only_removes_an_explicit_matching_package() {
     let root = std::env::temp_dir().join(format!("codexhost-ssh-uninstall-{}", std::process::id()));
     let mocks = r#"

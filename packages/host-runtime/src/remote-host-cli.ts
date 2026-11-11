@@ -34,8 +34,12 @@ function parseRemoteCliArguments(arguments_: readonly string[]): {
   const resources: RemoteCliResources = {};
   for (let index = 1; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
+    if (argument === "--share-local-data") {
+      options.shareLocalData = true;
+      continue;
+    }
     const value = arguments_[index + 1];
-    if (!value) throw new Error(`${argument} requires a value`);
+    if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
     switch (argument) {
       case "--session":
         if (command !== "install" || (value !== "ssh" && value !== "desktop")) {
@@ -55,6 +59,9 @@ function parseRemoteCliArguments(arguments_: readonly string[]): {
       case "--stock-codex":
         options.stockCodexPath = value;
         break;
+      case "--data-dir":
+        options.dataDirectory = value;
+        break;
       case "--node":
         resources.nodePath = value;
         break;
@@ -68,6 +75,9 @@ function parseRemoteCliArguments(arguments_: readonly string[]): {
         throw new Error(`Unknown remote option '${argument}'`);
     }
     index += 1;
+  }
+  if (options.dataDirectory !== undefined && options.shareLocalData) {
+    throw new Error("Pass either --share-local-data or --data-dir, not both");
   }
   return { command, options: { ...options, ...resources } };
 }
@@ -87,13 +97,15 @@ export async function runRemoteHostCli(input: {
       output.write(
         [
           "usage:",
-          "  codexhost remote install [--stock-codex PATH] [--shared-data DIRECTORY] [--session ssh|desktop]",
+          "  codexhost remote install [--stock-codex PATH] [--shared-data DIRECTORY] [--session ssh|desktop] [--share-local-data | --data-dir PATH]",
           "  codexhost remote start",
           "  codexhost remote stop",
           "  codexhost remote status",
           "  codexhost remote uninstall",
           "",
           "Installs and manages a headless codexhost Remote Host for SSH sessions.",
+          "Use --share-local-data so Remote SSH lists the same harness threads/pins as local Desktop (~/.codexhost).",
+          "Use --data-dir PATH to set CODEXHOST_DATA_DIR explicitly. Default remains ~/.codexhost/remote/data.",
           "On macOS, --session desktop uses the logged-in desktop keychain. Locking the screen is supported; logging out stops its tasks.",
         ].join("\n") + "\n",
       );

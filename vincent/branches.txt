@@ -37,3 +37,4 @@ aeb5211aed67920d6568a9d3b1c97ff7a8d404e2 # fix/console-shutdown-on-exit; PR #753
 07250b6fd0b2866e1154a20e81ba500a38b269a2 # feat/vertical-screen-overlay-tabs-pets; local: sidebar overlay drawer, top capsule tabs, and pets remote/expanded view
 03db15009469e2efa64d55252c74b03b1dad771c # codex/remote-desktop-session; PR #790 (Fixes #789 desktop-session execution for remote macOS tasks)
 fb2b9f7545b500e26dc99d8506fed7adb7e05aed # fix/projects-and-shared-remote-threads; PR #791 (share external Thread Runtime, deduplicate projects, and resolve shared parent delegation)
+32a419e9612c84148eacb1a1ac30aa4a8b1526b8 # codex/remote-external-prewarm; PR #805 (Fixes #804 external RPC drafts consuming official prewarms)

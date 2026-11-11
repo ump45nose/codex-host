@@ -17,6 +17,8 @@ import {
 } from "./delegation-types.js";
 import { matchesBearerToken } from "./bearer-token.js";
 import type { LocalPreviewManager } from "./local-preview.js";
+import type { HostInventory } from "./host-inventory.js";
+import { readThreadResultFile } from "./thread-result-file.js";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 
@@ -118,11 +120,20 @@ async function startWithWatch(
 
 /** The delegation routes shared by the Host control server and the external client listener. */
 export async function routeDelegationRequest(
-  handlers: { api: DelegationControlApi; watchApi?: DelegationWatchApi },
+  handlers: { api: DelegationControlApi; watchApi?: DelegationWatchApi; inventory?: HostInventory },
   route: string | undefined,
   body: Record<string, unknown>,
 ): Promise<unknown> {
   switch (route) {
+    case "/v1/host/info":
+    case "/v1/project/list":
+      if (!handlers.inventory)
+        throw new DelegationControlError("UNSUPPORTED", "Host inventory is unavailable");
+      return route === "/v1/host/info"
+        ? handlers.inventory.info(body)
+        : handlers.inventory.projects(body);
+    case "/v1/thread/file":
+      return readThreadResultFile(handlers.api, body);
     case "/v1/harness/list":
       return handlers.api.listHarnesses(body as HarnessListInput);
     case "/v1/harness/inspect":
@@ -156,6 +167,7 @@ export async function startDelegationControlServer(input: {
   token: string;
   api: DelegationControlApi;
   watchApi?: DelegationWatchApi;
+  inventory?: HostInventory;
   /** Absent on a Host without a local Desktop; preview routes then report UNSUPPORTED. */
   preview?: LocalPreviewManager;
 }): Promise<DelegationControlServer> {

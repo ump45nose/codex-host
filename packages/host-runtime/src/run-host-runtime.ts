@@ -250,13 +250,20 @@ export async function prepareDelegationRuntime(input: {
     },
   });
   const token = randomBytes(32).toString("hex");
+  const inventory = new HostInventory(input.environment);
   const server = await startDelegationControlServer({
     token,
     api: registry,
     watchApi: registry,
+    inventory,
     ...(input.preview ? { preview: input.preview } : {}),
   });
-  const externalServer = await startExternalClients(input.environment, registry, events).then(
+  const externalServer = await startExternalClients(
+    input.environment,
+    registry,
+    events,
+    inventory,
+  ).then(
     (started) => {
       if (started)
         process.stderr.write(`codexhost external clients: listening on ${started.endpoint}\n`);
@@ -303,6 +310,7 @@ async function startExternalClients(
   environment: NodeJS.ProcessEnv,
   registry: DelegationControlRegistry,
   events: ClientEventLog,
+  inventory: HostInventory,
 ): Promise<ExternalClientServer | undefined> {
   const port = externalClientPort(environment);
   if (port === undefined) return undefined;
@@ -313,7 +321,7 @@ async function startExternalClients(
     api: registry,
     watchApi: registry,
     events,
-    inventory: new HostInventory(environment),
+    inventory,
   });
   const diagnose = (message: string) =>
     process.stderr.write(`codexhost external clients: ${message}\n`);

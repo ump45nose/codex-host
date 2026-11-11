@@ -58,6 +58,8 @@
 
 ### 设备与项目发现
 
+CLI 提供 `codexhost host info --refresh true|false` 和 `codexhost project list --query <文本> --offset <位置> --limit <数量> --refresh true|false`，与 MCP 使用相同的实现；内部控制连接和独立客户端连接都可使用。
+
 每台 Host 的外部 MCP 还提供两个只读工具，供客户端在多设备之间选择执行位置，`read` 客户端也可调用：
 
 - `host_info(refresh?)`，对应 `POST /v1/host/info`：设备标识、显示名与别名、实际 hostname、操作系统、架构、CPU、内存、开发工具版本、项目扫描根目录和可用的默认工作区。工具探测只执行固定的版本查询；不返回环境变量、账号或凭据，不执行项目脚本。安装了 CLI 不代表其服务、SDK 或账号可用。
@@ -84,6 +86,8 @@
 文件结果含 `filename`、`mimeType`、`size`、`encoding: "base64"`、`data`、`offset`、`nextOffset`、`eof` 与 `revision`。默认每块 256 KiB，上限 1 MiB；续读必须携带首块的 `revision`，文件变化时重新开始。客户端应将工具结果直接保存为文件，在自己的电脑上解码，再以其原生附件工具交付成品，不在聊天中打印 Base64 或主机路径。源文件按用户要求读取。文件传输沿用客户端认证与网络策略，不创建公开下载链接。
 
 ## 接入示例
+
+CLI 用 `codexhost thread file <thread> --path <文件> --offset <位置> --limit <字节数> --revision <版本>` 读取同一套经过报告引用及工作区校验的文件分块。
 
 - Claude Code：`claude mcp add --transport http codexhost http://127.0.0.1:4398/mcp --header "Authorization: Bearer <token>"`。
 - Claude Desktop：设置里的自定义 connector 由 Anthropic 云端连接，访问不到 `127.0.0.1`；本机 `claude_desktop_config.json` 的 `mcpServers` 只支持 stdio。用 `mcp-remote` 桥接：

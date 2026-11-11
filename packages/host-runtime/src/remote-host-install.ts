@@ -470,9 +470,18 @@ export async function installRemoteHost(
 
   const dataDirectoryExplicit =
     options.dataDirectory !== undefined || options.shareLocalData === true;
+  // `remote uninstall` deletes the manifest, and the Desktop repair action runs it before a
+  // bare install. An SSH shell that loaded the managed profile block still exports the
+  // previous choice; keep it instead of silently switching to a different Mapping Store.
+  const inheritedDataDirectory =
+    environment.CODEXHOST_REMOTE_SSH_MANAGED === "1" &&
+    environment.CODEXHOST_DATA_DIR?.trim() &&
+    path.isAbsolute(environment.CODEXHOST_DATA_DIR)
+      ? path.resolve(environment.CODEXHOST_DATA_DIR)
+      : undefined;
   const dataDirectory = dataDirectoryExplicit
     ? paths.dataDirectory
-    : (previousManifest?.dataDirectory ?? paths.dataDirectory);
+    : (previousManifest?.dataDirectory ?? inheritedDataDirectory ?? paths.dataDirectory);
   let manifest: RemoteHostManifestV1 = {
     format: MANIFEST_FORMAT,
     wrapperPath: paths.wrapperPath,

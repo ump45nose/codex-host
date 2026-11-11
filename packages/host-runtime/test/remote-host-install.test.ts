@@ -922,6 +922,60 @@ describe("remote SSH Host installation", () => {
     }
   });
 
+  it("keeps the data directory exported by the managed profile across uninstall and reinstall", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-remote-repair-data-"));
+    const localData = path.join(home, ".codexhost");
+    const resources = {
+      home,
+      stockCodexPath: await executable(path.join(home, "stock-codex")),
+      nodePath: await executable(path.join(home, "node")),
+      shimPath: await executable(path.join(home, "codexhost-shim")),
+      hostRuntimePath: await regularFile(path.join(home, "host-runtime.mjs")),
+      platform: "darwin" as const,
+    };
+    const defaultData = path.join(home, ".codexhost", "remote", "data");
+    try {
+      const installed = await installRemoteHost({
+        ...resources,
+        shareLocalData: true,
+        environment: { HOME: home, SHELL: "/bin/zsh" },
+      });
+      expect(installed.dataDirectory).toBe(localData);
+
+      // Desktop repair: `remote uninstall` deletes the manifest, then a bare `remote install`
+      // runs in the same SSH shell, which still exports the managed block's values.
+      const managedShell = {
+        HOME: home,
+        SHELL: "/bin/zsh",
+        CODEXHOST_REMOTE_SSH_MANAGED: "1",
+        CODEXHOST_DATA_DIR: localData,
+      };
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const repaired = await installRemoteHost({ ...resources, environment: managedShell });
+      expect(repaired.dataDirectory).toBe(localData);
+      expect(await readFile(repaired.profilePath, "utf8")).toContain(
+        `CODEXHOST_DATA_DIR='${localData}'`,
+      );
+
+      // A CODEXHOST_DATA_DIR that the managed block did not export is not an install choice.
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const unmanaged = await installRemoteHost({
+        ...resources,
+        environment: { HOME: home, SHELL: "/bin/zsh", CODEXHOST_DATA_DIR: localData },
+      });
+      expect(unmanaged.dataDirectory).toBe(defaultData);
+
+      await uninstallRemoteHost({ ...resources, environment: managedShell });
+      const relative = await installRemoteHost({
+        ...resources,
+        environment: { ...managedShell, CODEXHOST_DATA_DIR: "relative/data" },
+      });
+      expect(relative.dataDirectory).toBe(defaultData);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("accepts an explicit dataDirectory override", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-remote-data-dir-"));
     const customData = path.join(home, "shared-codexhost-data");

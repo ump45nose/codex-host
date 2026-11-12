@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   realpath,
   rm,
   symlink,
@@ -98,6 +99,14 @@ async function createHomebrewNodeLayout(root) {
   } catch {
     await copyFile(process.execPath, cellarNode);
     await chmod(cellarNode, 0o755);
+  }
+  // Homebrew's Node may depend on a libnode dylib next to its real executable.
+  const sourceLib = path.resolve(path.dirname(process.execPath), "..", "lib");
+  const libraries = await readdir(sourceLib).catch(() => []);
+  for (const library of libraries.filter((name) => /^libnode.*\.dylib$/u.test(name))) {
+    const targetLib = path.resolve(path.dirname(cellarNode), "..", "lib");
+    await mkdir(targetLib, { recursive: true });
+    await symlink(path.join(sourceLib, library), path.join(targetLib, library));
   }
   await writeExecutable(prefixNpm, '#!/usr/bin/env node\nconsole.log("homebrew-prefix-npm");\n');
   await writeExecutable(libexecNpm, '#!/usr/bin/env node\nconsole.log("homebrew-libexec-npm");\n');
@@ -593,6 +602,20 @@ describe("npm package release", () => {
     expect(promptCall).toBeGreaterThanOrEqual(0);
     expect(promptCall).toBeLessThan(platformResolution);
     expect(source.match(/\n {2}printStarPrompt\(\);/gu)).toHaveLength(1);
+  });
+
+  it("tells fork channel installs to reinstall from the Release tarball", () => {
+    const channel = createNpmBinLauncherSource({ version: "0.17.2-vincent.1" });
+    expect(channel).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(channel).not.toContain("npm install -g @codexhost/cli@0.17.2-vincent.1");
+    expect(createNpmMetaReadme({ version: "0.17.2-vincent.1" })).toContain(
+      "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli.tgz",
+    );
+    expect(createNpmMetaReadme({ version: "0.1.0" })).toContain(
+      "npm install -g @codexhost/cli@0.1.0",
+    );
   });
 
   it("injects package resources when the user runs codexhost with no args", () => {

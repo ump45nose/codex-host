@@ -168,18 +168,34 @@ export function installRendererSidebarStash(
   );
 
   function mountSection(): void {
-    const mount = adapter.findMountPoint();
-    if (!mount) return;
-    if (section.root.parentElement !== mount) {
-      const pinned =
-        mount.querySelector(
-          "[data-app-action-sidebar-pinned-threads], [data-app-action-sidebar-pinned]",
-        ) || mount.querySelector("[data-codexhost-sidebar-stash-root]");
-      if (pinned && pinned !== section.root) {
-        mount.insertBefore(section.root, pinned.nextSibling);
-      } else if (!section.root.isConnected) {
-        mount.prepend(section.root);
+    const placement =
+      typeof adapter.findMountPlacement === "function"
+        ? adapter.findMountPlacement()
+        : (() => {
+            const parent = adapter.findMountPoint();
+            return parent ? { parent, after: null, before: null, gap: null } : null;
+          })();
+    if (!placement?.parent) return;
+    const { parent, after = null, before = null, gap = null } = placement;
+    // Pin after the Recents (or last) native section on every refresh so React
+    // reorders cannot leave us on the outer aside shell.
+    if (after && after.parentNode === parent) {
+      section.root.style.marginTop = gap || "";
+      if (section.root.previousElementSibling !== after) {
+        after.after(section.root);
       }
+      return;
+    }
+    if (before && before.parentNode === parent) {
+      section.root.style.marginTop = "";
+      if (section.root.nextSibling !== before) {
+        parent.insertBefore(section.root, before);
+      }
+      return;
+    }
+    section.root.style.marginTop = "";
+    if (section.root.parentElement !== parent) {
+      parent.append(section.root);
     }
   }
 

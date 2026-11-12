@@ -88,6 +88,8 @@ export interface RendererSettingsMessages {
   readonly archiveChildrenAsk: string;
   readonly archiveChildrenAlways: string;
   readonly archiveChildrenNever: string;
+  readonly sidebarStashTitle: string;
+  readonly sidebarStashDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -378,6 +380,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   archiveChildrenAsk: "Ask every time",
   archiveChildrenAlways: "Always archive child threads",
   archiveChildrenNever: "Never archive child threads",
+  sidebarStashTitle: "Stash (收纳箱)",
+  sidebarStashDescription:
+    "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -711,6 +716,9 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   archiveChildrenAsk: "每次询问",
   archiveChildrenAlways: "总是归档子会话",
   archiveChildrenNever: "从不归档子会话",
+  sidebarStashTitle: "收纳箱",
+  sidebarStashDescription:
+    "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

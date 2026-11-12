@@ -10,7 +10,11 @@ import {
 import { createStashSection } from "../src/renderer-sidebar-stash/section.js";
 import { ZH } from "../src/renderer-sidebar-stash/strings.js";
 import { StashStore } from "../src/renderer-sidebar-stash/store.js";
-import type { SidebarAdapter } from "../src/renderer-sidebar-stash/adapter.js";
+import {
+  createSidebarAdapter,
+  nativeSectionKey,
+  type SidebarAdapter,
+} from "../src/renderer-sidebar-stash/adapter.js";
 
 type AttrMap = Map<string, string>;
 
@@ -63,6 +67,31 @@ class FakeNode extends EventTarget {
     node.isConnected = true;
     node.ownerDocument = this.ownerDocument;
     this.children.unshift(node);
+  }
+  after(...nodes: FakeNode[]): void {
+    if (!this.parentElement) return;
+    const parent = this.parentElement;
+    let index = parent.children.indexOf(this);
+    for (const node of nodes) {
+      node.parentElement = parent;
+      node.isConnected = true;
+      node.ownerDocument = this.ownerDocument;
+      index += 1;
+      parent.children.splice(index, 0, node);
+    }
+  }
+  get nextSibling(): FakeNode | null {
+    if (!this.parentElement) return null;
+    const index = this.parentElement.children.indexOf(this);
+    return index >= 0 ? (this.parentElement.children[index + 1] ?? null) : null;
+  }
+  get previousElementSibling(): FakeNode | null {
+    if (!this.parentElement) return null;
+    const index = this.parentElement.children.indexOf(this);
+    return index > 0 ? (this.parentElement.children[index - 1] ?? null) : null;
+  }
+  get parentNode(): FakeNode | null {
+    return this.parentElement;
   }
   insertBefore(node: FakeNode, ref: FakeNode | null): FakeNode {
     node.parentElement = this;
@@ -238,6 +267,12 @@ function mockAdapter(overrides: Partial<SidebarAdapter> = {}): SidebarAdapter & 
   const adapter: SidebarAdapter & { opened: string[]; mount: FakeNode } = {
     mount,
     opened,
+    findMountPlacement: () => ({
+      parent: mount as unknown as HTMLElement,
+      after: null,
+      before: null,
+      gap: null,
+    }),
     findMountPoint: () => mount as unknown as HTMLElement,
     listThreadButtons: () => [],
     findThreadButton: () => null,
@@ -384,5 +419,95 @@ describe("installRendererSidebarStash", () => {
 describe("user message event name", () => {
   it("is stable for Harness send-path integration", () => {
     expect(USER_MESSAGE_EVENT).toBe("codexhost:user-message");
+  });
+});
+
+describe("createSidebarAdapter mount placement", () => {
+  function buildSidebarDom(): {
+    doc: FakeDocument;
+    win: FakeWindow;
+    aside: FakeNode;
+    scroll: FakeNode;
+    list: FakeNode;
+    pinned: FakeNode;
+    recents: FakeNode;
+    recentsWrap: FakeNode;
+  } {
+    const storage = memoryStorage();
+    const win = new FakeWindow(storage);
+    const doc = new FakeDocument(win);
+    const aside = doc.createElement("aside");
+    aside.className = "app-shell-left-panel";
+    const rail = doc.createElement("nav");
+    rail.setAttribute("data-app-navigation-rail", "true");
+    const scroll = doc.createElement("div");
+    scroll.setAttribute("data-app-action-sidebar-scroll", "");
+    const list = doc.createElement("div");
+    const pinnedWrap = doc.createElement("div");
+    const pinned = doc.createElement("section");
+    pinned.setAttribute("data-app-action-sidebar-section", "");
+    pinned.setAttribute("data-app-action-sidebar-section-heading", "Pinned");
+    pinnedWrap.appendChild(pinned);
+    const recentsWrap = doc.createElement("div");
+    recentsWrap.setAttribute("data-sidebar-project-container-id", "chats");
+    const recents = doc.createElement("section");
+    recents.setAttribute("data-app-action-sidebar-section", "");
+    recents.setAttribute("data-app-action-sidebar-section-heading", "Recents");
+    recentsWrap.appendChild(recents);
+    list.appendChild(pinnedWrap);
+    list.appendChild(recentsWrap);
+    scroll.appendChild(list);
+    aside.appendChild(scroll);
+    // Outer shell: rail + aside. A buggy fallback that picks `nav, aside` would
+    // prepend into the aside flex row and overlay the header.
+    doc.body.appendChild(rail);
+    doc.body.appendChild(aside);
+    return { doc, win, aside, scroll, list, pinned, recents, recentsWrap };
+  }
+
+  it("normalizes Recents heading to recent", () => {
+    const section = new FakeNode("section");
+    section.setAttribute("data-app-action-sidebar-section", "");
+    section.setAttribute("data-app-action-sidebar-section-heading", "Recents");
+    expect(nativeSectionKey(section as unknown as Element)).toBe("recent");
+  });
+
+  it("places the stash after Recents inside the scroll list, not on the aside shell", () => {
+    const { doc, aside, recents, recentsWrap } = buildSidebarDom();
+    const adapter = createSidebarAdapter(doc as unknown as Document);
+    const placement = adapter.findMountPlacement();
+    expect(placement).not.toBeNull();
+    expect(placement?.parent).toBe(recentsWrap);
+    expect(placement?.after).toBe(recents);
+    expect(placement?.parent).not.toBe(aside);
+
+    const storage = memoryStorage();
+    const win = new FakeWindow(storage);
+    win.document = doc;
+    const handle = installRendererSidebarStash({
+      window: win as unknown as Window & typeof globalThis,
+      document: doc as unknown as Document,
+      storage,
+      adapter,
+      getLocale: () => "zh-CN",
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    expect(handle).not.toBeNull();
+    const root = doc.querySelector("[data-codexhost-sidebar-stash-root]");
+    expect(root).toBeTruthy();
+    expect(root?.parentElement).toBe(recentsWrap);
+    expect(recents.nextSibling).toBe(root);
+    // Must not be a direct child of the outer aside (the overlay bug).
+    expect(aside.children.includes(root as FakeNode)).toBe(false);
+    handle?.dispose();
+  });
+
+  it("does not treat the icon rail nav as a mount point", () => {
+    const { doc, aside } = buildSidebarDom();
+    // No sections / scroll — only the rail and an empty aside shell.
+    aside.replaceChildren();
+    const adapter = createSidebarAdapter(doc as unknown as Document);
+    expect(adapter.findMountPlacement()).toBeNull();
+    expect(adapter.findMountPoint()).toBeNull();
   });
 });

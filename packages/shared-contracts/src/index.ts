@@ -457,6 +457,7 @@ export {
   REMOTE_CONTROLLER_REQUEST_MAX_BYTES,
   type RemoteSessionOperation,
 } from "./remote-sessions.js";
+export * from "./sidebar-stash.js";
 
 export {
   encodeOfficialCodexModelRef,

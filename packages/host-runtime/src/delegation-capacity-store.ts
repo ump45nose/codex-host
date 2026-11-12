@@ -8,6 +8,7 @@ import type { RoutedHarnessId } from "@codexhost/protocol-core";
 import { harnessModelRefSchema, harnessThinkingOptionIdSchema } from "@codexhost/shared-contracts";
 
 import { codexhostDataDirectory } from "./external-clients.js";
+import { withRemoteAppServerSocketInitializationLock as withFileMutationLock } from "./remote-socket-lock.js";
 
 /**
  * A start waiting for a free slot, as kept on disk. Unlike a watch it holds the
@@ -168,7 +169,9 @@ export class FileDelegationQueueStore implements DelegationQueueStore {
       const claimer =
         claimAt >= 0 ? Number(name.slice(claimAt + CLAIM_MARKER.length).split(".")[0]) : NaN;
       if (claimAt < 0 ? !name.endsWith(RECORD_SUFFIX) : !this.#abandonedClaim(claimer)) continue;
-      const claimed = await this.#claim(name, claimAt < 0).catch((error: unknown) => {
+      const claimed = await withFileMutationLock(`${this.#directory}.adoption`, () =>
+        this.#claim(name, claimAt < 0),
+      ).catch((error: unknown) => {
         this.#diagnose(error);
         return undefined;
       });

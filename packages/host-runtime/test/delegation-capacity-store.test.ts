@@ -60,7 +60,7 @@ describe("FileDelegationQueueStore", () => {
 
   it("lives in the codexhost data directory", () => {
     expect(defaultDelegationQueueDirectory({ CODEXHOST_DATA_DIR: "/data" })).toBe(
-      path.join("/data", "delegation-queue"),
+      path.join(path.resolve("/data"), "delegation-queue"),
     );
   });
 

@@ -80,7 +80,7 @@ import {
   remoteAppServerSocketPath,
   remoteUnixListenerUrl,
 } from "./remote-app-server.js";
-import { SharedThreadBridge } from "./shared-thread-bridge.js";
+import { SharedThreadBridge, connectSharedThreads } from "./shared-thread-bridge.js";
 import { watchRemoteListenerSupervisor } from "./remote-listener-supervisor.js";
 import { remoteOfficialAppServerSocketPath } from "./remote-official-app-server.js";
 import { startConsoleControlServer } from "./console-control-server.js";
@@ -506,52 +506,21 @@ export async function runHostRuntime(input: {
           accountControl: official.accountControl,
         };
         if (!remoteControlPlan) {
-          let sharedRuntime: SharedExternalThreadRuntime | undefined;
           try {
-            sharedRuntime = await createSharedExternalThreadRuntime({
-              environment: delegationEnvironment,
-              ownerRole: "local Host Runtime",
-              createBridge: () => sharedExternalBridge(delegationEnvironment),
-              registerCatalogDelegation: (api) => registry.register(api, { harnessCatalog: true }),
-              createExternalHost: ({
-                mappingStore: externalMappingStore,
-                desktopInput,
-                desktopOutput,
-                onDelegationApi: onExternalDelegationApi,
-                sharedThreads,
-              }) =>
-                new AppServerHost({
-                  ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
-                  modelPrices,
-                  usageStatistics,
-                  stockCodexPath,
-                  arguments: [],
-                  environment: delegationEnvironment,
-                  desktopInput,
-                  desktopOutput,
-                  diagnosticOutput: process.stderr,
-                  externalOnly: true,
-                  sharedThreads,
-                  ...installedHarnessPluginOptions(
-                    delegationEnvironment,
-                    false,
-                    input.hostRuntimeUrl,
-                  ),
-                  mappingStore: externalMappingStore,
-                  closeMappingStoreOnExit: false,
-                  ...shared,
-                  onDelegationApi: onExternalDelegationApi,
-                  onThreadArchived,
-                }),
-            });
             const host = new AppServerHost({
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
               modelPrices,
               usageStatistics,
-              sharedDelegation: () => sharedRuntime?.sharedDelegation,
-              sharedThreads: sharedRuntime.createBridge(),
-              mappingStore: sharedRuntime.mappingStore,
-              closeMappingStoreOnExit: false,
+              ...(process.platform !== "win32"
+                ? {
+                    sharedThreads: new SharedThreadBridge({
+                      connect: () => connectSharedThreads(delegationEnvironment),
+                      delegateCreates: false,
+                      diagnose: (error) =>
+                        process.stderr.write(`codexhost shared Threads: ${String(error)}\n`),
+                    }),
+                  }
+                : {}),
               stockCodexPath,
               arguments: input.arguments,
               environment: delegationEnvironment,
@@ -569,11 +538,7 @@ export async function runHostRuntime(input: {
               delegationEnvironment,
             );
           } finally {
-            try {
-              await sharedRuntime?.close();
-            } finally {
-              await official.close();
-            }
+            await official.close();
           }
         }
         const mappingStore = createProductionExternalThreadStore(delegationEnvironment);

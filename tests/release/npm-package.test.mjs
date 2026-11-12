@@ -688,6 +688,21 @@ describe("npm package release", () => {
     },
   );
 
+  it.each([
+    ["host", "info", "--refresh", "true"],
+    ["project", "list", "--query", "bat"],
+    ["thread", "file", "thread-id", "--path", "outputs/result.png"],
+  ])("routes discovery and file reads through the npm CLI: %j", async (...args) => {
+    const { result, calls } = await runGeneratedWrapperLifecycle("darwin", args, [0]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      expect.stringMatching(/host-runtime\.mjs$/u),
+      "--codexhost-delegation-cli",
+      ...args,
+    ]);
+  });
+
   it.each(["darwin", "linux", "win32"])(
     "keeps automatic Node selection compatible on %s",
     async (platform) => {

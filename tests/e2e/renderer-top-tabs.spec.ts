@@ -81,10 +81,10 @@ const WORKBENCH_HTML = `<!doctype html><html data-theme="light"><head><meta char
   [data-app-shell-titlebar] { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; } .workbench-body { flex: 1; min-height: 0; display: flex; padding: 0 10px 10px; gap: 8px; position: relative; }
   aside[data-app-shell-sidebar] { width: 240px; flex-shrink: 0; background: var(--wb-surface-secondary); border-radius: 14px; padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--wb-border-subtle); }
   [data-app-action-sidebar-thread-row] { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; color: var(--wb-text-secondary); cursor: pointer; } [data-app-action-sidebar-thread-row][data-active="true"] { background: var(--wb-elevated); color: var(--wb-text-primary); font-weight: 500; }
-  .PageSurface { flex: 1; min-width: 0; background: var(--wb-surface-primary); border-radius: 16px; border: 1px solid var(--wb-border-subtle); display: flex; flex-direction: column; overflow: hidden; } .conversation-canvas { flex: 1; padding: 20px 28px; } .msg-card { padding: 14px 18px; border-radius: 12px; background: var(--wb-elevated); border: 1px solid var(--wb-border-subtle); font-size: 13.5px; }
-</style></head><body><header data-app-shell-titlebar="true"><button type="button" id="sidebar-toggle-btn" aria-label="Toggle sidebar">☰</button><span>CodexHost Workbench</span></header><div class="workbench-body"><aside data-app-shell-sidebar="true" role="navigation"><div id="sidebar-rows"></div></aside><main class="PageSurface page-surface" data-app-shell-active-page="true"><div class="conversation-canvas"><div class="msg-card">PageSurface Active Session Strip</div></div></main></div><script>${bundle}</script></body></html>`;
+  .PageSurface, .MainContentSurface { flex: 1; min-width: 0; background: var(--wb-surface-primary); border-radius: 16px; border: 1px solid var(--wb-border-subtle); display: flex; flex-direction: column; overflow: hidden; } .conversation-canvas { flex: 1; padding: 20px 28px; } .msg-card { padding: 14px 18px; border-radius: 12px; background: var(--wb-elevated); border: 1px solid var(--wb-border-subtle); font-size: 13.5px; }
+</style></head><body><div class="Layout PageSurfaceLayout" data-app-shell-frame="true" data-app-shell-page-surface="true" style="display:flex;flex-direction:column;height:100vh;overflow:hidden;"><header data-app-shell-titlebar="true"><button type="button" id="sidebar-toggle-btn" aria-label="Toggle sidebar">☰</button><span>CodexHost Workbench</span></header><div class="workbench-body" data-app-shell-active-page="true"><aside data-app-shell-sidebar="true" role="navigation"><div id="sidebar-rows"></div></aside><main class="MainContentSurface" data-app-shell-main-surface="default"><div class="conversation-canvas"><div class="msg-card">PageSurface Active Session Strip</div></div></main></div></div><script>${bundle}</script></body></html>`;
 
-const PET_HTML = `<!doctype html><html data-theme="light"><head><meta charset="utf-8" /></head><body style="margin:0;padding:20px;background:#f3f1ed;display:flex;justify-content:center;"><div id="pet-root"><div role="log" style="width:260px;height:64px;margin-bottom:10px;padding:10px 12px;border-radius:12px;">Streaming checks...</div><div data-avatar-overlay-size="notification-tray" style="height:92px;width:344px;"><div data-avatar-overlay-size="notification-tray-list" style="height:92px;max-height:208px;"><form data-avatar-overlay-native-surface-id="composer" data-avatar-overlay-hit-region="notification-composer" style="margin-bottom:8px;"><input type="text" placeholder="Dispatch task to agent..." style="width:100%;height:34px;border-radius:10px;" /></form><div data-avatar-overlay-size="notification-stack-visible-layout" style="height:92px;"><div data-avatar-overlay-size="notification-stack-backing-layout" style="height:92px;"></div></div></div></div></div><script>${bundle}</script></body></html>`;
+const PET_HTML = `<!doctype html><html data-theme="light"><head><meta charset="utf-8" /></head><body style="margin:0;padding:20px;background:#f3f1ed;color:#141413;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;display:flex;justify-content:center;"><div id="pet-root"><div role="log" style="width:260px;height:64px;margin-bottom:10px;padding:10px 12px;border-radius:12px;">Streaming checks...</div><div data-avatar-overlay-size="notification-tray" style="height:92px;width:344px;"><div data-avatar-overlay-size="notification-tray-list" style="height:92px;max-height:208px;"><form data-avatar-overlay-native-surface-id="composer" data-avatar-overlay-hit-region="notification-composer" style="margin-bottom:8px;"><input type="text" placeholder="Dispatch task to agent..." style="width:100%;height:34px;border-radius:10px;" /></form><div data-avatar-overlay-size="notification-stack-visible-layout" style="height:92px;"><div data-avatar-overlay-size="notification-stack-backing-layout" style="height:92px;"></div></div></div></div></div><script>${bundle}</script></body></html>`;
 
 type WinHarness = Window & {
   mountTestWorkbench: (s?: unknown) => void;
@@ -106,7 +106,13 @@ test.describe("Stage 2 Frontend UX — PageSurface Session Strip & Pet Closed Lo
     expect(await page.locator("[data-app-shell-titlebar] [data-codexhost-top-tabs]").count()).toBe(
       0,
     );
-    await expect(page.locator(".PageSurface > [data-codexhost-top-tabs]")).toBeVisible();
+    expect(
+      await page.locator('[data-app-shell-frame="true"] > [data-codexhost-top-tabs]').count(),
+    ).toBe(0);
+    expect((await page.locator("[data-app-shell-titlebar]").boundingBox())?.y).toBe(0);
+    await expect(
+      page.locator('main[data-app-shell-main-surface="default"] > [data-codexhost-top-tabs]'),
+    ).toBeVisible();
     await expect(page.locator("[data-codexhost-top-tab-close]")).toHaveCount(0);
     await expect(page.locator("[data-codexhost-top-tabs-more]")).toHaveCount(0);
     await expect(page.locator(".session-slot")).toHaveCount(6);
@@ -139,15 +145,20 @@ test.describe("Stage 2 Frontend UX — PageSurface Session Strip & Pet Closed Lo
     const hoverState = await page.evaluate(() => {
       const slotEls = Array.from(document.querySelectorAll<HTMLElement>(".session-slot"));
       const btn = slotEls[1]?.querySelector<HTMLElement>(".session-pill-btn");
+      const titleEl = btn?.querySelector<HTMLElement>(".session-title");
       const st = btn?.querySelector<HTMLElement>(".s-state-label");
       return {
         offsetsDuring: slotEls.map((el) => el.offsetLeft),
         computedPos: btn ? window.getComputedStyle(btn).position : "",
+        computedBg: btn ? window.getComputedStyle(btn).backgroundColor : "",
+        titleTruncated: titleEl ? titleEl.scrollWidth > titleEl.clientWidth : true,
         hostBadgeText: btn?.querySelector<HTMLElement>(".s-host-badge")?.textContent ?? null,
         stateLabelDisplay: st ? window.getComputedStyle(st).display : "none",
       };
     });
     expect(hoverState.computedPos).toBe("absolute");
+    expect(hoverState.computedBg).toBe("rgb(255, 255, 255)");
+    expect(hoverState.titleTruncated).toBe(false);
     expect(hoverState.hostBadgeText).toBe("MacPro");
     expect(hoverState.stateLabelDisplay).not.toBe("none");
     expect(hoverState.offsetsDuring).toEqual(offsetsBefore);
@@ -226,12 +237,27 @@ test.describe("Stage 2 Frontend UX — PageSurface Session Strip & Pet Closed Lo
     const agentPill = page.locator("[data-codexhost-pets-agent-pill]");
     await agentPill.click();
     await expect(page.locator("[data-codexhost-pets-agent-menu] button")).toHaveCount(4);
+    const petMenuLayout = await page.evaluate(() => {
+      const pill = document.querySelector<HTMLElement>("[data-codexhost-pets-agent-pill]");
+      const menu = document.querySelector<HTMLElement>("[data-codexhost-pets-agent-menu]");
+      const firstCard = document.querySelector<HTMLElement>("[data-codexhost-pets-remote-item]");
+      const mRect = menu?.getBoundingClientRect();
+      const cRect = firstCard?.getBoundingClientRect();
+      return {
+        pillColor: pill ? window.getComputedStyle(pill).color : "",
+        menuBottom: mRect?.bottom ?? 0,
+        firstCardTop: cRect?.top ?? 0,
+      };
+    });
+    expect(petMenuLayout.pillColor).toBe("rgb(243, 244, 246)");
+    expect(petMenuLayout.menuBottom).toBeLessThanOrEqual(petMenuLayout.firstCardTop);
     await page.screenshot({ path: path.join(shotDir, "pet-window-light.png") });
 
     await page.evaluate(() => {
       document.documentElement.classList.add("dark");
       document.documentElement.setAttribute("data-theme", "dark");
       document.body.style.background = "#111110";
+      document.body.style.color = "#f0eee9";
     });
     await page.screenshot({ path: path.join(shotDir, "pet-window-dark.png") });
 

@@ -344,12 +344,16 @@ describe("Renderer Avatar Overlay (Pet)", () => {
       window: win,
     });
     expect(doc.documentElement.getAttribute(AVATAR_OVERLAY_ROOT_ATTR)).toBe("true");
+    expect(buildAvatarOverlayCss(520)).toContain("color: var(--color-text-primary, #f3f4f6);");
     const pill = composer.querySelector(`[${AVATAR_OVERLAY_AGENT_PILL_ATTR}]`);
     expect(pill?.getAttribute("data-avatar-overlay-hit-region")).toBe("notification-composer");
+    expect(composer.style.position).toBe("relative");
 
     pill?.click();
     const menu = composer.querySelector(`[${AVATAR_OVERLAY_AGENT_MENU_ATTR}]`);
     expect(menu?.parentElement).toBe(composer);
+    expect(menu?.style.bottom).toBe("calc(100% + 6px)");
+    expect(menu?.style.top).toBe("auto");
     expect(menu?.getAttribute("data-avatar-overlay-hit-region")).toBe("notification-composer");
     expect(doc.body.children.some((el) => el.hasAttribute(AVATAR_OVERLAY_AGENT_MENU_ATTR))).toBe(
       false,

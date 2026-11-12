@@ -5,6 +5,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { createLocalPageOpener } from "@codexhost/desktop-control";
 import { UPDATE_RUNTIME_ENV } from "@codexhost/update-manager";
 
 import { AppServerHost, officialEnvironment } from "./app-server-host.js";
@@ -36,6 +37,8 @@ import {
   startExternalClientServer,
   type ExternalClientServer,
 } from "./external-client-server.js";
+import { createLauncherUrlOpener } from "./launcher-url-opener.js";
+import { LocalPreviewManager } from "./local-preview.js";
 import { installDelegationSkills } from "./delegation-skill.js";
 import type { DelegationControlRegistration } from "./delegation-types.js";
 import { readRemoteDelegationThread } from "./remote-delegation-read.js";
@@ -194,6 +197,8 @@ export function delegationCliEnvironment(
 export async function prepareDelegationRuntime(input: {
   environment: NodeJS.ProcessEnv;
   hostRuntimePath?: string;
+  /** Only the local Runtime can show pages in Codex Desktop. */
+  preview?: LocalPreviewManager;
   createHost(
     environment: NodeJS.ProcessEnv,
     onDelegationApi: (api: DelegationControlRegistration) => (() => void) | undefined,
@@ -227,6 +232,7 @@ export async function prepareDelegationRuntime(input: {
     api: registry,
     watchApi: registry,
     inventory,
+    ...(input.preview ? { preview: input.preview } : {}),
   });
   const externalServer = await startExternalClients(
     input.environment,
@@ -268,6 +274,7 @@ export async function prepareDelegationRuntime(input: {
   } finally {
     registry.close();
     await externalServer?.close();
+    await input.preview?.closeAll();
     await server.close();
   }
 }
@@ -407,9 +414,17 @@ export async function runHostRuntime(input: {
       ...(hostRuntimePath ? { hostRuntimePath } : {}),
     });
     const environment = remoteControlPlan?.environment ?? input.environment;
+    const pageOpener = createLocalPageOpener(environment);
+    const browserOpener = createLauncherUrlOpener(environment);
+    const preview = new LocalPreviewManager({
+      ...(pageOpener ? { page: pageOpener } : {}),
+      ...(browserOpener ? { browser: browserOpener } : {}),
+    });
+    const onThreadArchived = (threadId: string) => void preview.closeThread(threadId);
     return prepareDelegationRuntime({
       environment,
       ...(hostRuntimePath ? { hostRuntimePath } : {}),
+      preview,
       createHost: async (delegationEnvironment, onDelegationApi, registry) => {
         const official = await prepareLocalCodex({
           stockCodexPath,
@@ -443,6 +458,7 @@ export async function runHostRuntime(input: {
               ...shared,
               ...installedHarnessPluginOptions(delegationEnvironment, false, input.hostRuntimeUrl),
               onDelegationApi,
+              onThreadArchived,
               ...(updateCoordinator ? { updateCoordinator } : {}),
               ...(consoleOpener ? { consoleOpener } : {}),
               ...(webOpener ? { webOpener } : {}),
@@ -479,6 +495,7 @@ export async function runHostRuntime(input: {
             arguments: input.arguments,
             // Every Remote Control client shares this backend and Mapping Store.
             onDelegationApi: (api) => registry.register(api, { harnessCatalog: true }),
+            onThreadArchived,
           });
           listener = createRemoteAppServerWebSocketListener({
             socketPath: remoteControlPlan.pipePath,
@@ -494,6 +511,7 @@ export async function runHostRuntime(input: {
                 desktopOutput,
                 diagnosticOutput,
                 onDelegationApi: (api) => registry.register(api),
+                onThreadArchived,
               }),
           });
           await listener.listen();

@@ -423,6 +423,8 @@ export interface AppServerHostOptions {
   consoleOpener?: HostConsoleOpener;
   webOpener?: HostWebOpener;
   onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
+  /** Desktop asked to archive a Thread; resources tied to it (such as previews) can be released. */
+  onThreadArchived?: (threadId: string) => void;
   /** Shared by all Hosts of one runtime; defaults to the bundled snapshot only. */
   modelPrices?: ModelPriceCatalog;
   /** Machine-wide usage statistics; one per runtime, read from the loaded Harness plugins. */
@@ -1871,6 +1873,10 @@ export class AppServerHost {
     ) {
       this.#dispatchDesktopReply(request, () => this.#handleThreadPins(request));
       return;
+    }
+    if (request.method === "thread/archive") {
+      const threadId = routingParams(request).threadId;
+      if (typeof threadId === "string") this.#options.onThreadArchived?.(threadId);
     }
     if (await this.#threadRouting.handle(request, frame, origin)) return;
     await this.#forwardOfficialRequest(

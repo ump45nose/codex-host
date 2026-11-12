@@ -596,6 +596,7 @@ describe("npm package release", () => {
     expect(source).toContain('userArguments[0] === "thread"');
     expect(source).toContain('userArguments[0] === "client"');
     expect(source).toContain('userArguments[0] === "events"');
+    expect(source).toContain('userArguments[0] === "preview"');
     expect(source).toContain('userArguments[0] === "console"');
     expect(source).toContain('[consoleServer, userArguments[0] === "update" ? "update" : "open"]');
     expect(source).toContain('"--codexhost-delegation-cli"');
@@ -656,6 +657,7 @@ describe("npm package release", () => {
     ["host", "help"],
     ["project", "list", "--query", "bat"],
     ["thread", "file", "thread-id", "--path", "outputs/result.png"],
+    ["preview", "list"],
   ])("routes discovery, file reads and help through the npm CLI: %j", async (...args) => {
     const { result, calls } = await runGeneratedWrapperLifecycle("darwin", args, [0]);
     expect(result.status, result.stderr).toBe(0);

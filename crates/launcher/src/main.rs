@@ -1564,7 +1564,7 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
         Some("proxy-environment") => Err("proxy-environment accepts no arguments".into()),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
         Some("project") | Some("harness") | Some("delegate") | Some("thread") | Some("client")
-        | Some("events") => run_delegation_cli(arguments),
+        | Some("events") | Some("preview") => run_delegation_cli(arguments),
         _ => {
             usage();
             Err("invalid launcher arguments".into())

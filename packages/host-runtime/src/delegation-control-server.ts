@@ -22,6 +22,7 @@ import { validateThreadExportInput, type ThreadExportInput } from "./delegation-
 import { readThreadResultFile } from "./thread-result-file.js";
 import { validateReadOptions } from "./delegation-snapshot.js";
 import { startWithDelegationWorktree } from "./delegation-worktree.js";
+import type { LocalPreviewManager } from "./local-preview.js";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 
@@ -88,6 +89,15 @@ function watchApi(api: DelegationWatchApi | undefined): DelegationWatchApi {
   if (!api)
     throw new DelegationControlError("INVALID_ARGUMENT", "This Runtime does not support watches");
   return api;
+}
+
+function preview(manager: LocalPreviewManager | undefined): LocalPreviewManager {
+  if (!manager)
+    throw new DelegationControlError(
+      "UNSUPPORTED",
+      "Preview needs the local Codex Desktop; this Host cannot open pages",
+    );
+  return manager;
 }
 
 /** The Turn already started, so a watch failure is reported beside it, not thrown. */
@@ -221,6 +231,8 @@ export async function startDelegationControlServer(input: {
   api: DelegationControlApi;
   watchApi?: DelegationWatchApi;
   inventory?: HostInventory;
+  /** Absent on a Host without a local Desktop; preview routes then report UNSUPPORTED. */
+  preview?: LocalPreviewManager;
 }): Promise<DelegationControlServer> {
   const server = createServer((request, response) => {
     void (async () => {
@@ -237,6 +249,26 @@ export async function startDelegationControlServer(input: {
         return;
       }
       const body = await jsonBody(request);
+      switch (request.url) {
+        case "/v1/preview/open":
+          writeJson(
+            response,
+            200,
+            await preview(input.preview).open(
+              body as { path: string; cwd: string; threadId?: string },
+            ),
+          );
+          return;
+        case "/v1/preview/list":
+          writeJson(response, 200, preview(input.preview).list());
+          return;
+        case "/v1/preview/show":
+          writeJson(response, 200, await preview(input.preview).show(String(body.previewId)));
+          return;
+        case "/v1/preview/close":
+          writeJson(response, 200, await preview(input.preview).close(String(body.previewId)));
+          return;
+      }
       writeJson(response, 200, await routeDelegationRequest(input, request.url, body));
     })().catch((error) => {
       writeJson(response, error instanceof DelegationControlError ? 400 : 500, errorBody(error));

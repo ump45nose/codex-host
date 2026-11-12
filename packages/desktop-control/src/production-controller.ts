@@ -348,12 +348,13 @@ export async function runDesktopController(
           ),
         );
       },
-      openLocalPage: (url) =>
+      openLocalPage: (url, conversationId) =>
         openRendererLocalPage(
           (expression) =>
             useSession(async () => (await recoverSession()).executeRenderer(expression)),
           url,
           () => listCdpTargets(options.rendererCdpEndpoint),
+          conversationId,
         ),
       attach: () =>
         useSession(async () => {

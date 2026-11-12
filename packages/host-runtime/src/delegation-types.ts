@@ -48,6 +48,7 @@ export interface DelegationThreadSnapshot {
   hostId?: string;
   threadId: string;
   harnessId: RoutedHarnessId;
+  cwd?: string;
   title?: string;
   status: DelegationThreadStatus;
   turn: { turnId: string; status: DelegationThreadStatus } | null;

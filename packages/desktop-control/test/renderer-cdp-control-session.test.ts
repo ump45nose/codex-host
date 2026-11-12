@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createRendererCdpControlSession,
+  isAvatarOverlayRendererUrl,
+  selectAvatarOverlayRendererTargets,
   selectPrimaryRendererTarget,
 } from "../src/renderer-cdp-control-session.js";
 import { CdpConnectionClosedError, type CdpTarget } from "../src/cdp-client.js";
@@ -326,5 +328,83 @@ describe("Renderer CDP Control Session", () => {
     expect(first.close).not.toHaveBeenCalled();
     expect(replacement.close).toHaveBeenCalledOnce();
     session.close();
+  });
+
+  it("identifies real and legacy avatar-overlay renderer URLs and manages runtime overlay targets", async () => {
+    for (const u of [
+      "app://-/index.html?initialRoute=%2Favatar-overlay",
+      "app://-/index.html?initialRoute=/avatar-overlay",
+      "app://-/index.html?desktopSurface=avatarOverlay",
+      "app://-/avatar-overlay.html",
+      "app://-/avatar-overlay",
+    ]) {
+      expect(isAvatarOverlayRendererUrl(u)).toBe(true);
+    }
+    expect(isAvatarOverlayRendererUrl("app://-/index.html?initialRoute=%2F")).toBe(false);
+    expect(isAvatarOverlayRendererUrl("app://-/index.html")).toBe(false);
+
+    const initialTargets = [
+      target("primary", "app://-/index.html"),
+      target("overlay-real", "app://-/index.html?initialRoute=%2Favatar-overlay"),
+      target("overlay-legacy", "app://-/avatar-overlay.html"),
+    ];
+    expect(selectPrimaryRendererTarget(initialTargets)?.id).toBe("primary");
+    expect(selectAvatarOverlayRendererTargets(initialTargets).map((t) => t.id)).toEqual([
+      "overlay-real",
+      "overlay-legacy",
+    ]);
+
+    const [primary, overlay1, overlay2] = [
+      rendererClient(),
+      rendererClient(false as never),
+      rendererClient(false as never),
+    ];
+    let inventory = [target("page-primary", "app://-/index.html")];
+    const session = await createRendererCdpControlSession({
+      rendererCdpEndpoint: "http://127.0.0.1:43123",
+      rendererSource: "production renderer",
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      operations: {
+        listTargets: vi.fn(async () => inventory),
+        connect: vi.fn(async (wsUrl: string) =>
+          wsUrl.endsWith("/overlay-1")
+            ? overlay1
+            : wsUrl.endsWith("/overlay-2")
+              ? overlay2
+              : primary,
+        ),
+        installDraftPrewarmPolicy: vi.fn(async () => ({
+          state: "ready" as const,
+          reason: "owned-request-bridge" as const,
+        })),
+      },
+    });
+
+    inventory = [
+      target("page-primary", "app://-/index.html"),
+      target("overlay-1", "app://-/index.html?initialRoute=%2Favatar-overlay"),
+    ];
+    await session.ensureInstalled();
+    expect(overlay1.commands).toContainEqual({
+      method: "Page.addScriptToEvaluateOnNewDocument",
+      params: { source: "production renderer" },
+    });
+    expect(overlay1.close).not.toHaveBeenCalled();
+
+    inventory = [
+      target("page-primary", "app://-/index.html"),
+      target("overlay-2", "app://-/index.html?initialRoute=%2Favatar-overlay"),
+    ];
+    await session.ensureInstalled();
+    expect(overlay1.close).toHaveBeenCalledOnce();
+    expect(overlay2.commands).toContainEqual({
+      method: "Runtime.evaluate",
+      params: { expression: "production renderer", awaitPromise: true },
+    });
+
+    session.close();
+    expect(overlay2.close).toHaveBeenCalledOnce();
+    expect(primary.close).toHaveBeenCalledOnce();
   });
 });

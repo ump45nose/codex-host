@@ -15,10 +15,9 @@ import {
   subscribeSidebarStashEnabledPreference,
 } from "../renderer-sidebar-stash.js";
 import {
-  isSidebarOverlayMode,
-  readSidebarOverlayMode,
-  setSidebarOverlayMode,
-  subscribeSidebarOverlayPreference,
+  readSidebarAutoCollapsePreference,
+  setSidebarAutoCollapsePreference,
+  subscribeSidebarAutoCollapsePreference,
 } from "../renderer-sidebar-overlay.js";
 import {
   readTopTabsEnabledPreference,
@@ -123,32 +122,26 @@ export function createAppearanceSettingsPage(
       stashRow.item.append(stashToggle);
       sidebar.card.append(stashRow.item);
 
-      const overlayModeId = preferenceId("sidebar-overlay-mode");
-      const overlayModeRow = createPreferenceItem(document, {
-        title: messages.sidebarOverlayModeTitle,
-        description: messages.sidebarOverlayModeDescription,
-        controlId: overlayModeId,
+      const autoCollapseId = preferenceId("sidebar-auto-collapse");
+      const autoCollapseRow = createPreferenceItem(document, {
+        title: messages.sidebarAutoCollapseTitle,
+        description: messages.sidebarAutoCollapseDescription,
+        controlId: autoCollapseId,
       });
-      const overlayModeSelect = createPreferenceSelect(document, {
-        id: overlayModeId,
-        describedBy: overlayModeRow.description.id,
-        options: [
-          { value: "auto", label: messages.sidebarOverlayModeAuto },
-          { value: "overlay", label: messages.sidebarOverlayModeOverlay },
-          { value: "docked", label: messages.sidebarOverlayModeDocked },
-        ],
+      const autoCollapseToggle = createPreferenceSwitch(
+        document,
+        autoCollapseId,
+        autoCollapseRow.description.id,
+      );
+      autoCollapseToggle.checked = readSidebarAutoCollapsePreference(ownerWindow);
+      autoCollapseToggle.addEventListener("change", () => {
+        setSidebarAutoCollapsePreference(ownerWindow, autoCollapseToggle.checked);
       });
-      overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
-      overlayModeSelect.addEventListener("change", () => {
-        if (isSidebarOverlayMode(overlayModeSelect.value)) {
-          setSidebarOverlayMode(ownerWindow, overlayModeSelect.value);
-        }
+      const disposeOverlayMode = subscribeSidebarAutoCollapsePreference(ownerWindow, () => {
+        autoCollapseToggle.checked = readSidebarAutoCollapsePreference(ownerWindow);
       });
-      const disposeOverlayMode = subscribeSidebarOverlayPreference(ownerWindow, () => {
-        overlayModeSelect.value = readSidebarOverlayMode(ownerWindow);
-      });
-      overlayModeRow.item.append(overlayModeSelect);
-      sidebar.card.append(overlayModeRow.item);
+      autoCollapseRow.item.append(autoCollapseToggle);
+      sidebar.card.append(autoCollapseRow.item);
 
       const topTabsId = preferenceId("top-tabs-enabled");
       const topTabsRow = createPreferenceItem(document, {

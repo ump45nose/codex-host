@@ -42,7 +42,8 @@ Object.defineProperty(window, "__codexhostInstallRpcSteeringV1", {
 
 const install = (): void => {
   if (isAvatarOverlayLocation(window.location)) {
-    installRendererAvatarOverlay({ document, window });
+    (window as unknown as { __codexhostAvatarOverlayV1?: unknown }).__codexhostAvatarOverlayV1 =
+      installRendererAvatarOverlay({ document, window });
     return;
   }
   installRendererBinding();

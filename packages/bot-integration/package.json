@@ -1,0 +1,12 @@
+{
+  "name": "@codexhost/bot-integration",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "codexhost-bot": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0 <23 || >=24 <25"
+  }
+}

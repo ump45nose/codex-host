@@ -16,9 +16,9 @@ import {
   type ThreadWatchInput,
 } from "./delegation-types.js";
 import { matchesBearerToken } from "./bearer-token.js";
+import type { LocalPreviewManager } from "./local-preview.js";
 import type { HostInventory } from "./host-inventory.js";
 import { readThreadResultFile } from "./thread-result-file.js";
-import type { LocalPreviewManager } from "./local-preview.js";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 
@@ -205,8 +205,10 @@ export async function startDelegationControlServer(input: {
         case "/v1/preview/close":
           writeJson(response, 200, await preview(input.preview).close(String(body.previewId)));
           return;
+        default:
+          // Preview stays on the Host control server; external clients share only the delegation routes.
+          writeJson(response, 200, await routeDelegationRequest(input, request.url, body));
       }
-      writeJson(response, 200, await routeDelegationRequest(input, request.url, body));
     })().catch((error) => {
       writeJson(response, error instanceof DelegationControlError ? 400 : 500, errorBody(error));
     });

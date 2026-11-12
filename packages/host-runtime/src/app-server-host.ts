@@ -56,6 +56,11 @@ import { isModelPriceOverridesMethod } from "./model-price-overrides-file.js";
 import { HARNESS_DISPLAY_CHANGED_METHOD } from "@codexhost/shared-contracts";
 import { HarnessUserInstructionsStore } from "./harness-user-instructions.js";
 import {
+  isSidebarStashLegacyFileMethod,
+  parseSidebarStashLegacyFileParams,
+  readSidebarStashLegacyFile,
+} from "./sidebar-stash-legacy-file.js";
+import {
   HARNESS_USER_INSTRUCTIONS_SETTINGS_GET_METHOD,
   HARNESS_USER_INSTRUCTIONS_SETTINGS_SET_METHOD,
   harnessUserInstructionsGetSchema,
@@ -1782,6 +1787,16 @@ export class AppServerHost {
         await this.#writer.json(
           rpcError(request, -32000, "Could not save or read Harness user instructions settings"),
         );
+      }
+      return;
+    }
+    if (isSidebarStashLegacyFileMethod(request.method)) {
+      try {
+        parseSidebarStashLegacyFileParams(request.params);
+        const result = await readSidebarStashLegacyFile();
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       }
       return;
     }

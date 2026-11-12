@@ -118,19 +118,19 @@ export function createAppearanceSettingsPage(
         messages,
         getLoadedSessionsClient,
       );
+      const disposeDelegationCapacity = mountDelegationCapacityControls(context, messages);
       const disposeUserInstructions = mountUserInstructionsControls(
         context,
         messages,
         getLoadedSessionsClient,
       );
-      const disposeDelegationCapacity = mountDelegationCapacityControls(context, messages);
       return () => {
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeArchiveChildren();
         disposeStashPref();
         disposeIdleRelease();
-        disposeUserInstructions();
         disposeDelegationCapacity();
+        disposeUserInstructions();
       };
     },
   });

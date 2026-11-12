@@ -65,7 +65,7 @@ import {
 import { createProductionExternalThreadStore } from "./external-thread-repository.js";
 import { startClientChannelServer } from "./client-channel-server.js";
 import {
-  acquireSharedExternalThreadRuntime,
+  createSharedExternalThreadRuntime,
   type SharedExternalThreadRuntime,
 } from "./shared-thread-coordinator.js";
 import {
@@ -418,6 +418,8 @@ export async function runHostRuntime(input: {
   const { stockCodexPath } = requiredRuntimeConfiguration(input.environment);
   const { packaged: hostRuntimePath, maintenance: maintenanceRuntimePath } =
     resolveHostRuntimePaths(input);
+  const sharedExternalBridge = (environment: NodeJS.ProcessEnv) =>
+    createRemoteSharedExternalBridge(maintenanceRuntimePath, environment, stockCodexPath);
   if (
     maintenanceRuntimePath &&
     input.environment.CODEXHOST_LAUNCHER_EXECUTABLE &&
@@ -506,55 +508,50 @@ export async function runHostRuntime(input: {
         if (!remoteControlPlan) {
           let sharedRuntime: SharedExternalThreadRuntime | undefined;
           try {
-            if (process.platform !== "win32") {
-              sharedRuntime = await acquireSharedExternalThreadRuntime({
-                environment: delegationEnvironment,
-                ownerRole: "local Host Runtime",
-                diagnosticOutput: process.stderr,
-                registerCatalogDelegation: (api) =>
-                  registry.register(api, { harnessCatalog: true }),
-                createExternalHost: ({
-                  mappingStore: externalMappingStore,
+            sharedRuntime = await createSharedExternalThreadRuntime({
+              environment: delegationEnvironment,
+              ownerRole: "local Host Runtime",
+              createBridge: () => sharedExternalBridge(delegationEnvironment),
+              registerCatalogDelegation: (api) => registry.register(api, { harnessCatalog: true }),
+              createExternalHost: ({
+                mappingStore: externalMappingStore,
+                desktopInput,
+                desktopOutput,
+                onDelegationApi: onExternalDelegationApi,
+                sharedThreads,
+              }) =>
+                new AppServerHost({
+                  ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
+                  modelPrices,
+                  usageStatistics,
+                  stockCodexPath,
+                  arguments: [],
+                  environment: delegationEnvironment,
                   desktopInput,
                   desktopOutput,
+                  diagnosticOutput: process.stderr,
+                  externalOnly: true,
+                  sharedThreads,
+                  ...installedHarnessPluginOptions(
+                    delegationEnvironment,
+                    false,
+                    input.hostRuntimeUrl,
+                  ),
+                  mappingStore: externalMappingStore,
+                  closeMappingStoreOnExit: false,
+                  ...shared,
                   onDelegationApi: onExternalDelegationApi,
-                }) =>
-                  new AppServerHost({
-                    ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
-                    modelPrices,
-                    usageStatistics,
-                    stockCodexPath,
-                    arguments: [],
-                    environment: delegationEnvironment,
-                    desktopInput,
-                    desktopOutput,
-                    diagnosticOutput: process.stderr,
-                    externalOnly: true,
-                    ...installedHarnessPluginOptions(
-                      delegationEnvironment,
-                      false,
-                      input.hostRuntimeUrl,
-                    ),
-                    mappingStore: externalMappingStore,
-                    closeMappingStoreOnExit: false,
-                    ...shared,
-                    onDelegationApi: onExternalDelegationApi,
-                    onThreadArchived,
-                  }),
-              });
-            }
+                  onThreadArchived,
+                }),
+            });
             const host = new AppServerHost({
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
               modelPrices,
               usageStatistics,
-              ...(sharedRuntime
-                ? {
-                    sharedDelegation: () => sharedRuntime?.sharedDelegation,
-                    sharedThreads: sharedRuntime.createBridge(process.stderr),
-                    mappingStore: sharedRuntime.mappingStore,
-                    closeMappingStoreOnExit: false,
-                  }
-                : {}),
+              sharedDelegation: () => sharedRuntime?.sharedDelegation,
+              sharedThreads: sharedRuntime.createBridge(),
+              mappingStore: sharedRuntime.mappingStore,
+              closeMappingStoreOnExit: false,
               stockCodexPath,
               arguments: input.arguments,
               environment: delegationEnvironment,
@@ -708,10 +705,10 @@ export async function runHostRuntime(input: {
         await prepareRemoteAppServerSocketDirectory(socketPath);
         // Also covers a loss reported while the directory was being prepared.
         if (supervisorLost) return 0;
-        sharedRuntime = await acquireSharedExternalThreadRuntime({
+        sharedRuntime = await createSharedExternalThreadRuntime({
           environment: delegationEnvironment,
           ownerRole: "remote app-server listener",
-          diagnosticOutput: process.stderr,
+          createBridge: () => sharedExternalBridge(delegationEnvironment),
           onFatalError: stop,
           registerCatalogDelegation: (api) => registry.register(api, { harnessCatalog: true }),
           createExternalHost: ({
@@ -719,6 +716,7 @@ export async function runHostRuntime(input: {
             desktopInput,
             desktopOutput,
             onDelegationApi: onExternalDelegationApi,
+            sharedThreads,
           }) =>
             new AppServerHost({
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
@@ -731,6 +729,7 @@ export async function runHostRuntime(input: {
               desktopOutput,
               diagnosticOutput: process.stderr,
               externalOnly: true,
+              sharedThreads,
               ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
               mappingStore: externalMappingStore,
               closeMappingStoreOnExit: false,
@@ -749,7 +748,7 @@ export async function runHostRuntime(input: {
               modelPrices,
               usageStatistics,
               sharedDelegation: () => activeSharedRuntime.sharedDelegation,
-              sharedThreads: activeSharedRuntime.createBridge(diagnosticOutput),
+              sharedThreads: activeSharedRuntime.createBridge(),
               stockCodexPath,
               arguments: [],
               environment: delegationEnvironment,

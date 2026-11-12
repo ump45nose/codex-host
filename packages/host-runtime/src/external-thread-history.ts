@@ -9,6 +9,7 @@ type ItemsView = "notLoaded" | "summary" | "full";
 interface Cursor {
   anchor: string;
   includeAnchor: boolean;
+  type?: "item";
 }
 
 interface ItemEntry {
@@ -65,18 +66,23 @@ function serializeCursor(anchor: string, includeAnchor: boolean): string {
 }
 
 function parseCursor(value: JsonValue | undefined): Cursor | null {
-  const text = optionalText(value, "cursor");
-  if (text === null) return null;
+  if (value === undefined || value === null) return null;
   try {
-    const parsed = JSON.parse(text) as Partial<Cursor>;
+    const parsed = typeof value === "string" ? (JSON.parse(value) as JsonValue) : value;
+    const object = isItem(parsed) ? parsed : null;
+    const anchor = object?.type === "item" ? object.itemId : object?.anchor;
     if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof parsed.anchor === "string" &&
-      parsed.anchor.length > 0 &&
-      typeof parsed.includeAnchor === "boolean"
+      object &&
+      (object.type === undefined || object.type === "item") &&
+      typeof anchor === "string" &&
+      anchor.length > 0 &&
+      (object.includeAnchor === undefined || typeof object.includeAnchor === "boolean")
     ) {
-      return { anchor: parsed.anchor, includeAnchor: parsed.includeAnchor };
+      return {
+        anchor,
+        includeAnchor: object.includeAnchor === true,
+        ...(object.type === "item" ? { type: "item" } : {}),
+      };
     }
   } catch {
     // Normalized below.
@@ -122,7 +128,12 @@ function* turnEntries(
   let start = step === 1 ? 0 : turns.length - 1;
   if (cursor) {
     const matches = (turn: JsonObject) => id(turn, "Turn") === cursor.anchor;
-    const anchorIndex = step === 1 ? turns.findIndex(matches) : turns.findLastIndex(matches);
+    const anchorIndex =
+      cursor.type === "item"
+        ? itemAnchor(turns, cursor, direction).turnIndex
+        : step === 1
+          ? turns.findIndex(matches)
+          : turns.findLastIndex(matches);
     if (anchorIndex < 0) {
       throw new ExternalHistoryRequestError("cursor anchor is no longer present");
     }
@@ -177,6 +188,21 @@ function itemAnchor(
   cursor: Cursor,
   direction: SortDirection,
 ): { turnIndex: number; itemIndex: number } {
+  if (cursor.type === "item") {
+    const step = direction === "asc" ? 1 : -1;
+    for (
+      let turnIndex = step === 1 ? 0 : turns.length - 1;
+      turnIndex >= 0 && turnIndex < turns.length;
+      turnIndex += step
+    ) {
+      const items = turns[turnIndex]?.items;
+      if (!Array.isArray(items)) continue;
+      const matches = (item: JsonValue) => isItem(item) && id(item, "Item") === cursor.anchor;
+      const itemIndex = step === 1 ? items.findIndex(matches) : items.findLastIndex(matches);
+      if (itemIndex >= 0) return { turnIndex, itemIndex };
+    }
+    throw new ExternalHistoryRequestError("cursor anchor is no longer present");
+  }
   let anchor: unknown;
   try {
     anchor = JSON.parse(cursor.anchor);

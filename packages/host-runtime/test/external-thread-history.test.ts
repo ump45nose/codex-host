@@ -130,6 +130,93 @@ describe("External Thread history pagination", () => {
     ]);
   });
 
+  it.each(["asc", "desc"] as const)(
+    "accepts object anchor cursors and defaults to excluding the anchor in %s order",
+    (sortDirection) => {
+      const turns = [turn(1), turn(2), turn(3)];
+      expect(
+        ids(listExternalTurns(turns, { sortDirection, cursor: { anchor: "turn-2" } }).data),
+      ).toEqual(sortDirection === "asc" ? ["turn-3"] : ["turn-1"]);
+      const cursor = { anchor: JSON.stringify(["turn-2", "tool-2"]), includeAnchor: true };
+      expect(listExternalItems(turns, { sortDirection, cursor })).toEqual(
+        listExternalItems(turns, { sortDirection, cursor: JSON.stringify(cursor) }),
+      );
+    },
+  );
+
+  it.each(["asc", "desc"] as const)(
+    "locates Desktop Item cursors in %s order before filtering by Turn",
+    (sortDirection) => {
+      const turns = [turn(1), turn(2), turn(3)];
+      for (const includeAnchor of [undefined, false, true]) {
+        const cursor = {
+          type: "item",
+          itemId: "tool-2",
+          ...(includeAnchor === undefined ? {} : { includeAnchor }),
+        };
+        const expected = sortDirection === "asc" ? ["agent-2"] : ["user-2"];
+        if (includeAnchor) expected.unshift("tool-2");
+        expect(
+          listExternalItems(turns, { sortDirection, turnId: "turn-2", cursor }).data.map(
+            (entry) => (entry.item as JsonObject).id,
+          ),
+        ).toEqual(expected);
+        expect(ids(listExternalTurns(turns, { sortDirection, cursor }).data)).toEqual(
+          sortDirection === "asc"
+            ? includeAnchor
+              ? ["turn-2", "turn-3"]
+              : ["turn-3"]
+            : includeAnchor
+              ? ["turn-2", "turn-1"]
+              : ["turn-1"],
+        );
+      }
+      expect(
+        listExternalItems(turns, {
+          sortDirection,
+          turnId: sortDirection === "asc" ? "turn-1" : "turn-3",
+          cursor: { type: "item", itemId: "tool-2" },
+        }).data,
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["asc", "desc"] as const)(
+    "resolves repeated Item IDs from the %s end of history",
+    (sortDirection) => {
+      const turns = [
+        { id: "first", items: [{ id: "repeated" }, { id: "after" }] },
+        { id: "last", items: [{ id: "before" }, { id: "repeated" }] },
+      ];
+      expect(
+        listExternalItems(turns, {
+          sortDirection,
+          limit: 1,
+          cursor: { type: "item", itemId: "repeated", includeAnchor: true },
+        }).data,
+      ).toEqual([{ turnId: sortDirection === "asc" ? "first" : "last", item: { id: "repeated" } }]);
+    },
+  );
+
+  it.each([
+    { type: "item", itemId: "" },
+    { type: "item", itemId: 1 },
+    { type: "turn", itemId: "tool-1" },
+    { anchor: "turn-1", includeAnchor: "true" },
+    [],
+    1,
+  ])("rejects malformed object cursor %j", (cursor) => {
+    expect(() => listExternalTurns([turn(1)], { cursor })).toThrow(ExternalHistoryRequestError);
+    expect(() => listExternalItems([turn(1)], { cursor })).toThrow(ExternalHistoryRequestError);
+  });
+
+  it("rejects a stale Desktop Item cursor before applying a Turn filter", () => {
+    const cursor = { type: "item", itemId: "removed" };
+    expect(() => listExternalItems([turn(1)], { cursor, turnId: "absent" })).toThrow(
+      "cursor anchor is no longer present",
+    );
+  });
+
   it("caps page sizes at the official limit", () => {
     const turns = Array.from({ length: 120 }, (_, index) => turn(index + 1));
     expect(listExternalTurns(turns, { limit: 500 }).data).toHaveLength(100);

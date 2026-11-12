@@ -10,6 +10,7 @@ import type { JsonObject } from "@codexhost/protocol-core";
  */
 const EMPTY_RESULTS: ReadonlyMap<string, () => JsonObject> = new Map([
   ["thread/attachment/list", () => ({ data: [], nextCursor: null })],
+  ["thread/goal/get", () => ({ goal: null })],
   ["thread/settings/update", () => ({})],
 ]);
 

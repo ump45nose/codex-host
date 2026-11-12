@@ -100,5 +100,14 @@ export const packageMetadata = {
   name: "@codexhost/desktop-control",
   contractVersion: WORKSPACE_CONTRACT_VERSION,
 } as const;
+export {
+  DEFAULT_MACOS_CODEX_BUNDLE_ID,
+  DEFAULT_MACOS_PROJECT_PERSONAL_REPOS_SUBPATH,
+  syncMacOsOpenPanelDefaultDirectory,
+} from "./macos-open-panel-default-dir.js";
+export type {
+  RendererEvaluator,
+  SyncMacOsOpenPanelDefaultDirectoryOptions,
+} from "./macos-open-panel-default-dir.js";
 export { requestDesktopRemoteConnections } from "./remote-connections-control.js";
 export { requestRemoteSession } from "./remote-session-client.js";

@@ -4,6 +4,12 @@ export const STYLES = `
 [data-codexhost-sidebar-stash-root] {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
+  align-self: stretch;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: 2px;
   padding: 4px 8px 8px;
   margin: 0;

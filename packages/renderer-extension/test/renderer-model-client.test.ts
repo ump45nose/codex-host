@@ -452,6 +452,7 @@ describe("Renderer fixed Model request client", () => {
       "patchHarnessPreferences",
       "readDelegationThread",
       "readNativeThreadForkSource",
+      "readSidebarStashLegacyFile",
       "readUpdateStatus",
       "refreshCodexAccounts",
       "runtimeStatus",

@@ -1537,7 +1537,7 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
         Some("host") => host_service::run(&arguments[1..]),
         Some("web-service") => web_service::run(&arguments[1..]),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
-        Some("project") | Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events") => {
+        Some("project") | Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events") | Some("preview") => {
             run_delegation_cli(arguments)
         }
         _ => {

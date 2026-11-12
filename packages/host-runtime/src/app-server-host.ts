@@ -2027,7 +2027,7 @@ export class AppServerHost {
       return;
     }
     if (request.method === "thread/archive") {
-      const threadId = routingParams(request).threadId;
+      const threadId = isRecord(request.params) ? request.params.threadId : undefined;
       if (typeof threadId === "string") this.#options.onThreadArchived?.(threadId);
     }
     if (request.method === "thread/turns/list" || request.method === "thread/items/list") {

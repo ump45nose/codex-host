@@ -90,6 +90,44 @@ export function chooseNewer(left: StashState, right: StashState): StashState {
   return stateTime(right) > stateTime(left) ? right : left;
 }
 
+/** Prefer item-level updatedAt when present; otherwise stashedAt. */
+export function itemTime(item: Pick<StashItem, "stashedAt"> & { updatedAt?: unknown }): number {
+  if (typeof (item as { updatedAt?: unknown }).updatedAt === "string") {
+    const parsed = Date.parse((item as { updatedAt: string }).updatedAt);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const stashed = Date.parse(item.stashedAt);
+  return Number.isFinite(stashed) ? stashed : 0;
+}
+
+/**
+ * Union of two stash states. Per threadId the newer entry wins (by item updatedAt /
+ * stashedAt); never drop an entry that exists only on one side. Top-level updatedAt
+ * becomes the max of both sides.
+ */
+export function mergeStatesPerEntry(left: StashState, right: StashState): StashState {
+  const items: Record<string, StashItem> = Object.create(null) as Record<string, StashItem>;
+  const ids = new Set([...Object.keys(left.items), ...Object.keys(right.items)]);
+  for (const id of ids) {
+    const a = left.items[id];
+    const b = right.items[id];
+    if (a && b) {
+      items[id] = itemTime(b) > itemTime(a) ? b : a;
+    } else if (a) {
+      items[id] = a;
+    } else if (b) {
+      items[id] = b;
+    }
+  }
+  const leftTime = stateTime(left);
+  const rightTime = stateTime(right);
+  let updatedAt: string | null = null;
+  if (rightTime > leftTime) updatedAt = right.updatedAt;
+  else if (leftTime > 0) updatedAt = left.updatedAt;
+  else if (rightTime > 0) updatedAt = right.updatedAt;
+  return { version: SCHEMA_VERSION, updatedAt, items };
+}
+
 export function parsePin(raw: unknown): { pin?: StashPinMemory } {
   if (!raw || typeof raw !== "object" || (raw as { wasPinned?: unknown }).wasPinned !== true) {
     return {};

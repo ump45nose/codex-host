@@ -70,6 +70,7 @@ import {
 import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
+import { ThreadActivity } from "./thread-activity.js";
 import { nativeThreadSupportsReferences } from "./native-thread-reference-capability.js";
 import { THREAD_REFERENCE_SOURCE_HOST_PARAM } from "@codexhost/shared-contracts";
 import { HarnessAccountInspectionCache } from "./harness-accounts.js";
@@ -755,6 +756,7 @@ export class AppServerHost {
   readonly #consoleReplies = new Map<string, (message: JsonValue) => void>();
   #nextConsoleRequest = 0;
   #subagentThreadStatuses = new Map<string, "active" | "idle">();
+  readonly #threadActivity = new ThreadActivity();
   #runningSubagentsByParent = new Map<string, Set<string>>();
   #pendingExternalCommandRequests = new Set<string>();
   readonly #externalQueue = new ExternalThreadQueue();
@@ -921,6 +923,7 @@ export class AppServerHost {
         this.#activeOfficialTurns.clear();
         this.#client.resetNativeSession();
         for (const listener of this.#nativeSettingsNotifications) listener(null);
+        this.#threadActivity.clear();
         this.#signalActiveWorkChanged();
         // A retired process can neither answer nor resolve its server requests.
         this.#officialServerRequests.clear();
@@ -1024,6 +1027,7 @@ export class AppServerHost {
       options.runtimeMaintenance ? options.runtimeMaintenance.operation(run) : run();
     this.#delegationApi = sharedDelegationRegistration(
       {
+        subscribeActivity: (listener) => this.#threadActivity.subscribe(listener),
         listHarnesses: () =>
           this.#waitForPlugins().then(() => this.#delegationCoordinator.listHarnesses()),
         inspect: (input) =>
@@ -1988,6 +1992,7 @@ export class AppServerHost {
     value: JsonValue;
   }): Promise<void> {
     for (const listener of this.#nativeSettingsNotifications) listener(input.value);
+    this.#threadActivity.observeOfficial(input.value);
     if (this.#options.externalOnly) {
       this.#client.observeNativeMessage(input.value);
       // Native children created through Delegation still have a native owner
@@ -5904,6 +5909,7 @@ export class AppServerHost {
   async #consumeHarnessOutputs(thread: ExternalThread): Promise<void> {
     try {
       for await (const output of thread.session.outputs) {
+        this.#threadActivity.note(thread.id, thread.record.subagent?.parentHostThreadId);
         await this.#externalRuntime.idleRelease.consumeOutput(thread, () =>
           this.#projectHarnessOutput(thread, output),
         );
@@ -5933,6 +5939,7 @@ export class AppServerHost {
         this.#queuedTurnStarts.delete(thread.id);
         await this.#publishExternalQueue(thread.id);
       }
+      this.#threadActivity.forget(thread.id);
     }
   }
 
@@ -6062,7 +6069,10 @@ export class AppServerHost {
           candidate.nativeSessionRef?.nativeSessionId ===
             thread.record.nativeSessionRef?.nativeSessionId,
       );
-      if (record) await this.#refreshOpenSubagentThread(record.hostThreadId, false);
+      if (record) {
+        this.#threadActivity.note(record.hostThreadId, thread.id);
+        await this.#refreshOpenSubagentThread(record.hostThreadId, false);
+      }
       return;
     }
     if (event.type === "subagent.state.changed") {
@@ -6075,6 +6085,7 @@ export class AppServerHost {
             thread.record.nativeSessionRef?.nativeSessionId,
       );
       if (!record) return;
+      this.#threadActivity.note(record.hostThreadId, thread.id);
       const status = event.status === "pending" || event.status === "running" ? "active" : "idle";
       this.#trackRunningSubagent(thread.id, record.hostThreadId, status);
       await this.#setSubagentThreadStatus(record.hostThreadId, status);
@@ -6129,6 +6140,7 @@ export class AppServerHost {
       subagent.status === "pending" || subagent.status === "running" ? "active" : "idle";
     const record = await this.#repository.materializeSubagent(parent.record, subagent);
     if (!record) return subagent;
+    this.#threadActivity.note(record.hostThreadId, parent.id);
     if (this.#subagentThreadStatuses.has(record.hostThreadId)) {
       this.#trackRunningSubagent(parent.id, record.hostThreadId, status);
       await this.#setSubagentThreadStatus(record.hostThreadId, status);

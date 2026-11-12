@@ -1,5 +1,9 @@
 import "./renderer-schema-config.js";
 import { installRendererBinding } from "./install-renderer-binding.js";
+import {
+  installRendererAvatarOverlay,
+  isAvatarOverlayLocation,
+} from "./renderer-avatar-overlay.js";
 import { installRendererRpcSteering } from "./renderer-rpc-steering.js";
 
 Object.defineProperty(window, "__codexhostInstallRpcSteeringV1", {
@@ -38,6 +42,11 @@ Object.defineProperty(window, "__codexhostInstallRpcSteeringV1", {
 });
 
 const install = (): void => {
+  if (isAvatarOverlayLocation(window.location)) {
+    (window as unknown as { __codexhostAvatarOverlayV1?: unknown }).__codexhostAvatarOverlayV1 =
+      installRendererAvatarOverlay({ document, window });
+    return;
+  }
   installRendererBinding();
 };
 

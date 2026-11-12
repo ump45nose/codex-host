@@ -17,15 +17,28 @@ export {
   CODEXHOST_LATEST_RELEASE_URL,
   compareSemanticVersions,
   expectedInstallerAssetName,
+  expectedNpmReleaseAssetNames,
   fetchLatestGitHubRelease,
+  hasNpmReleaseArtifacts,
   parseLatestGitHubRelease,
   selectInstallerReleaseArtifact,
   type CodexhostLatestRelease,
   type CodexhostReleaseAsset,
   type GitHubReleaseFetchOptions,
   type InstallerReleaseTarget,
+  type ReleaseTarget,
   type SelectedReleaseArtifact,
 } from "./github-release.js";
+export {
+  CODEXHOST_DEFAULT_RELEASE_REPOSITORY,
+  CODEXHOST_RELEASE_CHANNEL,
+  CODEXHOST_UPDATE_REPOSITORY_ENV,
+  CODEXHOST_UPSTREAM_RELEASE_REPOSITORY,
+  isReleaseChannelVersion,
+  releaseRepositoryUrls,
+  resolveReleaseRepository,
+  type ReleaseRepositoryOptions,
+} from "./release-repository.js";
 export {
   fetchLatestGitHubReleaseWithGitHubCli,
   type GitHubCliReleaseFetchOptions,

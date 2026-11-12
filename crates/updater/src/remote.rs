@@ -201,20 +201,44 @@ fn apply_locked(request: &Request) -> Result<(), Box<dyn Error>> {
                     "npm uses a different global installation; update this remote manually".into(),
                 );
             }
-            let package = format!("@codexhost/cli@{}", request.version);
+            let repository = crate::release_channel::release_repository()?;
+            let package =
+                crate::release_channel::npm_package_spec(&repository, &request.version, None);
+            let platform_package = if global_platform {
+                let name = request
+                    .package_root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or("Invalid platform package path")?;
+                let target = [
+                    "cli-darwin-arm64",
+                    "cli-darwin-x64",
+                    "cli-linux-arm64",
+                    "cli-linux-x64",
+                ]
+                .contains(&name)
+                .then(|| crate::release_channel::platform_package_target(name))
+                .flatten()
+                .ok_or("Unknown remote platform package")?;
+                Some(crate::release_channel::npm_package_spec(
+                    &repository,
+                    &request.version,
+                    Some(target),
+                ))
+            } else {
+                None
+            };
             // Unpublished local builds fail here, before touching the installation or service.
-            run(Command::new(&request.node).arg(&request.npm).args([
-                "view",
-                &package,
-                "version",
-                "--fetch-retries=0",
-                "--fetch-timeout=30000",
-            ]))
-            .map_err(|error| {
-                format!(
-                    "The requested release is unavailable or npm cannot reach the registry: {error}"
-                )
-            })?;
+            for spec in std::iter::once(&package).chain(platform_package.as_ref()) {
+                run(Command::new(&request.node)
+                    .arg(&request.npm)
+                    .args(crate::release_channel::npm_availability_args(spec)))
+                .map_err(|error| {
+                    format!(
+                        "The requested release is unavailable or npm cannot reach the registry: {error}"
+                    )
+                })?;
+            }
             status(request, "installing", None)?;
             let mut command = Command::new(&request.node);
             command.arg(&request.npm).args([
@@ -224,23 +248,8 @@ fn apply_locked(request: &Request) -> Result<(), Box<dyn Error>> {
                 "--no-fund",
                 &package,
             ]);
-            if global_platform {
-                let name = request
-                    .package_root
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or("Invalid platform package path")?;
-                if ![
-                    "cli-darwin-arm64",
-                    "cli-darwin-x64",
-                    "cli-linux-arm64",
-                    "cli-linux-x64",
-                ]
-                .contains(&name)
-                {
-                    return Err("Unknown remote platform package".into());
-                }
-                command.arg(format!("@codexhost/{name}@{}", request.version));
+            if let Some(platform_package) = &platform_package {
+                command.arg(platform_package);
             }
             run(&mut command).map_err(|error| format!("npm installation failed; check remote network access and write permissions: {error}"))?;
         }
@@ -330,6 +339,23 @@ mod tests {
                 .lock_directory
                 .join("active-update-v1.lock")
                 .exists()
+        );
+    }
+    #[test]
+    fn channel_release_is_checked_and_installed_from_release_tarballs() {
+        let mut f = fixture(false);
+        f.request.version = "0.11.0-vincent.1".into();
+        // The fixture npm installs nothing, so the version check after npm fails; what
+        // matters is that the registry `npm view` (which cannot resolve tarball URLs) is
+        // replaced by `npm pack --dry-run` probes for the meta and platform packages.
+        let error = apply_locked(&f.request).unwrap_err().to_string();
+        assert!(
+            error.contains("does not match the requested version"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(f.root.join("calls")).unwrap(),
+            "root\npack\npack\ninstall\n"
         );
     }
     #[test]

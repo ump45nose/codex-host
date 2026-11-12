@@ -24,7 +24,6 @@ use crate::request::{
 #[cfg(target_os = "macos")]
 use crate::status::unix_seconds;
 
-const NPM_PACKAGE_NAME: &str = "@codexhost/cli";
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const DISTRIBUTION_FILE: &str = "codexhost-distribution.json";
 
@@ -109,11 +108,18 @@ fn install_npm(request: &UpdateRequest, npm: &NpmInstallation) -> Result<(), Box
     // Node runtime is not a target.
     #[cfg(target_os = "windows")]
     crate::prepare_install::prepare(&npm.npm_package_root)?;
+    // Upstream versions come from the registry; fork channel builds from the
+    // release repository's GitHub Release tarballs.
+    let repository = crate::release_channel::release_repository()?;
     let mut command = Command::new(&npm.node_path);
     command
         .arg(&npm.npm_cli_path)
         .args(["install", "--global", "--no-audit", "--no-fund"])
-        .arg(format!("{NPM_PACKAGE_NAME}@{}", request.version));
+        .arg(crate::release_channel::npm_package_spec(
+            &repository,
+            &request.version,
+            None,
+        ));
     configure_background_command(&mut command);
     if let Some(log) = operation_log(request, "npm-install.log") {
         command.stdout(log.try_clone()?).stderr(log);

@@ -3,39 +3,42 @@
 # Order matters. Stable release inputs pin reviewed revisions; advance them explicitly.
 # Entries already present in the upstream tag are unnecessary.
 f685f44caf5c4926994f4460b635e124231e06df # fix/renderer-inspector-script-cache; local: bound V8 inspector script cache (memory leak); no PR yet
-845313538d2a96e4d46157cd47cd78304d89919f # fix/antigravity-recovered-native-error; PR #737
-1a1a8e235c0b8e49d46425115223310cb19604dc # fix/antigravity-thinking-projection; PR #739
-14d3a401caad7f540d3a8b230a1483827df27396 # fix/antigravity-compact; PR #747
-a37f81d8a2eab9e50daf29969267747b7b7fc527 # fix/external-thread-compact-start; PR #759 (Desktop thread/compact/start runs the Harness /compact)
-af93130be4b8e67af68d6a1125c92072977102a0 # fix/antigravity-print-timeout; PR #761 (Fixes #760 antigravity print timeout)
-5d7f4d07bbcbab007b85d9ff064e0375e8f49957 # feat/external-cli-codex-user-instructions; PR #741
-7e0155a4330c4fc23baee0b13abc1562b47f5a1f # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
-161cafc2ed74c5d40edbac906a5e5355127820a0 # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses; also on PR #709
-3479b5de2c7f53aee9642b247a33a354532032ff # feat/renderer-sidebar-thread-nesting; PR #709 tip: pinned-child retain-native (also via archive-thread-children)
-8fdbc215fdba66a9ca857bfeca90ae14ee232db9 # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension; no upstream PR
-ae18c69cca104df005fc9ab322e68a67446252e8 # feat/external-client-access; PR #727 (contains PR #726 persist watches)
-4824876f1e7fde52dcfaa49eba89a70e91a3d511 # feat/remote-client-access; PR 3 (remote access, tailnet, Funnel, webhook, OAuth, console)
-6180969b4aedf30003e728b028b95d97cb8364d9 # codex/nas-mcp-rollout; PR #788 (headless Remote Host MCP; stable backport)
-e8f209a19bee77b60bf841d8a9055fed46d7cc6b # codex/task-result-files; PR #792 (authenticated MCP transfer of final result files)
-22ebe1b22b07dbbb3efe66dfcae86454b745dd6e # codex/multi-device-routing; PR #799 (device environment and project discovery)
-9a8a7282132414132c4cb4ff5c993dbcf03bcb86 # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
-b2415e4c67eeca66a737d94eec5d3cd0c9010b24 # codex/stable-release-fixtures; align catalog and startup test lifecycles
-a1b09b76050d5a7f618e12ba43976a2487b408dc # feat/thread-watch-stall; local
-cfd9380855a1a1cc89b481524a90fc91510a3869 # feat/delegation-capacity; local
-0b5567a0a95605c019402eb2a17d2dd0aa7557e3 # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
+clean/antigravity-recovered-native-error # fix/antigravity-recovered-native-error; PR #737 + f06fe9fd Session closed ordering
+clean/antigravity-thinking-projection # fix/antigravity-thinking-projection; PR #739 + 1a1a8e23 streamed reply ordering
+clean/harness-user-instructions # feat/external-cli-codex-user-instructions; PR #741
+clean/dsh-user-instructions # codex/fix-dsh-user-instructions; sync dsh user instructions to the correct home
+clean/sidebar-archive-thread-children # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
+clean/sidebar-sticky-mirrors # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses
+clean/sidebar-pinned-child # feat/renderer-sidebar-thread-nesting; PR #709 tip: retain and deduplicate pinned child Threads
+clean/sidebar-stash # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension
+clean/remote-client-access # feat/remote-client-access; PR #785 base (remote access, tailnet, Funnel, webhook, OAuth, console)
+clean/headless-delegation-fixture # codex/nas-mcp-rollout; PR #788 regression fixture
+clean/task-result-files # codex/task-result-files; PR #792 (authenticated MCP transfer of final result files)
+clean/multi-device-routing # codex/multi-device-routing; PR #799 (device environment and project discovery)
+clean/nas-bot-integration # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
+clean/thread-watch-stall # feat/thread-watch-stall; PR #784 base
+clean/remote-client-hardening # pr-785: tighten remote client OAuth, Funnel teardown, webhook delivery, and cross-process OAuth locks
+clean/delegation-capacity # feat/delegation-capacity; PR #784 queue top-level delegations beyond a local running limit
+clean/delegation-capacity-hardening # pr-784: release queued claims on rewrite failure, route capacity settings, and serialize record adoption
+clean/local-design-preview # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
 2658648a112c4427d8d405f669f8bdc5642b14fc # feat/claude-desktop-entrypoint; Claude Desktop opt-in entrypoint
-441edcc83be3cf39c61d12da8544815c814693c5 # fix/remote-ssh-share-local-data; PR #584
+clean/remote-install-preserve-data-dir # fix/remote-install-preserve-data-dir; keep recorded shared data directory across SSH repair
+clean/remote-ssh-share-local-data # fix/remote-ssh-share-local-data; PR #584 --share-local-data and SSH repair dataDirectory inheritance
 a4a19b6b484da988da8028f1281b4fc13843a198 # fix/cursor-side-chat-edit; PR #576
-fe1cffb2a1e248bc755633797660043eae3bbf11 # fix/cursor-fast-mode; local: Cursor Fast toggle via catalog fastModel; no PR yet
-04c77850874e29fdba7bf138bc8c41210a0f2d14 # fix/independent-native-provider-quota; PR #470
-3c8c041ca8dd470ce201ae4a019c510c868e9af1 # fix/macos-nested-codex-cli; PR #396
-b38270e8f6da37f15a3ef853257fb21da77d3aae # fix/mapping-store-lock-coordination; PR #766 (Fixes #765 Desktop Host behind a remote listener lock); cherry-picked onto v0.17.3 lines
-36b99c0be36fae1d57e9e00e416f6a78547b0ec9 # fix/host-chain-npm-node; PR #752 (Fixes #749 npm Host chain ready)
-aeb5211aed67920d6568a9d3b1c97ff7a8d404e2 # fix/console-shutdown-on-exit; PR #753 (Fixes #750 stale console on 4399)
-2c626ea4e9f6c6097a3e429f5fda644d23bff290 # feat/harness-subagent-codex-items; PR #768
-3c61c5b4a72c1b1b01e580fbef25049912d404ec # fix/antigravity-resume-mismatch; PR #775 (Fixes #774 agy resume into a lost Conversation); cherry-picked onto v0.17.3 lines
-78ead772516edaa9387c8391d7a9956ae69cbee2 # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
-07250b6fd0b2866e1154a20e81ba500a38b269a2 # feat/vertical-screen-overlay-tabs-pets; local: sidebar overlay drawer, top capsule tabs, and pets remote/expanded view
-03db15009469e2efa64d55252c74b03b1dad771c # codex/remote-desktop-session; PR #790 (Fixes #789 desktop-session execution for remote macOS tasks)
-fb2b9f7545b500e26dc99d8506fed7adb7e05aed # fix/projects-and-shared-remote-threads; PR #791 (share external Thread Runtime, deduplicate projects, and resolve shared parent delegation)
-1770e5655b024adf79e077686430ed5207606103 # codex/remote-external-prewarm; PR #805 (Fixes #804 external RPC drafts consuming official prewarms)
+clean/cursor-fast-selection # codex/upstream-cursor-fast; expose native Fast models and confirm live selections (replaces fe1cffb2)
+clean/independent-native-provider-quota # fix/independent-native-provider-quota; PR #470
+clean/macos-nested-codex-cli # fix/macos-nested-codex-cli; PR #396
+clean/mapping-store-lock-coordination # fix/mapping-store-lock-coordination; PR #766 + 460da47f MappingStore isolation recovery
+clean/host-chain-npm-node # fix/host-chain-npm-node; PR #752 (Fixes #749 npm Host chain ready)
+clean/console-shutdown-on-exit # fix/console-shutdown-on-exit; PR #753 (Fixes #750 stale console on 4399)
+clean/harness-subagent-codex-items # feat/harness-subagent-codex-items; PR #768
+clean/project-picker-default-dir # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
+clean/remote-external-prewarm # codex/remote-external-prewarm; PR #805 (Fixes #804 external RPC drafts consuming official prewarms)
+clean/fork-release-channel # product update channel: ump45nose/codex-host release checks and tarball meta dependencies
+clean/replay-integration # fix/replay-integration; align integrated Host routing and attachment registration
+clean/local-preview-npm-forwarding # feat/local-design-preview; forward preview command in npm wrapper
+clean/project-deduplication # fix/projects-and-shared-remote-threads; deduplicate projects and align settings localization
+clean/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-threads; PR #791 + b2415e4c + f23459f4 + bd7d4ea7 + e337f6c6 shared external Thread Runtime base
+clean/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
+fix/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
+feat/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view

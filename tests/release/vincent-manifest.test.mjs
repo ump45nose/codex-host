@@ -90,3 +90,17 @@ it("reports pinned revisions through the local release status command", () => {
   assert.doesNotMatch(result.stdout, /MISSING/);
   assert.match(result.stdout, /1 commits to merge/);
 });
+
+it("keeps the repository manifest free of stage3 draft prefixes and ca8c7fab ancestors", () => {
+  const entries = readFileSync(path.join(root, "vincent", "branches.txt"), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/#.*/, "").trim())
+    .filter(Boolean);
+  assert.ok(entries.includes("fix/shared-host-single-lock-and-resume"));
+  assert.ok(entries.includes("feat/vertical-screen-ux-overhaul"));
+  for (const entry of entries) {
+    assert.doesNotMatch(entry, /^stage3\//);
+    assert.notEqual(entry, "07250b6fd0b2866e1154a20e81ba500a38b269a2");
+    assert.notEqual(entry, "52501bacfbd009cdd291cd4e5129709f76e92ace");
+  }
+});

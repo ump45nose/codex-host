@@ -102,6 +102,10 @@ export interface RendererSettingsMessages {
   readonly archiveChildrenNever: string;
   readonly sidebarStashTitle: string;
   readonly sidebarStashDescription: string;
+  readonly sidebarAutoCollapseTitle: string;
+  readonly sidebarAutoCollapseDescription: string;
+  readonly topTabsTitle: string;
+  readonly topTabsDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -411,6 +415,12 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sidebarStashTitle: "Stash (收纳箱)",
   sidebarStashDescription:
     "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
+  sidebarAutoCollapseTitle: "Auto-collapse left sidebar on narrow screens",
+  sidebarAutoCollapseDescription:
+    "Collapse the sidebar once when entering < 1080px, keeping the native 57px rail and left-edge drawer; manual expansion stays docked.",
+  topTabsTitle: "Top active session strip",
+  topTabsDescription:
+    "Show only running, waiting, and unread sessions at the top of the page surface; viewed sessions exit smoothly upon leaving.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -762,6 +772,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sidebarStashTitle: "收纳箱",
   sidebarStashDescription:
     "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
+  sidebarAutoCollapseTitle: "窄屏自动收起左边栏",
+  sidebarAutoCollapseDescription:
+    "跨入 < 1080px 时触发一次原生收起，保留 57px 侧轨与左缘抽屉；窄屏下手动展开后保持常驻。",
+  topTabsTitle: "顶部活动会话条",
+  topTabsDescription: "在主内容区顶部仅展示运行中、待确认与未读会话；读完离开平滑退场。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

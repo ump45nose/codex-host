@@ -263,6 +263,9 @@ export {
   isRendererSettingsIconName,
 } from "./settings/icons.js";
 export type { RendererSettingsIconName } from "./settings/icons.js";
+export * from "./renderer-sidebar-overlay.js";
+export * from "./renderer-top-tabs.js";
+export * from "./renderer-avatar-overlay.js";
 
 export const rendererBuildMetadata = {
   name: "@codexhost/renderer-extension",

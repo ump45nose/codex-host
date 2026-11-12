@@ -10,6 +10,7 @@ import {
   catalogModelForRef,
   decodeHarnessPluginRoute,
   harnessIdSchema,
+  hostThreadIdSchema,
   permissionModeFixedAtCreate,
   type HarnessCommandDescriptor,
   type HarnessPluginDescriptor,
@@ -124,6 +125,19 @@ import {
   subscribeSidebarStashEnabledPreference,
   type RendererSidebarStashHandle,
 } from "./renderer-sidebar-stash.js";
+import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
+import {
+  collectSidebarThreads,
+  installRendererTopTabs,
+  isUnreadOrActiveSessionStatus,
+  resolveShortHostLabel,
+} from "./renderer-top-tabs.js";
+import {
+  PETS_OPEN_THREAD_REQUEST_STORAGE_KEY,
+  writePetsHarnessCatalog,
+  writePetsRemoteThreads,
+  type PetsOpenThreadRequest,
+} from "./renderer-avatar-overlay.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -1013,6 +1027,135 @@ export function installRendererBindingProbe(
   const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
     mountSidebarStash();
   });
+  const sidebarOverlay = installRendererSidebarOverlay({
+    document,
+    window,
+    getLocale: () => settingsLifecycle.locale,
+  });
+  const acknowledgedFailedKeys = new Set<string>();
+  const hostLabels = new Map<string, string>();
+  let hostLabelsPending = false;
+  const resolveHostLabel = (hostId: string): string | null => {
+    if (!hostId || hostId === "local") return null;
+    if (!hostLabels.has(hostId) && !hostLabelsPending && !disposed) {
+      hostLabelsPending = true;
+      void remoteConnections.ssh
+        .list()
+        .then((conns) => {
+          hostLabelsPending = false;
+          if (disposed || !Array.isArray(conns)) return;
+          let changed = false;
+          for (const c of conns) {
+            const id = c?.hostId?.trim();
+            const raw = c?.displayName?.trim() || c?.sshAlias?.trim() || c?.sshHost?.trim() || id;
+            const label = id ? resolveShortHostLabel(id, raw) : null;
+            if (id && label && hostLabels.get(id) !== label) {
+              hostLabels.set(id, label);
+              changed = true;
+            }
+          }
+          if (changed) {
+            topTabs.refresh();
+            syncPetsRemoteThreads();
+          }
+        })
+        .catch(() => {
+          hostLabelsPending = false;
+        });
+    }
+    return resolveShortHostLabel(hostId, hostLabels.get(hostId));
+  };
+  const resolveThreadAgent = (hostId: string, threadId: string, fallback?: RendererAgent) => {
+    const agent =
+      localAgentForSidebarThread({ hostId, threadId, draftId: null }) ?? fallback ?? null;
+    if (!agent) return null;
+    if (agent !== "codex" && hostId !== "durable") {
+      const s = hostHarnessAvailabilityState(hostId);
+      const c = modelClientForHost(hostId);
+      if (c && (s.directoryClient !== c || (!s.plugins && !s.directoryError))) {
+        void refreshHarnessAvailabilityForHost(hostId);
+      }
+    }
+    const plugin = pluginForHost(hostId, agent);
+    return { agent, ...(plugin ? { plugin } : {}) };
+  };
+  const syncPetsRemoteThreads = (): void => {
+    try {
+      const snaps = collectSidebarThreads(document, resolveThreadAgent);
+      for (const [k, i] of snaps) {
+        if (i.status === "running" || i.status === "waiting") acknowledgedFailedKeys.delete(k);
+      }
+      const remotes = [...snaps.values()]
+        .filter(
+          (i) =>
+            (i.hostId !== "local" || i.agent !== "codex") &&
+            isUnreadOrActiveSessionStatus(
+              i.status,
+              `${i.hostId}:${i.threadId}`,
+              acknowledgedFailedKeys,
+            ),
+        )
+        .slice(0, 12)
+        .map((i) => {
+          const hostLabel = resolveHostLabel(i.hostId);
+          return { ...i, ...(hostLabel ? { hostLabel } : {}) };
+        });
+      writePetsRemoteThreads(remotes, window.localStorage);
+      const pluginsById = new Map<string, HarnessPluginDescriptor>();
+      for (const [hostId, s] of harnessAvailabilityByHost) {
+        for (const p of s.plugins ?? EMPTY_PLUGINS) {
+          if (!pluginsById.has(p.id) || hostId === "local") {
+            pluginsById.set(p.id, pluginForHost(hostId, p.id) ?? p);
+          }
+        }
+      }
+      writePetsHarnessCatalog(
+        { enabledAgents: [...enabledAgents], plugins: [...pluginsById.values()] },
+        window.localStorage,
+      );
+    } catch {
+      // Ignore storage sync errors
+    }
+  };
+  const topTabs = installRendererTopTabs({
+    document,
+    window,
+    tree: sidebarThreadTree,
+    getLocale: () => settingsLifecycle.locale,
+    getActiveThread: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!isMountedComposer(mounted.composer)) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        const hostId = mounted.hostId ?? activeModelHostId(mounted.composer) ?? "local";
+        if (threadId) return { hostId, threadId };
+      }
+      return null;
+    },
+    getThreadAgent: resolveThreadAgent,
+    getHostLabel: resolveHostLabel,
+    acknowledgedFailedKeys,
+    onChange: syncPetsRemoteThreads,
+  });
+  const onPetsOpenRequestStorage = (event: StorageEvent): void => {
+    if (event.key !== PETS_OPEN_THREAD_REQUEST_STORAGE_KEY || !event.newValue) return;
+    try {
+      const parsed: unknown = JSON.parse(event.newValue);
+      if (typeof parsed !== "object" || parsed === null) return;
+      const { hostId, threadId } = parsed as Partial<PetsOpenThreadRequest>;
+      const validThreadId = hostThreadIdSchema.safeParse(threadId);
+      if (typeof hostId === "string" && hostId.length > 0 && validThreadId.success) {
+        try {
+          window.focus?.();
+        } catch {
+          // Ignore focus errors
+        }
+        void openRendererThread(validThreadId.data, { hostId }).catch(() => undefined);
+      }
+    } catch {
+      // Ignore invalid payloads
+    }
+  };
+  window.addEventListener("storage", onPetsOpenRequestStorage);
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
@@ -1049,6 +1192,7 @@ export function installRendererBindingProbe(
         : hostHarnessAvailabilityState("local").plugins?.find(({ id }) => id === agent);
     return compatibleRendererPluginPresentation(plugin, reference);
   }
+  syncPetsRemoteThreads();
   const codexAccountsForHost = (hostId: string | null): RendererCodexAccountState | null => {
     if (!hostId) return null;
     const client = modelClientForHost(hostId);
@@ -2678,6 +2822,8 @@ export function installRendererBindingProbe(
           controller.setEnabledAgents(enabledAgents);
           sidebarAgentIcons.refresh();
           sidebarThreadTree.refresh();
+          topTabs.refresh();
+          syncPetsRemoteThreads();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -3497,6 +3643,8 @@ export function installRendererBindingProbe(
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3750,6 +3898,8 @@ export function installRendererBindingProbe(
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
+      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -3799,6 +3949,9 @@ export function installRendererBindingProbe(
       disposeSidebarStashPreference();
       sidebarStash?.dispose();
       sidebarStash = null;
+      sidebarOverlay.dispose();
+      topTabs.dispose();
+      window.removeEventListener("storage", onPetsOpenRequestStorage);
       sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();

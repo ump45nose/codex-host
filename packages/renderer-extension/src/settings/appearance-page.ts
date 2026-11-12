@@ -14,6 +14,16 @@ import {
   setSidebarStashEnabledPreference,
   subscribeSidebarStashEnabledPreference,
 } from "../renderer-sidebar-stash.js";
+import {
+  readSidebarAutoCollapsePreference,
+  setSidebarAutoCollapsePreference,
+  subscribeSidebarAutoCollapsePreference,
+} from "../renderer-sidebar-overlay.js";
+import {
+  readTopTabsEnabledPreference,
+  setTopTabsEnabledPreference,
+  subscribeTopTabsPreference,
+} from "../renderer-top-tabs.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
 import { mountDelegationCapacityControls } from "./delegation-capacity-controls.js";
@@ -112,6 +122,44 @@ export function createAppearanceSettingsPage(
       stashRow.item.append(stashToggle);
       sidebar.card.append(stashRow.item);
 
+      const autoCollapseId = preferenceId("sidebar-auto-collapse");
+      const autoCollapseRow = createPreferenceItem(document, {
+        title: messages.sidebarAutoCollapseTitle,
+        description: messages.sidebarAutoCollapseDescription,
+        controlId: autoCollapseId,
+      });
+      const autoCollapseToggle = createPreferenceSwitch(
+        document,
+        autoCollapseId,
+        autoCollapseRow.description.id,
+      );
+      autoCollapseToggle.checked = readSidebarAutoCollapsePreference(ownerWindow);
+      autoCollapseToggle.addEventListener("change", () => {
+        setSidebarAutoCollapsePreference(ownerWindow, autoCollapseToggle.checked);
+      });
+      const disposeOverlayMode = subscribeSidebarAutoCollapsePreference(ownerWindow, () => {
+        autoCollapseToggle.checked = readSidebarAutoCollapsePreference(ownerWindow);
+      });
+      autoCollapseRow.item.append(autoCollapseToggle);
+      sidebar.card.append(autoCollapseRow.item);
+
+      const topTabsId = preferenceId("top-tabs-enabled");
+      const topTabsRow = createPreferenceItem(document, {
+        title: messages.topTabsTitle,
+        description: messages.topTabsDescription,
+        controlId: topTabsId,
+      });
+      const topTabsToggle = createPreferenceSwitch(document, topTabsId, topTabsRow.description.id);
+      topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      topTabsToggle.addEventListener("change", () => {
+        setTopTabsEnabledPreference(ownerWindow, topTabsToggle.checked);
+      });
+      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, () => {
+        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+      });
+      topTabsRow.item.append(topTabsToggle);
+      sidebar.card.append(topTabsRow.item);
+
       context.content.append(heading, description, group, sidebar.group);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
@@ -128,6 +176,8 @@ export function createAppearanceSettingsPage(
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeArchiveChildren();
         disposeStashPref();
+        disposeOverlayMode();
+        disposeTopTabsPref();
         disposeIdleRelease();
         disposeDelegationCapacity();
         disposeUserInstructions();

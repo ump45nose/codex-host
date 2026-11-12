@@ -612,13 +612,14 @@ if (userArguments.length === 0) {
   launchArguments = null;
   brokerArguments = userArguments.slice(1);
 } else if (
+  userArguments[0] === "harness" ||
   userArguments[0] === "host" ||
   userArguments[0] === "project" ||
-  userArguments[0] === "harness" ||
   userArguments[0] === "delegate" ||
   userArguments[0] === "thread" ||
   userArguments[0] === "client" ||
-  userArguments[0] === "events"
+  userArguments[0] === "events" ||
+  userArguments[0] === "preview"
 ) {
   launchArguments = null;
   delegationArguments = userArguments;
@@ -647,6 +648,7 @@ if (userArguments.length === 0) {
       "  codexhost thread send|cancel|read|wait|watch|watches|list|file ...",
       "  codexhost client add|list|set|pair|remove|access|webhook ...",
       "  codexhost events [--after <id>] [--limit <n>] [--follow true|false]",
+      "  codexhost preview open|list|show|close ...",
       "",
       "This npm package uses the current Node.js runtime and the packaged",
       "Rust launcher/shim. Without Codex Desktop, codexhost opens Web.",

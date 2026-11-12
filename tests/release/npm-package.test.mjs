@@ -99,12 +99,6 @@ async function createHomebrewNodeLayout(root) {
     await copyFile(process.execPath, cellarNode);
     await chmod(cellarNode, 0o755);
   }
-  // Homebrew Node can link libnode relative to its binary; keep that layout in the fixture.
-  await symlink(
-    path.resolve(path.dirname(process.execPath), "..", "lib"),
-    path.resolve(path.dirname(cellarNode), "..", "lib"),
-    "dir",
-  );
   await writeExecutable(prefixNpm, '#!/usr/bin/env node\nconsole.log("homebrew-prefix-npm");\n');
   await writeExecutable(libexecNpm, '#!/usr/bin/env node\nconsole.log("homebrew-libexec-npm");\n');
   await mkdir(path.join(brewPrefix, "bin"), { recursive: true });
@@ -641,6 +635,7 @@ describe("npm package release", () => {
     expect(source).toContain('userArguments[0] === "thread"');
     expect(source).toContain('userArguments[0] === "client"');
     expect(source).toContain('userArguments[0] === "events"');
+    expect(source).toContain('userArguments[0] === "preview"');
     expect(source).toContain('userArguments[0] === "console"');
     expect(source).toContain('[consoleServer, userArguments[0] === "update" ? "update" : "open"]');
     expect(source).toContain('"--codexhost-delegation-cli"');
@@ -694,6 +689,21 @@ describe("npm package release", () => {
     },
   );
 
+  it.each([
+    ["host", "info", "--refresh", "true"],
+    ["project", "list", "--query", "bat"],
+    ["thread", "file", "thread-id", "--path", "outputs/result.png"],
+  ])("routes discovery and file reads through the npm CLI: %j", async (...args) => {
+    const { result, calls } = await runGeneratedWrapperLifecycle("darwin", args, [0]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      expect.stringMatching(/host-runtime\.mjs$/u),
+      "--codexhost-delegation-cli",
+      ...args,
+    ]);
+  });
+
   it("passes background Web through without launching Desktop", async () => {
     const { result, calls } = await runGeneratedWrapperLifecycle(
       "darwin",
@@ -732,21 +742,6 @@ describe("npm package release", () => {
       expect(calls[0].args).not.toContain("launch");
     },
   );
-
-  it.each([
-    ["host", "info", "--refresh", "true"],
-    ["project", "list", "--query", "bat"],
-    ["thread", "file", "thread-id", "--path", "outputs/result.png"],
-  ])("routes discovery and file reads through the npm CLI: %j", async (...args) => {
-    const { result, calls } = await runGeneratedWrapperLifecycle("darwin", args, [0]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args).toEqual([
-      expect.stringMatching(/host-runtime\.mjs$/u),
-      "--codexhost-delegation-cli",
-      ...args,
-    ]);
-  });
 
   it.each(["darwin", "linux", "win32"])(
     "keeps automatic Node selection compatible on %s",

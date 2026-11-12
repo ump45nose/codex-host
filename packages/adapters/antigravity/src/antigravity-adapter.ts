@@ -1,3 +1,8 @@
+import {
+  configureSubagentEvent,
+  configureSubagentSnapshot,
+  type SubagentConfiguration,
+} from "@codexhost/harness-adapter";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, readFile, unlink } from "node:fs/promises";
@@ -762,7 +767,25 @@ class AntigravitySession implements HarnessSession {
 
   readonly initialState: HarnessSessionState;
 
+  #subagentConfiguration(): SubagentConfiguration {
+    const state = this.#state();
+    const model = state.effectiveModel ? state.effectiveModel.id : undefined;
+    return {
+      ...(model ? { model } : {}),
+      ...(state.effectiveThinkingOptionId
+        ? { reasoningEffort: state.effectiveThinkingOptionId }
+        : {}),
+    };
+  }
+
   async readSnapshot(): Promise<HarnessResult<HostThreadSnapshot>> {
+    const result = await this.#readSnapshot();
+    return result.ok
+      ? { ok: true, value: configureSubagentSnapshot(result.value, this.#subagentConfiguration()) }
+      : result;
+  }
+
+  async #readSnapshot(): Promise<HarnessResult<HostThreadSnapshot>> {
     if (this.#closed) return { ok: false, error: invalidState("Antigravity Session is closed") };
     return { ok: true, value: { turns: this.#history.snapshot(), state: this.#state() } };
   }
@@ -930,6 +953,10 @@ class AntigravitySession implements HarnessSession {
       questions,
       subagents: new AntigravitySubagents({
         turnId: command.turnId,
+        parentConfiguration: {
+          ...(this.#model ? { model: this.#model.id } : {}),
+          ...(this.#thinkingOptionId ? { reasoningEffort: this.#thinkingOptionId } : {}),
+        },
         parentId: () => this.#nativeRef?.nativeSessionId,
         port: () => this.#languageServerPort(active),
         cwd: this.#cwd,
@@ -1866,6 +1893,7 @@ class AntigravitySession implements HarnessSession {
   }
 
   #event(event: HostEvent): void {
+    event = configureSubagentEvent(event, this.#subagentConfiguration());
     this.#channel.emit({ kind: "event", event });
   }
 

@@ -152,11 +152,15 @@ import {
   type RendererRequestOptions,
 } from "./renderer-request-sender.js";
 import {
-  readNativeThreadForkSource,
   readNativeCodexThread,
+  readNativeThreadForkSource,
   usesIndependentNativeInference,
   verifyNativeCodexThread,
 } from "./renderer-native-thread.js";
+import {
+  inspectNativeProviderContinuation,
+  continueNativeWithConfiguredProvider,
+} from "./renderer-native-provider-continuation.js";
 import {
   HARNESS_PREFERENCES_GET_METHOD,
   HARNESS_PREFERENCES_PATCH_METHOD,
@@ -167,10 +171,6 @@ import {
   type HarnessPreferenceSnapshot,
   type HarnessPreferencePatch,
 } from "@codexhost/shared-contracts";
-import {
-  inspectNativeProviderContinuation,
-  continueNativeWithConfiguredProvider,
-} from "./renderer-native-provider-continuation.js";
 import {
   createRendererSessionImportClient,
   type RendererSessionImportClient,
@@ -475,30 +475,6 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
-    async getHarnessPreferences(scope = "external") {
-      return harnessPreferenceSnapshotSchema.parse(
-        await manager.sendRequest(
-          HARNESS_PREFERENCES_GET_METHOD,
-          harnessPreferenceGetSchema.parse({ scope }),
-        ),
-      );
-    },
-    async patchHarnessPreferences(input: HarnessPreferencePatch) {
-      return harnessPreferenceSnapshotSchema.parse(
-        await manager.sendRequest(
-          HARNESS_PREFERENCES_PATCH_METHOD,
-          harnessPreferencePatchSchema.parse(input),
-        ),
-      );
-    },
-    subscribeHarnessPreferences(listener: () => void) {
-      return (
-        notificationTarget(source)?.addNotificationCallback?.(
-          HARNESS_PREFERENCES_CHANGED_METHOD,
-          listener,
-        ) ?? (() => {})
-      );
-    },
     async inspectNativeProviderContinuation(input: ThreadInspectionParams) {
       return inspectNativeProviderContinuation(
         manager.sendRequest,
@@ -531,6 +507,30 @@ export function createRendererModelClient(
           ...(cwd ? { cwd } : {}),
         }),
         thread?.modelProvider,
+      );
+    },
+    async getHarnessPreferences(scope = "external") {
+      return harnessPreferenceSnapshotSchema.parse(
+        await manager.sendRequest(
+          HARNESS_PREFERENCES_GET_METHOD,
+          harnessPreferenceGetSchema.parse({ scope }),
+        ),
+      );
+    },
+    async patchHarnessPreferences(input: HarnessPreferencePatch) {
+      return harnessPreferenceSnapshotSchema.parse(
+        await manager.sendRequest(
+          HARNESS_PREFERENCES_PATCH_METHOD,
+          harnessPreferencePatchSchema.parse(input),
+        ),
+      );
+    },
+    subscribeHarnessPreferences(listener: () => void) {
+      return (
+        notificationTarget(source)?.addNotificationCallback?.(
+          HARNESS_PREFERENCES_CHANGED_METHOD,
+          listener,
+        ) ?? (() => {})
       );
     },
     async installation(input: HarnessInstallationParams): Promise<HarnessInstallationState> {

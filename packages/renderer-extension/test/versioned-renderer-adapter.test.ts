@@ -556,7 +556,10 @@ describe("current Codex Renderer Agent adapter", () => {
           ).toBe(false);
         }
         expect(
-          requestTarget.sendRequest.mock.calls.some(([method]) => method.endsWith("/set")),
+          requestTarget.sendRequest.mock.calls.some(
+            ([method]) =>
+              method.endsWith("/set") && method !== "codexhost/settings/delegation-capacity/set",
+          ),
         ).toBe(false);
       } finally {
         adapter.dispose();

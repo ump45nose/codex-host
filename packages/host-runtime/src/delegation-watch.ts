@@ -443,6 +443,9 @@ export class DelegationWatchService {
         };
       }
       delete watch.unreadableSince;
+      // Waiting in the capacity queue or being created is not Harness silence.
+      if (snapshot.status !== "running" && watch.stallAfterMs !== undefined)
+        watch.lastActivityAt = Date.now();
       if (
         snapshot.status === "running" &&
         Date.now() < watch.deadline &&
@@ -565,7 +568,7 @@ export class DelegationWatchService {
   }
 
   #persist(watch: Watch, required = false): Promise<void> {
-    // Silence is measured again after a restart; stalled alerts are not persisted.
+    // Silence is measured again after a restart, and older Runtimes set a stalled record aside as unreadable.
     if (watch.outcome === "stalled") return Promise.resolve();
     const record = persisted(watch);
     return this.#write((store) => store.save(record), required);

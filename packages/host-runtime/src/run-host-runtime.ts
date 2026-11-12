@@ -36,6 +36,7 @@ import {
   type ExternalClientServer,
 } from "./external-client-server.js";
 import { installDelegationSkills } from "./delegation-skill.js";
+import { HarnessUserInstructionsStore } from "./harness-user-instructions.js";
 import type { DelegationControlRegistration } from "./delegation-types.js";
 import { readRemoteDelegationThread } from "./remote-delegation-read.js";
 import {
@@ -251,6 +252,9 @@ export async function prepareDelegationRuntime(input: {
     .catch((error) => {
       process.stderr.write(`codexhost delegation Skill installation failed: ${String(error)}\n`);
     });
+  await new HarnessUserInstructionsStore(environment).sync().catch((error) => {
+    process.stderr.write(`codexhost user instructions sync failed: ${String(error)}\n`);
+  });
   try {
     return await input.createHost(environment, (value) => registry.register(value), registry);
   } finally {

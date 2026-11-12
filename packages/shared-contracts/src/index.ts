@@ -7,6 +7,7 @@ export * from "./delegation-read.js";
 export * from "./credential-imports.js";
 export * from "./harness-display-settings.js";
 export * from "./harness-preferences.js";
+export * from "./harness-user-instructions-settings.js";
 export * from "./harness-presentation.js";
 export * from "./account-credits-presentation.js";
 export * from "./model-price-overrides.js";

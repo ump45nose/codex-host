@@ -11,8 +11,8 @@ import {
   handlePublicOAuthRoute,
   resolvePublicBaseUrl,
   stripPublicPrefix,
-  type ExternalClientOAuthStore,
-} from "./external-client-oauth.js";
+} from "./external-client-oauth-http.js";
+import type { ExternalClientOAuthStore } from "./external-client-oauth.js";
 import {
   bearerToken,
   codexhostDataDirectory,

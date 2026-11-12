@@ -221,15 +221,28 @@ export function collectSidebarThreads(
 }
 
 const SURFACE_SELECTORS = [
+  '[data-app-shell-active-page="true"] [data-app-shell-main-surface]',
+  '[data-app-shell-main-surface="default"], [data-app-shell-main-surface], [class*="MainContentSurface"]',
   '[data-app-shell-active-page="true"] [class*="PageSurface"], [data-app-shell-active-page="true"].page-surface',
   '[data-page-surface], [data-app-shell-page-surface], .page-surface, [class*="PageSurface"]',
   '[data-app-shell-active-page="true"], [role="main"], main',
 ];
 
+function isValidPageSurfaceMountTarget(el: HTMLElement | null | undefined): el is HTMLElement {
+  return Boolean(
+    el &&
+    el.getAttribute("data-app-shell-frame") !== "true" &&
+    !el.hasAttribute("data-app-shell-frame") &&
+    !el.closest("[data-app-shell-titlebar]") &&
+    !el.querySelector("[data-app-shell-titlebar]"),
+  );
+}
+
 function findPageSurfaceMountTarget(doc: Document): HTMLElement | null {
   for (const selector of SURFACE_SELECTORS) {
-    const el = doc.querySelector<HTMLElement>(selector);
-    if (el && !el.closest("[data-app-shell-titlebar]")) return el;
+    for (const el of doc.querySelectorAll<HTMLElement>(selector)) {
+      if (isValidPageSurfaceMountTarget(el)) return el;
+    }
   }
   return null;
 }
@@ -298,7 +311,8 @@ export function installRendererTopTabs(
 
   const ensureRootContainer = (surface: HTMLElement): HTMLElement => {
     for (const el of doc.querySelectorAll<HTMLElement>(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) {
-      if (el.parentElement !== surface || el.closest("[data-app-shell-titlebar]")) el.remove();
+      if (el.parentElement !== surface || !isValidPageSurfaceMountTarget(el.parentElement))
+        el.remove();
     }
     let root = surface.querySelector<HTMLElement>(`[${TOP_TABS_ROOT_ATTRIBUTE}]`);
     if (!root) {
@@ -494,7 +508,12 @@ export function installRendererTopTabs(
         );
       }
       btn.appendChild(
-        createEl("span", "s-title", { "data-codexhost-top-tab-title": "true" }, item.title),
+        createEl(
+          "span",
+          "s-title session-title",
+          { "data-codexhost-top-tab-title": "true" },
+          item.title,
+        ),
       );
       const stateText = STATUS_LABELS[item.status][locale.startsWith("zh") ? 0 : 1];
       btn.appendChild(createEl("span", "s-state-label", { "data-st": item.status }, stateText));
@@ -522,7 +541,7 @@ export function installRendererTopTabs(
         slot.style.flex = `0 0 ${startW}px`;
         slot.style.width = slot.style.minWidth = slot.style.maxWidth = `${startW}px`;
         slot.setAttribute("data-floating", "true");
-        const naturalW = Math.min(268, Math.max((btn.scrollWidth || 160) + 6, 150));
+        const naturalW = Math.min(340, Math.max((btn.scrollWidth || 160) + 6, 150));
         const barW = bar.clientWidth || root.clientWidth || track.offsetWidth || 600;
         const slotLeft = slot.offsetLeft || 0;
         if (slotLeft + naturalW > barW - 8 && slotLeft + startW >= naturalW)

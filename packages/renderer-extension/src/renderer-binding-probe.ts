@@ -134,6 +134,7 @@ import {
 } from "./renderer-top-tabs.js";
 import {
   PETS_OPEN_THREAD_REQUEST_STORAGE_KEY,
+  readPetsHarnessCatalog,
   writePetsHarnessCatalog,
   writePetsRemoteThreads,
   type PetsOpenThreadRequest,
@@ -1065,6 +1066,36 @@ export function installRendererBindingProbe(
     }
     return resolveShortHostLabel(hostId, hostLabels.get(hostId));
   };
+  const createHostHarnessAvailabilityState = (): HostHarnessAvailabilityState => ({
+    plugins: null,
+    directoryClient: null,
+    codexAccounts: null,
+    availability: {},
+    errors: {},
+    webUi: {},
+    requestGeneration: 0,
+    request: null,
+    retryTimer: null,
+    retryAttempt: 0,
+  });
+  const harnessAvailabilityByHost = new Map<string, HostHarnessAvailabilityState>();
+  const codexAccountLoads = new WeakMap<RendererCodexAccountState, Promise<void>>();
+  const hostHarnessAvailabilityState = (hostId: string): HostHarnessAvailabilityState => {
+    let state = harnessAvailabilityByHost.get(hostId);
+    if (!state) {
+      state = createHostHarnessAvailabilityState();
+      harnessAvailabilityByHost.set(hostId, state);
+    }
+    return state;
+  };
+  function pluginForHost(hostId: string, agent: string): HarnessPluginDescriptor | undefined {
+    const plugin = hostHarnessAvailabilityState(hostId).plugins?.find(({ id }) => id === agent);
+    const reference =
+      hostId === "local"
+        ? undefined
+        : hostHarnessAvailabilityState("local").plugins?.find(({ id }) => id === agent);
+    return compatibleRendererPluginPresentation(plugin, reference);
+  }
   const resolveThreadAgent = (hostId: string, threadId: string, fallback?: RendererAgent) => {
     const agent =
       localAgentForSidebarThread({ hostId, threadId, draftId: null }) ?? fallback ?? null;
@@ -1102,15 +1133,28 @@ export function installRendererBindingProbe(
         });
       writePetsRemoteThreads(remotes, window.localStorage);
       const pluginsById = new Map<string, HarnessPluginDescriptor>();
+      let hasResolvedHostDirectory = false;
       for (const [hostId, s] of harnessAvailabilityByHost) {
+        if (s.plugins !== null) hasResolvedHostDirectory = true;
         for (const p of s.plugins ?? EMPTY_PLUGINS) {
           if (!pluginsById.has(p.id) || hostId === "local") {
             pluginsById.set(p.id, pluginForHost(hostId, p.id) ?? p);
           }
         }
       }
+      const nextPlugins = [...pluginsById.values()];
+      const existingCatalog =
+        nextPlugins.length === 0 && !hasResolvedHostDirectory
+          ? readPetsHarnessCatalog(window.localStorage)
+          : null;
       writePetsHarnessCatalog(
-        { enabledAgents: [...enabledAgents], plugins: [...pluginsById.values()] },
+        {
+          enabledAgents: [...enabledAgents],
+          plugins:
+            nextPlugins.length === 0 && existingCatalog?.plugins.length
+              ? existingCatalog.plugins
+              : nextPlugins,
+        },
         window.localStorage,
       );
     } catch {
@@ -1162,36 +1206,6 @@ export function installRendererBindingProbe(
     modelUpdates: 0,
     hook: null,
   };
-  const createHostHarnessAvailabilityState = (): HostHarnessAvailabilityState => ({
-    plugins: null,
-    directoryClient: null,
-    codexAccounts: null,
-    availability: {},
-    errors: {},
-    webUi: {},
-    requestGeneration: 0,
-    request: null,
-    retryTimer: null,
-    retryAttempt: 0,
-  });
-  const harnessAvailabilityByHost = new Map<string, HostHarnessAvailabilityState>();
-  const codexAccountLoads = new WeakMap<RendererCodexAccountState, Promise<void>>();
-  const hostHarnessAvailabilityState = (hostId: string): HostHarnessAvailabilityState => {
-    let state = harnessAvailabilityByHost.get(hostId);
-    if (!state) {
-      state = createHostHarnessAvailabilityState();
-      harnessAvailabilityByHost.set(hostId, state);
-    }
-    return state;
-  };
-  function pluginForHost(hostId: string, agent: string): HarnessPluginDescriptor | undefined {
-    const plugin = hostHarnessAvailabilityState(hostId).plugins?.find(({ id }) => id === agent);
-    const reference =
-      hostId === "local"
-        ? undefined
-        : hostHarnessAvailabilityState("local").plugins?.find(({ id }) => id === agent);
-    return compatibleRendererPluginPresentation(plugin, reference);
-  }
   syncPetsRemoteThreads();
   const codexAccountsForHost = (hostId: string | null): RendererCodexAccountState | null => {
     if (!hostId) return null;

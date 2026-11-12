@@ -343,6 +343,9 @@ export function createNpmPackageManifest({ version, target }) {
 }
 
 export function createNpmBinLauncherSource({ version }) {
+  const channelReinstall = version.includes("-vincent.")
+    ? `npm install -g https://github.com/ump45nose/codex-host/releases/download/v${version}/codexhost-cli.tgz`
+    : null;
   return `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -451,8 +454,11 @@ try {
   fail(\`cannot read platform package metadata: \${packageRoot}\`);
 }
 if (platformVersion !== version) {
+  const reinstall =
+    ${channelReinstall === null ? "null" : JSON.stringify(channelReinstall)} ??
+    \`npm install -g @codexhost/cli@\${version} \${platformPackage}@\${version}\`;
   fail(
-    \`platform package version mismatch: '\${platformPackage}' at '\${packageRoot}' has \${JSON.stringify(platformVersion) ?? "no version"}; expected \${version}. Close Codex Desktop, then run: npm install -g @codexhost/cli@\${version} \${platformPackage}@\${version}\`,
+    \`platform package version mismatch: '\${platformPackage}' at '\${packageRoot}' has \${JSON.stringify(platformVersion) ?? "no version"}; expected \${version}. Close Codex Desktop, then run: \${reinstall}\`,
   );
 }
 startupTrace("platform package resolved");

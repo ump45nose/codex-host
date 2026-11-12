@@ -1,6 +1,5 @@
 import type { DelegationControlRegistration } from "../src/delegation-types.js";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,6 +18,16 @@ import {
 import { startClientChannelServer } from "../src/client-channel-server.js";
 import { runSharedHostService } from "../src/shared-host-service.js";
 import { readNativeWorkspaceSnapshot } from "../src/native-workspace-snapshot.js";
+import { runHostRuntime } from "../src/run-host-runtime.js";
+import * as supervisors from "../src/remote-listener-supervisor.js";
+import { ModelPriceCatalog } from "../src/model-prices.js";
+import * as delegationServers from "../src/delegation-control-server.js";
+import * as nativeBackends from "../src/codex-runtime/owned-official-backends.js";
+import * as delegationSkills from "../src/delegation-skill.js";
+import * as harnessPlugins from "../src/installed-harness-plugins.js";
+import { createRemoteOfficialAppServerConnection } from "../src/remote-official-connection.js";
+import { StreamThreadPeer } from "../src/shared-thread-peer.js";
+
 import {
   createFixture,
   JsonLineCollector,
@@ -29,10 +38,11 @@ import {
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
   for (const run of cleanup.splice(0).reverse()) await run();
+  vi.restoreAllMocks();
 });
 
 async function setup() {
-  const root = mkdtempSync(path.join(tmpdir(), "local-shared-owner-"));
+  const root = mkdtempSync(path.join(process.cwd(), ".sh-"));
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const store = new MappingStore({ directory: path.join(root, "mapping-store") });
   await store.initialize();
@@ -77,6 +87,7 @@ async function setup() {
     });
     const viewer = createFixture({
       sharedThreads: bridge,
+      mappingStoreDirectory: path.join(root, "desktop-fixture"),
       mappingStore: store,
       closeMappingStoreOnExit: false,
       externalAdapters: new Map(),
@@ -106,7 +117,11 @@ it("SSH and local clients create and resume the same external sessions across se
     delegateCreates: true,
     diagnose: () => undefined,
   });
-  const remote = createFixture({ externalOnly: true, sharedThreads: bridge });
+  const remote = createFixture({
+    externalOnly: true,
+    sharedThreads: bridge,
+    mappingStoreDirectory: path.join(root, "remote-fixture"),
+  });
   cleanup.push(() => stopFixture(remote));
   const model = encodeHarnessPluginRoute({ harnessId: harnessIdSchema.parse("pi") });
   const local = await web.request<{ thread: { id: string } }>("thread/start", {
@@ -242,7 +257,7 @@ it("prints only stopped for an old Host response without a task count", async ()
 });
 
 it("reads projects and pins with no Desktop and never rewrites native metadata", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "workspace-snapshot-"));
+  const root = mkdtempSync(path.join(process.cwd(), ".workspace-snapshot-"));
   cleanup.push(() => rmSync(root, { recursive: true, force: true }));
   const environment = { CODEX_HOME: root };
   expect(await readNativeWorkspaceSnapshot(environment)).toEqual({
@@ -297,6 +312,7 @@ it("routes the SSH delegation API to the shared owner without native fallback", 
   const remote = createFixture({
     externalOnly: true,
     sharedThreads: bridge,
+    mappingStoreDirectory: path.join(root, "remote-fixture"),
     onDelegationApi: (api) => {
       captured.api = api;
     },
@@ -353,3 +369,76 @@ it("routes the SSH delegation API to the shared owner without native fallback", 
     captured.api.read({ threadId: started.thread.id, view: "messages" }),
   ).rejects.toThrow("disconnected");
 });
+
+it.skipIf(process.platform === "win32")(
+  "shares external sessions and one store owner with a supervised SSH listener",
+  async () => {
+    const { root, web, store } = await setup();
+    const socketPath = path.join(root, "listener.sock");
+    const environment = {
+      HOME: root,
+      CODEXHOST_DATA_DIR: root,
+      CODEXHOST_SHARED_DATA_DIR: root,
+      CODEX_HOME: path.join(root, "codex-home"),
+      CODEXHOST_STOCK_CODEX_PATH: "/unused/codex",
+      CODEXHOST_HOST_RUNTIME_PATH: path.join(root, "runtime.mjs"),
+      CODEXHOST_EXTERNAL_CLIENT_PORT: "off",
+    };
+    let supervisorPid = 123;
+    const title = process.title;
+    vi.spyOn(ModelPriceCatalog.prototype, "start").mockResolvedValue(undefined);
+    vi.spyOn(delegationSkills, "installDelegationSkills").mockResolvedValue([]);
+    vi.spyOn(harnessPlugins, "installedHarnessPluginOptions").mockReturnValue({
+      pluginRoots: [],
+      pluginContext: { environment, platform: process.platform, managedRemoteHost: true },
+    });
+    const control = vi.spyOn(delegationServers, "startDelegationControlServer");
+    const watch = supervisors.watchRemoteListenerSupervisor;
+    vi.spyOn(supervisors, "watchRemoteListenerSupervisor").mockImplementation((input) =>
+      watch({ ...input, parentProcessId: () => supervisorPid, outputs: [], intervalMs: 10 }),
+    );
+    vi.spyOn(nativeBackends, "createOwnedUnixBackend").mockImplementation(() => {
+      throw new Error("Synthetic native backend unavailable");
+    });
+    const running = runHostRuntime({
+      arguments: ["app-server", "--listen", `unix://${socketPath}`],
+      environment,
+    });
+    void running.catch(() => undefined);
+    cleanup.push(async () => {
+      supervisorPid = 1;
+      await running.catch(() => undefined);
+      process.title = title;
+    });
+
+    await vi.waitFor(() => expect(existsSync(socketPath)).toBe(true));
+    const connection = await createRemoteOfficialAppServerConnection(socketPath);
+    const remote = new StreamThreadPeer(connection.stdout, connection.stdin, () =>
+      connection.close(),
+    );
+    cleanup.push(() => remote.close());
+    const model = encodeHarnessPluginRoute({ harnessId: harnessIdSchema.parse("pi") });
+    const { thread } = await web.request<{ thread: { id: string } }>("thread/start", {
+      model,
+      cwd: root,
+    });
+    expect(await remote.request("thread/read", { threadId: thread.id })).toMatchObject({
+      result: { thread: { id: thread.id } },
+    });
+    const remoteStarted = await remote.request("thread/start", { model, cwd: root });
+    expect(remoteStarted).toMatchObject({ result: { thread: { modelProvider: "codexhost" } } });
+    const delegation = control.mock.calls[0]?.[0].api;
+    if (!delegation) throw new Error("Missing listener delegation API");
+    const child = await delegation.start({
+      harnessId: "pi",
+      parentThreadId: thread.id,
+      task: "shared child",
+    });
+    expect(
+      await delegation.list({ parentThreadId: thread.id, sort: "created-asc", limit: 10 }),
+    ).toMatchObject({ threads: [{ threadId: child.threadId }] });
+    expect(await store.listThreads()).toHaveLength(3);
+    supervisorPid = 1;
+    expect(await running).toBe(0);
+  },
+);

@@ -2755,13 +2755,15 @@ describe("Renderer Updates page", () => {
       );
       expect(update).toBeDefined();
       if (installation === "npm") {
-        expect(visibleText(content)).toContain("npm install -g @codexhost/cli@latest");
+        expect(visibleText(content)).toContain(
+          "npm install -g https://github.com/ump45nose/codex-host/releases/latest/download/codexhost-cli.tgz",
+        );
       } else {
         const link = descendants(content).find(
           ({ tagName, href }) =>
             tagName === "a" &&
             href ===
-              "https://github.com/BytePioneer-AI/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
+              "https://github.com/ump45nose/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
         );
         expect(link).toMatchObject({ target: "_blank", rel: "noopener noreferrer" });
       }

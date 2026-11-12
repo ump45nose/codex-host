@@ -17,6 +17,8 @@ import {
   discoverRecentCompletedUpdateStatus,
   fetchLatestGitHubRelease,
   fetchLatestGitHubReleaseWithGitHubCli,
+  hasNpmReleaseArtifacts,
+  isReleaseChannelVersion,
   recoverUpdateOperationLock,
   selectInstallerReleaseArtifact,
   readRuntimeMetadata,
@@ -129,7 +131,7 @@ export function createConsoleUpdates(options: CreateConsoleUpdatesOptions): Cons
         platform,
         signal: requestSignal,
       });
-      return authenticated ?? fetchLatestGitHubRelease({ signal: requestSignal });
+      return authenticated ?? fetchLatestGitHubRelease({ environment, signal: requestSignal });
     });
   let candidate: CodexhostLatestRelease | null = null;
   let handedOff = false;
@@ -151,7 +153,13 @@ export function createConsoleUpdates(options: CreateConsoleUpdatesOptions): Cons
 
   function installable(metadata: DistributionMetadata, release: CodexhostLatestRelease): boolean {
     const kind = installationKind(metadata);
-    if (kind === "npm") return true;
+    if (kind === "npm") {
+      // Fork channel builds are installed from the Release tarballs, not the registry.
+      return (
+        !isReleaseChannelVersion(release.version) ||
+        hasNpmReleaseArtifacts(release, metadata.target)
+      );
+    }
     if (kind === null) return false;
     try {
       selectInstallerReleaseArtifact(release, metadata.target as InstallerReleaseTarget);

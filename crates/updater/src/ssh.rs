@@ -19,21 +19,31 @@ struct Request {
     #[serde(default)]
     uninstall_package: bool,
 }
-/// Only published stable releases are installed over SSH; the value is interpolated into a script.
+/// Only published stable releases, or fork channel builds (`X.Y.Z-vincent.N`) attached to a
+/// GitHub Release, are installed over SSH; the value is interpolated into a script.
 fn release_version(request: &Request) -> Result<&str, Box<dyn Error>> {
     let version = request
         .version
         .as_deref()
         .ok_or("A release version is required")?;
     let parts: Vec<_> = version.split('.').collect();
-    if parts.len() != 3
-        || parts
+    let stable = parts.len() == 3
+        && parts
             .iter()
-            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
-    {
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    if !stable && !crate::release_channel::is_channel_version(version) {
         return Err("Install requires a published stable version".into());
     }
     Ok(version)
+}
+
+/// npm spec and its availability probe for a release; both are shell-safe because the
+/// version and repository are validated.
+fn release_package(version: &str) -> Result<(String, String), Box<dyn Error>> {
+    let repository = crate::release_channel::release_repository()?;
+    let package = crate::release_channel::npm_package_spec(&repository, version, None);
+    let probe = crate::release_channel::npm_availability_args(&package).join(" ");
+    Ok((package, probe))
 }
 fn script(request: &Request) -> Result<String, Box<dyn Error>> {
     if request.hostname.is_empty()
@@ -65,18 +75,18 @@ node -e 'const [major, minor] = process.versions.node.split(".").map(Number); pr
     match request.action.as_str() {
         "inspect" => Ok(probe.into()),
         "install" => {
-            let version = release_version(request)?;
+            let (package, _) = release_package(release_version(request)?)?;
             Ok(format!(
-                "{node}set -e; {lock}[ ! -f \"$HOME/.codexhost/remote/manifest.json\" ] || exit 43; case $(uname -s) in Darwin|Linux) ;; *) exit 44;; esac; command -v npm >/dev/null 2>&1 || exit 56; command -v codex >/dev/null 2>&1 || exit 57; npm install -g @codexhost/cli@{version} >/dev/null 2>&1 || exit 46; codexhost remote install >/dev/null 2>&1 || exit 47; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
+                "{node}set -e; {lock}[ ! -f \"$HOME/.codexhost/remote/manifest.json\" ] || exit 43; case $(uname -s) in Darwin|Linux) ;; *) exit 44;; esac; command -v npm >/dev/null 2>&1 || exit 56; command -v codex >/dev/null 2>&1 || exit 57; npm install -g {package} >/dev/null 2>&1 || exit 46; codexhost remote install >/dev/null 2>&1 || exit 47; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
             ))
         }
         // For services too old to update themselves. A newer CLI refuses to stop an installation
         // written in an older format, so the old CLI stops the service when it is available, and
         // the new CLI migrates the installation before stopping whatever is still running.
         "update" => {
-            let version = release_version(request)?;
+            let (package, probe) = release_package(release_version(request)?)?;
             Ok(format!(
-                "{node}set -e; {lock}[ -f \"$HOME/.codexhost/remote/manifest.json\" ] || exit 52; command -v npm >/dev/null 2>&1 || exit 56; npm view @codexhost/cli@{version} version --fetch-retries=0 --fetch-timeout=30000 >/dev/null 2>&1 || exit 53; if command -v codexhost >/dev/null; then codexhost remote stop >/dev/null 2>&1 || true; fi; npm install -g @codexhost/cli@{version} >/dev/null 2>&1 || {{ codexhost remote start >/dev/null 2>&1 || true; exit 46; }}; command -v codexhost >/dev/null || exit 54; codexhost remote install >/dev/null 2>&1 || exit 47; codexhost remote stop >/dev/null 2>&1 || {stock} || exit 50; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
+                "{node}set -e; {lock}[ -f \"$HOME/.codexhost/remote/manifest.json\" ] || exit 52; command -v npm >/dev/null 2>&1 || exit 56; npm {probe} >/dev/null 2>&1 || exit 53; if command -v codexhost >/dev/null; then codexhost remote stop >/dev/null 2>&1 || true; fi; npm install -g {package} >/dev/null 2>&1 || {{ codexhost remote start >/dev/null 2>&1 || true; exit 46; }}; command -v codexhost >/dev/null || exit 54; codexhost remote install >/dev/null 2>&1 || exit 47; codexhost remote stop >/dev/null 2>&1 || {stock} || exit 50; codexhost remote start >/dev/null 2>&1 || {started} || exit 48; printf '\\n__CODEXHOST_SSH_STATE__=installed\\n'"
             ))
         }
         // A damaged installation is exactly what the CLI refuses to stop, so the first stop is

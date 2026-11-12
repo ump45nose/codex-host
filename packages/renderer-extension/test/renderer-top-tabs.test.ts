@@ -16,7 +16,10 @@ function createFixture(specs: string[]) {
       return `<a data-app-action-sidebar-thread-row="true" data-app-action-sidebar-thread-host-id="${hostId}" data-app-action-sidebar-thread-id="${hostId}:${id}" data-thread-title="Title ${id}" data-thread-status="${status}" ${active ? 'data-active="true"' : ""}><span ${SIDEBAR_AGENT_ICON_ATTRIBUTE}="${agent}"></span></a>`;
     })
     .join("");
-  document.body.innerHTML = `<header data-app-shell-titlebar="true"></header><aside data-app-action-sidebar-section="recent">${rowsHtml}</aside><main class="page-surface PageSurface" data-app-shell-active-page="true"><div></div></main>`;
+  document.body.innerHTML = `<div class="Layout PageSurfaceLayout" data-app-shell-frame="true" data-app-shell-page-surface="true"><header data-app-shell-titlebar="true"></header><div data-app-shell-active-page="true"><aside data-app-action-sidebar-section="recent">${rowsHtml}</aside><main class="MainContentSurface" data-app-shell-main-surface="default"><div></div></main></div></div>`;
+  const frame =
+    document.querySelector<HTMLElement>('[data-app-shell-frame="true"]') ??
+    document.createElement("div");
   const titlebar = document.querySelector<HTMLElement>("header") ?? document.createElement("div");
   const sidebar = document.querySelector<HTMLElement>("aside") ?? document.createElement("div");
   const surface = document.querySelector<HTMLElement>("main") ?? document.createElement("div");
@@ -33,7 +36,7 @@ function createFixture(specs: string[]) {
   const qa = (s: string) => [...surface.querySelectorAll<HTMLElement>(s)];
   const tabKeys = () =>
     qa(`[${topTabs.TOP_TAB_ATTRIBUTE}]`).map((t) => t.getAttribute(topTabs.TOP_TAB_ATTRIBUTE));
-  return { titlebar, surface, rowEls, install, q, qa, tabKeys };
+  return { frame, titlebar, surface, rowEls, install, q, qa, tabKeys };
 }
 
 const CLAUDE_PLUGIN = harnessPluginDescriptorSchema.parse({
@@ -56,6 +59,7 @@ describe("renderer-top-tabs (PageSurface active session strip)", () => {
       "t-idle-2|idle|claude",
     ]);
     const h = f.install();
+    expect(f.frame.firstElementChild).toBe(f.titlebar);
     expect(f.titlebar.querySelector(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`)).toBeNull();
     const strip = f.q(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`);
     expect(f.surface.firstElementChild).toBe(strip);
@@ -155,6 +159,10 @@ describe("renderer-top-tabs (PageSurface active session strip)", () => {
     expect(topTabs.computeTopTabsDensity(752, 6)).toBe("compact-icons");
     const h = f.install();
     expect(f.q(".session-pill-track")?.getAttribute("data-density")).toBe("compact-icons");
+    const css = topTabs.buildTopTabsCss();
+    expect(css).not.toContain("background-color 140ms");
+    expect(css).toContain(".session-title");
+    expect(css).toContain("max-width: 240px;");
     const bgSlot = f.q('[data-session-slot="local:t-2"]');
     if (bgSlot) {
       Object.defineProperty(bgSlot, "offsetWidth", { value: 42, configurable: true });
@@ -197,5 +205,54 @@ describe("renderer-top-tabs (PageSurface active session strip)", () => {
     expect(topTabs.rollupTopTabStatus(["idle", "unread", "running"])).toBe("running");
     expect(avatar.PETS_OPEN_THREAD_REQUEST_STORAGE_KEY).toContain("pets-open-thread-request");
     h.dispose();
+  });
+
+  it("preserves non-empty Pets harness catalog in localStorage during setAdapter clear/refresh window until async probe returns", async () => {
+    window.localStorage.clear();
+    document.body.innerHTML = "";
+    const geminiPlugin = harnessPluginDescriptorSchema.parse({
+      id: "gemini",
+      name: "Gemini CLI",
+      version: "1.0.0",
+    });
+    avatar.writePetsHarnessCatalog(
+      { enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE_PLUGIN] },
+      window.localStorage,
+    );
+    let resolveList!: (v: { plugins: (typeof geminiPlugin)[] }) => void;
+    const listPromise = new Promise<{ plugins: (typeof geminiPlugin)[] }>((res) => {
+      resolveList = res;
+    });
+    const client = { listHarnessPlugins: () => listPromise };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code", "gemini"],
+    });
+    try {
+      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
+        "claude-code",
+      ]);
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        undefined,
+        {
+          currentHostId: () => "local",
+          knownHostIds: () => ["local"],
+          clientForHost: () => client,
+        } as never,
+      );
+      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
+        "claude-code",
+      ]);
+      resolveList({ plugins: [geminiPlugin] });
+      await listPromise;
+      await new Promise((r) => setTimeout(r, 0));
+      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
+        "gemini",
+      ]);
+    } finally {
+      probe.dispose();
+    }
   });
 });

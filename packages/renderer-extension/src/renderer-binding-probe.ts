@@ -109,6 +109,13 @@ import {
 } from "./renderer-sidebar-archive-children.js";
 import { installRendererSidebarThreadTree } from "./renderer-sidebar-thread-tree.js";
 import {
+  emitCodexHostUserMessage,
+  installRendererSidebarStash,
+  readSidebarStashEnabledPreference,
+  subscribeSidebarStashEnabledPreference,
+  type RendererSidebarStashHandle,
+} from "./renderer-sidebar-stash.js";
+import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
@@ -904,6 +911,28 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     locale: () => settingsLifecycle.locale,
   });
+  let sidebarStash: RendererSidebarStashHandle | null = null;
+  const mountSidebarStash = (): void => {
+    sidebarStash?.dispose();
+    sidebarStash = null;
+    if (!readSidebarStashEnabledPreference(window)) return;
+    try {
+      sidebarStash = installRendererSidebarStash({
+        document,
+        window,
+        getLocale: () => settingsLifecycle.locale,
+        getEnabled: () => readSidebarStashEnabledPreference(window),
+        logger: console,
+      });
+    } catch (error) {
+      console.warn("[codexhost-sidebar-stash] install failed", error);
+      sidebarStash = null;
+    }
+  };
+  mountSidebarStash();
+  const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
+    mountSidebarStash();
+  });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
@@ -1041,6 +1070,10 @@ export function installRendererBindingProbe(
         },
       }),
     );
+    // Auto-unstash for Codex and Harness sessions alike: stash listens on this event.
+    const mounted = mountedByComposer.get(composer);
+    const submittedThreadId = mounted ? threadIdFromComposerModelTarget(mounted.modelTarget) : null;
+    emitCodexHostUserMessage(submittedThreadId, window);
   };
 
   const showCodexUsageGateStatus = (
@@ -3655,6 +3688,9 @@ export function installRendererBindingProbe(
       sidebarAgentIcons.dispose();
       sidebarThreadState.dispose();
       sidebarArchiveChildren?.dispose();
+      disposeSidebarStashPreference();
+      sidebarStash?.dispose();
+      sidebarStash = null;
       sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();

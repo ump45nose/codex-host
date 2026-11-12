@@ -353,7 +353,8 @@ mod tests {
             pi: None,
         };
         // A pair of sibling executables is not a parent -> child runtime chain.
-        let ready = wait_for_host_chain(&snapshot, &options, Duration::from_millis(200)).unwrap();
+        let ready =
+            wait_for_host_chain(&snapshot, &options, None, Duration::from_millis(200)).unwrap();
         root.force_terminate().unwrap();
         root.wait().unwrap();
         assert!(
@@ -392,7 +393,7 @@ mod tests {
             renderer_extension: sleep,
             pi: None,
         };
-        let ready = wait_for_host_chain(&snapshot, &options, Duration::from_secs(2)).unwrap();
+        let ready = wait_for_host_chain(&snapshot, &options, None, Duration::from_secs(2)).unwrap();
         root.force_terminate().unwrap();
         root.wait().unwrap();
         assert!(

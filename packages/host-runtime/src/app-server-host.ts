@@ -286,7 +286,7 @@ import {
 } from "./external-turn-projection.js";
 import { DesktopControlRequests } from "./desktop-control-requests.js";
 import { DesktopThreadRouting } from "./desktop-thread-routing.js";
-import { errorMessage, rpcEnvelope, rpcError, type HostRequestOrigin } from "./desktop-rpc.js";
+import { errorMessage, rpcEnvelope, rpcError, routingParams, type HostRequestOrigin } from "./desktop-rpc.js";
 import { ThreadListTiming } from "./thread-list-timing.js";
 import { allocateProjectlessWorkspace } from "./projectless-workspace.js";
 import {
@@ -1012,6 +1012,7 @@ export class AppServerHost {
       executionHostId: (threadId) => {
         const thread = this.#externalRuntime.get(threadId);
         return thread ? this.#executionHosts.get(thread) : undefined;
+      },
       },
       options.externalOnly ? options.sharedThreads : undefined,
     );

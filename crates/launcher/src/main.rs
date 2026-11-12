@@ -813,7 +813,12 @@ fn supervise_desktop(
     let mut controller = start_desktop_controller(options, control, environment)?;
     let desktop_pid = desktop.root_snapshot().id;
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(desktop.root_snapshot(), options, env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new), Duration::from_secs(30))? {
+    if !wait_for_host_chain(
+        desktop.root_snapshot(),
+        options,
+        env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new),
+        Duration::from_secs(30),
+    )? {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.shutdown(Duration::from_secs(2));
         return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
@@ -911,7 +916,12 @@ fn supervise_desktop(
         }
     };
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(&desktop_snapshot, options, env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new), Duration::from_secs(30))? {
+    if !wait_for_host_chain(
+        &desktop_snapshot,
+        options,
+        env::var_os(NPM_NODE_PATH_ENV).as_deref().map(Path::new),
+        Duration::from_secs(30),
+    )? {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.kill();
         let _ = desktop.wait();
@@ -1550,9 +1560,8 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
         Some("host") => host_service::run(&arguments[1..]),
         Some("web-service") => web_service::run(&arguments[1..]),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
-        Some("project") | Some("harness") | Some("delegate") | Some("thread") | Some("client") | Some("events") | Some("preview") => {
-            run_delegation_cli(arguments)
-        }
+        Some("project") | Some("harness") | Some("delegate") | Some("thread") | Some("client")
+        | Some("events") | Some("preview") => run_delegation_cli(arguments),
         _ => {
             usage();
             Err("invalid launcher arguments".into())

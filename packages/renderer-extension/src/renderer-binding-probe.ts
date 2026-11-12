@@ -1146,7 +1146,6 @@ export function installRendererBindingProbe(
       }),
     );
     // Auto-unstash for Codex and Harness sessions alike: stash listens on this event.
-    const mounted = mountedByComposer.get(composer);
     const submittedThreadId = mounted ? threadIdFromComposerModelTarget(mounted.modelTarget) : null;
     emitCodexHostUserMessage(submittedThreadId, window);
   };

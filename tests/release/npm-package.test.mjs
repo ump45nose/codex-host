@@ -99,6 +99,12 @@ async function createHomebrewNodeLayout(root) {
     await copyFile(process.execPath, cellarNode);
     await chmod(cellarNode, 0o755);
   }
+  // Homebrew Node can link libnode relative to its binary; keep that layout in the fixture.
+  await symlink(
+    path.resolve(path.dirname(process.execPath), "..", "lib"),
+    path.resolve(path.dirname(cellarNode), "..", "lib"),
+    "dir",
+  );
   await writeExecutable(prefixNpm, '#!/usr/bin/env node\nconsole.log("homebrew-prefix-npm");\n');
   await writeExecutable(libexecNpm, '#!/usr/bin/env node\nconsole.log("homebrew-libexec-npm");\n');
   await mkdir(path.join(brewPrefix, "bin"), { recursive: true });

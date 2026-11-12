@@ -65,6 +65,7 @@ export function createRendererHostClients(
           if (
             method === "thread/resume" &&
             options === undefined &&
+            !("kind" in target) &&
             target.resumeThread &&
             target.updateConversationState
           ) {

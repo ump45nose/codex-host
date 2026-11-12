@@ -100,6 +100,8 @@ export class SharedThreadBridge {
           return null;
         }
         this.#peer = peer;
+        let queued: JsonObject[] | undefined;
+        let flush: NodeJS.Immediate | undefined;
         peer.subscribe((message) => {
           const params = object(message.params) ? message.params : {};
           if (
@@ -109,9 +111,26 @@ export class SharedThreadBridge {
           ) {
             this.#known.add(params.thread.id);
           }
-          this.#publish(message);
+          if (
+            queued ||
+            (typeof message.id === "string" && message.id.startsWith("shared-interaction:"))
+          ) {
+            (queued ??= []).push(message);
+            // A stream can deliver the resume reply and replay in one read. Let
+            // route() enqueue that reply before forwarding its interaction frames.
+            flush ??= setImmediate(() => {
+              const messages = queued ?? [];
+              queued = undefined;
+              flush = undefined;
+              if (this.#peer === peer) for (const event of messages) this.#publish(event);
+            });
+          } else {
+            this.#publish(message);
+          }
         });
         void peer.closed.then(() => {
+          clearImmediate(flush);
+          queued = undefined;
           if (this.#peer === peer) this.#peer = null;
         });
         // Announce existing Threads when a GUI starts or the SSH service is discovered later.

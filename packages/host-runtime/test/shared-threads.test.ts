@@ -224,8 +224,16 @@ describe("shared external Threads", () => {
     expect(a).toEqual(b);
     expect(String(a.id)).toMatch(/^shared-interaction:/);
     const late = front(false);
+    await late.ready;
+    expect(late.collector.messages.some((m) => m.method === "mcpServer/elicitation/request")).toBe(
+      false,
+    );
+    const resumed = await rpc(late, 25, "thread/resume", { threadId });
     const c = await late.collector.waitFor((m) => m.method === "mcpServer/elicitation/request");
     expect(c).toEqual(a);
+    expect(late.collector.messages.indexOf(resumed)).toBeLessThan(
+      late.collector.messages.indexOf(c),
+    );
     writeRequest(desktop.desktopInput, {
       id: String(b.id),
       result: { action: "accept", content: {}, _meta: null },

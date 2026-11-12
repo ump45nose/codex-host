@@ -121,13 +121,13 @@ describe("shared Thread pending interactions", () => {
       };
       bridge.start((message) => messages.push(message));
       try {
+        const listing = bridge.list({});
         await vi.waitFor(() => expect(requests).toHaveLength(1));
         emit({
           id: requestId(at(requests, 0)),
           result: { data: [{ id: "target" }], nextCursor: null },
         });
-        await vi.waitFor(() => expect(messages).toHaveLength(1));
-        messages.length = 0;
+        await expect(listing).resolves.toMatchObject([{ id: "target" }]);
         for (const round of [0, 1]) {
           const id = 50 + round;
           const response = bridge.route({

@@ -348,6 +348,9 @@ test.describe("Renderer Avatar Overlay (Pet) E2E", () => {
     expect(hitResult.menuRect?.width ?? 0).toBeGreaterThan(150);
     expect(hitResult.menuRect?.height ?? 0).toBeGreaterThan(60);
     expect(hitResult.pillRects).toHaveLength(2);
+    expect((hitResult.menuRect?.top ?? 0) + (hitResult.menuRect?.height ?? 0)).toBeLessThanOrEqual(
+      hitResult.pillRects[0]?.rect?.top ?? 0,
+    );
     for (const pill of hitResult.pillRects) {
       expect(pill.visible).toBe(true);
       expect(pill.hitRegionAttr).toBe("activity-pill");

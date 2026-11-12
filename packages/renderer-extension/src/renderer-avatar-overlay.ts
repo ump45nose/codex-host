@@ -475,7 +475,7 @@ html[${AVATAR_OVERLAY_ROOT_ATTR}="true"] [${AVATAR_OVERLAY_NATIVE_ICON_ATTR}="tr
   border-radius: 999px;
   border: 1px solid rgba(127, 127, 127, 0.26);
   background-color: color-mix(in oklab, var(--color-surface, #1e1e1e) 90%, currentColor 8%);
-  color: var(--color-text-primary, currentColor);
+  color: var(--color-text-primary, #f3f4f6);
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
@@ -844,6 +844,7 @@ export function installRendererAvatarOverlay(
     if (composer.getAttribute("data-avatar-overlay-hit-region") !== "notification-composer") {
       composer.setAttribute("data-avatar-overlay-hit-region", "notification-composer");
     }
+    composer.style.position = "relative";
     unhideElementAndAncestors(composer);
 
     const storage = readStorage();
@@ -926,11 +927,20 @@ export function installRendererAvatarOverlay(
       menu.appendChild(item);
     }
 
+    composer.style.position = "relative";
+    const prevMarginTop = composer.style.marginTop;
     doc.documentElement?.setAttribute(AVATAR_OVERLAY_MENU_OPEN_ATTR, "true");
     composer.appendChild(menu);
-    const over200 = composer.getBoundingClientRect().top > 200;
-    menu.style.bottom = over200 ? "calc(100% + 6px)" : "auto";
-    menu.style.top = over200 ? "auto" : "calc(100% + 6px)";
+    menu.style.bottom = "calc(100% + 6px)";
+    menu.style.top = "auto";
+    const composerRect = composer.getBoundingClientRect();
+    const menuHeight = menu.getBoundingClientRect().height || 132;
+    const logEl = doc.querySelector<HTMLElement>('[role="log"]');
+    const logBottom = logEl ? logEl.getBoundingClientRect().bottom : 0;
+    const minTop = logBottom > 0 && logBottom <= composerRect.top + 4 ? logBottom + 8 : 8;
+    if (composerRect.top > 0 && composerRect.top < minTop + menuHeight + 6) {
+      composer.style.marginTop = `${Math.ceil(minTop + menuHeight + 6 - composerRect.top)}px`;
+    }
 
     const onOutside = (event: MouseEvent): void => {
       const target = event.target as Node | null;
@@ -947,6 +957,7 @@ export function installRendererAvatarOverlay(
     closeAgentMenu = () => {
       doc.removeEventListener("mousedown", onOutside, true);
       doc.documentElement?.removeAttribute(AVATAR_OVERLAY_MENU_OPEN_ATTR);
+      composer.style.marginTop = prevMarginTop;
       menu.remove();
       closeAgentMenu = null;
     };

@@ -1512,11 +1512,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
     fixture.official.stdout.write(
       `${JSON.stringify({ id: threadStart.id, result: { thread: { id: "native-child" } } })}\n`,
     );
-    await answerOfficialChildName(fixture);
-    const turnStart = await readJsonLine(fixture.official.stdin);
-    fixture.official.stdout.write(
-      `${JSON.stringify({ id: turnStart.id, result: { turn: { id: "native-turn" } } })}\n`,
-    );
     const deletion = await readJsonLine(fixture.official.stdin);
     expect(deletion).toMatchObject({
       method: "thread/delete",
@@ -1524,6 +1519,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
     });
     fixture.official.stdout.write(`${JSON.stringify({ id: deletion.id, result: {} })}\n`);
     await expect(pending).rejects.toThrow("Synthetic Delegation write failure");
+    expect(fixture.official.stdin.readableLength).toBe(0);
     await stopFixture(fixture);
   });
 

@@ -1,13 +1,19 @@
 import type { ArtifactSource } from "./artifact.js";
+import {
+  CODEXHOST_DEFAULT_RELEASE_REPOSITORY,
+  releaseChannelBuild,
+  releaseRepositoryUrls,
+  resolveReleaseRepository,
+  type ReleaseRepositoryOptions,
+} from "./release-repository.js";
 import { requireSemanticVersion } from "./status.js";
 
-export const CODEXHOST_LATEST_RELEASE_URL =
-  "https://api.github.com/repos/BytePioneer-AI/codex-host/releases/latest";
+/** Latest-release endpoint of the default (fork) release repository. */
+export const CODEXHOST_LATEST_RELEASE_URL = releaseRepositoryUrls(
+  CODEXHOST_DEFAULT_RELEASE_REPOSITORY,
+).latestReleaseApiUrl;
 
 const SHA256_DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/u;
-const RELEASE_NOTES_URL_PATTERN =
-  /^https:\/\/github\.com\/BytePioneer-AI\/codex-host\/releases\/tag\/(v[0-9A-Za-z.+-]+)$/u;
-const DOWNLOAD_URL_PREFIX = "https://github.com/BytePioneer-AI/codex-host/releases/download/";
 
 export type InstallerReleaseTarget = "macos-arm64" | "macos-x64" | "windows-x64" | "windows-arm64";
 export type ReleaseTarget = InstallerReleaseTarget | "linux-x64" | "linux-arm64";
@@ -31,7 +37,7 @@ export interface SelectedReleaseArtifact {
   source: ArtifactSource;
 }
 
-export interface GitHubReleaseFetchOptions {
+export interface GitHubReleaseFetchOptions extends ReleaseRepositoryOptions {
   fetch?: typeof fetch;
   signal?: AbortSignal;
 }
@@ -43,7 +49,7 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function releaseAsset(value: unknown): CodexhostReleaseAsset {
+function releaseAsset(value: unknown, downloadUrlPrefix: string): CodexhostReleaseAsset {
   const asset = record(value, "GitHub Release asset");
   if (
     typeof asset.name !== "string" ||
@@ -54,7 +60,7 @@ function releaseAsset(value: unknown): CodexhostReleaseAsset {
     (asset.size as number) > 2 * 1024 * 1024 * 1024 ||
     (asset.digest != null && typeof asset.digest !== "string") ||
     typeof asset.browser_download_url !== "string" ||
-    !asset.browser_download_url.startsWith(DOWNLOAD_URL_PREFIX)
+    !asset.browser_download_url.startsWith(downloadUrlPrefix)
   ) {
     throw new Error("GitHub Release asset is invalid");
   }
@@ -70,7 +76,11 @@ function releaseAsset(value: unknown): CodexhostReleaseAsset {
   };
 }
 
-export function parseLatestGitHubRelease(value: unknown): CodexhostLatestRelease {
+export function parseLatestGitHubRelease(
+  value: unknown,
+  options: ReleaseRepositoryOptions = {},
+): CodexhostLatestRelease {
+  const urls = releaseRepositoryUrls(resolveReleaseRepository(options));
   const release = record(value, "GitHub latest Release");
   if (
     release.draft !== false ||
@@ -84,7 +94,7 @@ export function parseLatestGitHubRelease(value: unknown): CodexhostLatestRelease
     throw new Error("GitHub latest Release is invalid");
   }
   const version = requireSemanticVersion(release.tag_name.slice(1));
-  const notesMatch = RELEASE_NOTES_URL_PATTERN.exec(release.html_url);
+  const notesMatch = urls.releaseNotesUrlPattern.exec(release.html_url);
   if (!notesMatch || notesMatch[1] !== release.tag_name) {
     throw new Error("GitHub Release notes URL does not match its tag");
   }
@@ -96,7 +106,9 @@ export function parseLatestGitHubRelease(value: unknown): CodexhostLatestRelease
     version,
     releaseNotes,
     releaseNotesUrl: release.html_url,
-    assets: Object.freeze(release.assets.map(releaseAsset)),
+    assets: Object.freeze(
+      release.assets.map((asset) => releaseAsset(asset, urls.downloadUrlPrefix)),
+    ),
   });
 }
 
@@ -104,7 +116,8 @@ export async function fetchLatestGitHubRelease(
   options: GitHubReleaseFetchOptions = {},
 ): Promise<CodexhostLatestRelease> {
   const fetchImpl = options.fetch ?? fetch;
-  const response = await fetchImpl(CODEXHOST_LATEST_RELEASE_URL, {
+  const repository = resolveReleaseRepository(options);
+  const response = await fetchImpl(releaseRepositoryUrls(repository).latestReleaseApiUrl, {
     headers: {
       accept: "application/vnd.github+json",
       "user-agent": "codexhost-updater",
@@ -115,13 +128,19 @@ export async function fetchLatestGitHubRelease(
   });
   if (!response.ok)
     throw new Error(`GitHub latest Release request failed with HTTP ${response.status}`);
-  return parseLatestGitHubRelease(await response.json());
+  return parseLatestGitHubRelease(await response.json(), { repository });
 }
 
 function numericIdentifiers(value: string): [number, number, number] {
   const core = value.split(/[+-]/u, 1)[0] ?? "";
   const parts = core.split(".").map(Number);
   return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+}
+
+function prereleaseOf(version: string): string | undefined {
+  const withoutBuild = version.split("+", 1)[0] ?? version;
+  const separator = withoutBuild.indexOf("-");
+  return separator === -1 ? undefined : withoutBuild.slice(separator + 1);
 }
 
 export function compareSemanticVersions(leftValue: string, rightValue: string): number {
@@ -133,9 +152,20 @@ export function compareSemanticVersions(leftValue: string, rightValue: string): 
     const difference = (leftNumbers[index] ?? 0) - (rightNumbers[index] ?? 0);
     if (difference !== 0) return difference < 0 ? -1 : 1;
   }
-  const leftPrerelease = left.split("-", 2)[1]?.split("+")[0];
-  const rightPrerelease = right.split("-", 2)[1]?.split("+")[0];
+  const leftPrerelease = prereleaseOf(left);
+  const rightPrerelease = prereleaseOf(right);
   if (leftPrerelease === rightPrerelease) return 0;
+  // Fork channel builds (`X.Y.Z-vincent.N`) are post-releases of upstream X.Y.Z:
+  // stock X.Y.Z ranks as channel build 0, and every channel build outranks the
+  // ordinary prereleases of the same core. They still sort below X.Y.(Z+1).
+  const leftChannel = leftPrerelease === undefined ? 0 : releaseChannelBuild(leftPrerelease);
+  const rightChannel = rightPrerelease === undefined ? 0 : releaseChannelBuild(rightPrerelease);
+  if (leftChannel !== null && rightChannel !== null) {
+    if (leftChannel === rightChannel) return 0;
+    return leftChannel < rightChannel ? -1 : 1;
+  }
+  if (leftChannel !== null) return 1;
+  if (rightChannel !== null) return -1;
   if (leftPrerelease === undefined) return 1;
   if (rightPrerelease === undefined) return -1;
   const leftParts = leftPrerelease.split(".");
@@ -176,12 +206,41 @@ export function selectInstallerReleaseArtifact(
   const digest = asset.digest === null ? null : SHA256_DIGEST_PATTERN.exec(asset.digest);
   const sha256 = digest?.[1];
   if (!sha256) throw new Error(`GitHub Release asset ${name} has no valid SHA-256 digest`);
-  const expectedPrefix = `${DOWNLOAD_URL_PREFIX}v${release.version}/`;
-  if (!asset.downloadUrl.startsWith(expectedPrefix) || !asset.downloadUrl.endsWith(`/${name}`)) {
+  if (!isReleaseDownloadUrl(asset.downloadUrl, release.version, name)) {
     throw new Error(`GitHub Release asset ${name} has an unexpected download URL`);
   }
   return Object.freeze({
     name,
     source: Object.freeze({ url: asset.downloadUrl, sha256, size: asset.size }),
   });
+}
+
+function isReleaseDownloadUrl(url: string, version: string, name: string): boolean {
+  const match =
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/u.exec(url);
+  return match?.[2] === `v${version}` && match[3] === name;
+}
+
+/** npm tarballs published by the release pipeline (see `scripts/release/prepare-npm*.mjs`). */
+export function expectedNpmReleaseAssetNames(version: string, target: ReleaseTarget): string[] {
+  requireSemanticVersion(version);
+  return [`codexhost-cli-${version}.tgz`, `codexhost-cli-${version}-${target}.tgz`];
+}
+
+/**
+ * Fork channel releases are installed from their GitHub Release tarballs instead
+ * of the npm registry, so an npm installation can only take the update when both
+ * the meta package and this platform's package are attached to the Release.
+ */
+export function hasNpmReleaseArtifacts(
+  release: CodexhostLatestRelease,
+  target: ReleaseTarget,
+): boolean {
+  return expectedNpmReleaseAssetNames(release.version, target).every(
+    (name) =>
+      release.assets.filter(
+        (asset) =>
+          asset.name === name && isReleaseDownloadUrl(asset.downloadUrl, release.version, name),
+      ).length === 1,
+  );
 }

@@ -757,3 +757,31 @@ fn node_version_gate_follows_the_npm_engine_range() {
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+#[test]
+fn installs_fork_channel_builds_from_release_tarballs() {
+    let mut r = request();
+    r.action = "update".into();
+    r.version = Some("0.17.2-vincent.1".into());
+    let value = script(&r).unwrap();
+    let url = "https://github.com/ump45nose/codex-host/releases/download/v0.17.2-vincent.1/codexhost-cli-0.17.2-vincent.1.tgz";
+    assert!(value.contains(&format!(
+        "npm pack --dry-run {url} --fetch-retries=0 --fetch-timeout=30000 >/dev/null 2>&1 || exit 53;"
+    )));
+    assert!(value.contains(&format!("npm install -g {url} >/dev/null 2>&1")));
+    assert!(!value.contains("npm view"));
+    r.action = "install".into();
+    assert!(
+        script(&r)
+            .unwrap()
+            .contains(&format!("npm install -g {url} >/dev/null 2>&1 || exit 46;"))
+    );
+    for version in [
+        "0.17.2-rc.1",
+        "0.17.2-vincent",
+        "0.17.2-vincent.1;id",
+        "0.17.2+vincent.1",
+    ] {
+        r.version = Some(version.into());
+        assert!(script(&r).is_err(), "{version}");
+    }
+}

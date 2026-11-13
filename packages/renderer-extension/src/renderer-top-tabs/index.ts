@@ -19,7 +19,6 @@ export const TOP_TABS_ROOT_ATTRIBUTE = "data-codexhost-top-tabs";
 export const TOP_TAB_ATTRIBUTE = "data-codexhost-top-tab";
 
 export type TopTabStatus = "waiting" | "failed" | "running" | "unread" | "idle";
-export type TopTabsDensityMode = "normal" | "crowded" | "compact-icons";
 
 const STATUS_PRIORITY: Readonly<Record<TopTabStatus, number>> = {
   waiting: 5,
@@ -29,13 +28,22 @@ const STATUS_PRIORITY: Readonly<Record<TopTabStatus, number>> = {
   idle: 1,
 };
 
-const STATUS_LABELS: Readonly<Record<TopTabStatus, [string, string]>> = {
-  running: ["运行中", "Running"],
-  waiting: ["待审批", "Approval"],
-  unread: ["未读", "Unread"],
-  failed: ["失败", "Failed"],
-  idle: ["就绪", "Idle"],
+/** Codex Desktop renders a thread's attention state as `data-sidebar-indicator` on its sidebar row. */
+const NATIVE_INDICATOR_STATUS: Readonly<Record<string, TopTabStatus>> = {
+  working: "running",
+  approval: "waiting",
+  input: "waiting",
+  error: "failed",
+  unread: "unread",
 };
+const NATIVE_INDICATOR_ATTRIBUTE = "data-sidebar-indicator";
+const NATIVE_SELECTED_ATTRIBUTE = "data-app-action-sidebar-thread-selected";
+const NATIVE_TITLE_ATTRIBUTE = "data-app-action-sidebar-thread-title";
+/** The trailing status glyph (spinner, dot) inside a native sidebar row. */
+const NATIVE_INDICATOR_GLYPH_SELECTOR =
+  '[data-hover-card-open-immediately] > span:has([data-loading-indicator], [role="status"], .rounded-full)';
+const SIDEBAR_MIRROR_ATTRIBUTE = "data-codexhost-sidebar-thread-mirror";
+const SIDEBAR_SCROLL_SELECTOR = "[data-app-action-sidebar-scroll]";
 
 export interface SidebarThreadSnapshot {
   readonly hostId: string;
@@ -48,18 +56,11 @@ export interface SidebarThreadSnapshot {
   readonly rowElement: HTMLElement;
 }
 
-export interface ActiveSessionStripItem extends Omit<SidebarThreadSnapshot, "rowElement"> {
-  readonly key: string;
-  readonly hostLabel: string | null;
-  readonly iconSignature: string;
-}
-
 export interface InstallRendererTopTabsOptions {
   readonly document?: Document;
   readonly window?: Window;
-  readonly tree?: Pick<RendererSidebarThreadTree, "rootThread" | "liveDescendants"> | null;
+  readonly tree?: Pick<RendererSidebarThreadTree, "rootThread"> | null;
   readonly getLocale?: () => string;
-  readonly getActiveThread?: () => { hostId: string; threadId: HostThreadId } | null;
   readonly getThreadAgent?: (
     hostId: string,
     threadId: HostThreadId,
@@ -87,20 +88,15 @@ const KNOWN_HOST_CASING: Readonly<Record<string, string>> = {
 
 export function resolveShortHostLabel(hostId: string, customLabel?: string | null): string | null {
   const id = hostId.trim();
-  const raw = (customLabel?.trim() || id).replace(/^ssh:\/\//i, "").replace(/^[^@]+@/, "");
+  const raw = (customLabel?.trim() || id)
+    .replace(/^remote-ssh-[a-z-]+:/i, "")
+    .replace(/^ssh:\/\//i, "")
+    .replace(/^[^@]+@/, "");
   if (!id || id === "local" || !raw || raw === "local") return null;
   const ipv4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec(raw);
   if (ipv4?.[1]) return ipv4[1];
   const base = (raw.replace(/:\d+$/, "").split(".")[0] ?? raw).trim() || id;
   return KNOWN_HOST_CASING[base.toLowerCase()] ?? base.slice(0, 16);
-}
-
-export function computeAgentIconSignature(
-  agent: RendererAgent,
-  plugin?: HarnessPluginDescriptor,
-): string {
-  const vec = plugin?.iconStyle?.vector;
-  return `${agent}:${plugin?.name ?? ""}:${plugin?.icon ?? ""}:${vec ? `${vec.color}:${vec.paths.length}` : ""}`;
 }
 
 export function isUnreadOrActiveSessionStatus(
@@ -112,17 +108,6 @@ export function isUnreadOrActiveSessionStatus(
   return status === "failed" && !acknowledgedFailedKeys.has(key);
 }
 
-export function computeTopTabsDensity(
-  availableWidth: number,
-  itemCount: number,
-): TopTabsDensityMode {
-  if (itemCount === 0) return "normal";
-  const avgPerTab = (availableWidth > 0 ? availableWidth : 800) / itemCount;
-  if (itemCount >= 6 || avgPerTab < 135) return "compact-icons";
-  if (itemCount >= 4 || avgPerTab < 185) return "crowded";
-  return "normal";
-}
-
 export function rollupTopTabStatus(statuses: Iterable<TopTabStatus>): TopTabStatus {
   let best: TopTabStatus = "idle";
   for (const status of statuses) {
@@ -131,503 +116,302 @@ export function rollupTopTabStatus(statuses: Iterable<TopTabStatus>): TopTabStat
   return best;
 }
 
-const WAIT_SEL =
-  '[data-thread-approval-badge], [data-testid*="approval"], [data-testid*="waiting"]';
-const RUN_SEL =
-  '[data-testid*="running"], [data-testid*="spinner"], svg.animate-spin, [aria-busy="true"]';
-const TITLE_SEL = "[data-thread-title], [data-thread-title-trigger]";
-
-function inferSidebarRowStatus(row: HTMLElement): TopTabStatus {
-  const a =
-    `${row.getAttribute("data-thread-status") ?? ""} ${row.getAttribute("data-status") ?? ""}`.toLowerCase();
-  if (/wait|approval|question/.test(a) || row.querySelector(WAIT_SEL)) return "waiting";
-  if (/error|fail/.test(a) || row.querySelector('[data-testid*="error"], [data-thread-error]'))
-    return "failed";
-  if (/run|stream|progress/.test(a) || row.querySelector(RUN_SEL)) return "running";
-  if (/unread|review/.test(a) || row.querySelector('[data-thread-unread], [data-unread="true"]'))
-    return "unread";
-  return "idle";
-}
-
-function isRowSelected(row: HTMLElement): boolean {
-  return (
-    row.getAttribute("aria-current") === "page" ||
-    row.getAttribute("aria-selected") === "true" ||
-    row.getAttribute("data-active") === "true" ||
-    row.getAttribute("data-selected") === "true" ||
-    row.getAttribute("data-state") === "active" ||
-    /\b(bg-token-list-active|is-active)\b/.test(row.className || "")
-  );
-}
-
-function readRowTitle(row: HTMLElement, fallbackId: string): string {
-  const raw =
-    row.querySelector(TITLE_SEL)?.textContent ||
-    row.getAttribute("data-thread-title") ||
-    row.getAttribute("title") ||
-    row.textContent ||
-    "";
-  return raw.replace(/\s+/g, " ").trim() || fallbackId;
+export function sidebarRowStatus(row: HTMLElement): TopTabStatus {
+  return NATIVE_INDICATOR_STATUS[row.getAttribute(NATIVE_INDICATOR_ATTRIBUTE) ?? ""] ?? "idle";
 }
 
 function resolveThreadIdFromRow(row: HTMLElement): HostThreadId | null {
-  const fiberId = threadIdFromSidebarRowElement(row);
   const attrs = sidebarThreadAttributes(row);
+  if (!attrs) return null;
   const raw =
-    fiberId ||
-    (attrs?.taskKey.startsWith(`${attrs.hostId}:`)
+    threadIdFromSidebarRowElement(row) ||
+    (attrs.taskKey.startsWith(`${attrs.hostId}:`)
       ? attrs.taskKey.slice(attrs.hostId.length + 1)
-      : attrs?.taskKey);
+      : attrs.taskKey);
   if (!raw || raw.startsWith("client-new-thread:")) return null;
   const parsed = hostThreadIdSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 
+/** Reads every native sidebar thread row once, keyed by `${hostId}:${threadId}`. */
 export function collectSidebarThreads(
   doc: Document,
   getThreadAgent?: InstallRendererTopTabsOptions["getThreadAgent"],
 ): Map<string, SidebarThreadSnapshot> {
   const map = new Map<string, SidebarThreadSnapshot>();
   for (const row of doc.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
-    if (row.hasAttribute("data-codexhost-sidebar-thread-mirror")) continue;
-    const attrs = sidebarThreadAttributes(row);
-    const threadId = attrs ? resolveThreadIdFromRow(row) : null;
-    if (!attrs || !threadId) continue;
-    const key = `${attrs.hostId}:${threadId}`;
-    const existing = map.get(key);
+    if (row.hasAttribute(SIDEBAR_MIRROR_ATTRIBUTE)) continue;
+    const hostId = sidebarThreadAttributes(row)?.hostId;
+    const threadId = hostId ? resolveThreadIdFromRow(row) : null;
+    if (!hostId || !threadId) continue;
+    const key = `${hostId}:${threadId}`;
+    if (map.has(key)) continue;
     const rowAgent = (row
       .querySelector<HTMLElement>(`[${SIDEBAR_AGENT_ICON_ATTRIBUTE}]`)
       ?.getAttribute(SIDEBAR_AGENT_ICON_ATTRIBUTE)
-      ?.trim() ||
-      row.getAttribute("data-agent")?.trim() ||
-      "codex") as RendererAgent;
-    const custom = getThreadAgent?.(attrs.hostId, threadId, rowAgent) ?? null;
-    const plugin = custom?.plugin ?? existing?.plugin;
+      ?.trim() || "codex") as RendererAgent;
+    const resolved = getThreadAgent?.(hostId, threadId, rowAgent) ?? null;
     map.set(key, {
-      hostId: attrs.hostId,
+      hostId,
       threadId,
-      title: existing?.title ?? readRowTitle(row, threadId),
-      status: rollupTopTabStatus([
-        inferSidebarRowStatus(row),
-        ...(existing ? [existing.status] : []),
-      ]),
-      active: isRowSelected(row) || (existing?.active ?? false),
-      agent: custom?.agent ?? existing?.agent ?? rowAgent,
-      ...(plugin ? { plugin } : {}),
-      rowElement: existing?.rowElement ?? row,
+      title: (row.getAttribute(NATIVE_TITLE_ATTRIBUTE) ?? "").trim() || threadId,
+      status: sidebarRowStatus(row),
+      active: row.getAttribute(NATIVE_SELECTED_ATTRIBUTE) === "true",
+      agent: resolved?.agent ?? rowAgent,
+      ...(resolved?.plugin ? { plugin: resolved.plugin } : {}),
+      rowElement: row,
     });
   }
   return map;
 }
 
-const SURFACE_SELECTORS = [
-  '[data-app-shell-active-page="true"] [data-app-shell-main-surface]',
-  '[data-app-shell-main-surface="default"], [data-app-shell-main-surface], [class*="MainContentSurface"]',
-  '[data-app-shell-active-page="true"] [class*="PageSurface"], [data-app-shell-active-page="true"].page-surface',
-  '[data-page-surface], [data-app-shell-page-surface], .page-surface, [class*="PageSurface"]',
-  '[data-app-shell-active-page="true"], [role="main"], main',
-];
-
-function isValidPageSurfaceMountTarget(el: HTMLElement | null | undefined): el is HTMLElement {
-  return Boolean(
-    el &&
-    el.getAttribute("data-app-shell-frame") !== "true" &&
-    !el.hasAttribute("data-app-shell-frame") &&
-    !el.closest("[data-app-shell-titlebar]") &&
-    !el.querySelector("[data-app-shell-titlebar]"),
+function findMountTarget(doc: Document): HTMLElement | null {
+  return doc.querySelector<HTMLElement>(
+    '[data-app-shell-active-page="true"] main[data-app-shell-main-surface], main[data-app-shell-main-surface]',
   );
 }
 
-function findPageSurfaceMountTarget(doc: Document): HTMLElement | null {
-  for (const selector of SURFACE_SELECTORS) {
-    for (const el of doc.querySelectorAll<HTMLElement>(selector)) {
-      if (isValidPageSurfaceMountTarget(el)) return el;
-    }
-  }
-  return null;
+function iconSignature(agent: RendererAgent, plugin?: HarnessPluginDescriptor): string {
+  const vector = plugin?.iconStyle?.vector;
+  return `${agent}:${plugin?.icon ?? ""}:${vector ? `${vector.color}:${vector.paths.length}` : ""}`;
+}
+
+interface StripItem {
+  readonly key: string;
+  readonly snapshot: SidebarThreadSnapshot;
+  readonly status: TopTabStatus;
+  readonly active: boolean;
+  readonly hostLabel: string | null;
 }
 
 export function installRendererTopTabs(
   options: InstallRendererTopTabsOptions = {},
 ): RendererTopTabsHandle {
-  const doc = options.document ?? (typeof document !== "undefined" ? document : null);
-  const win = options.window ?? (typeof window !== "undefined" ? window : null);
+  const doc = options.document ?? document;
+  const win = options.window ?? doc.defaultView ?? window;
   const acknowledgedFailedKeys = options.acknowledgedFailedKeys ?? new Set<string>();
-  if (!doc || !win) {
-    return { refresh: () => undefined, dispose: () => undefined };
-  }
 
   let disposed = false;
-  let viewedLeaseKey: string | null = null;
-  let optimisticActiveKey: string | null = null;
-  let lastDomActiveKey: string | null = null;
-  let lastRenderSignature = "";
-  let lastSnapshotsSignature = "";
-  let currentTrack: HTMLElement | null = null;
-  let currentGlider: HTMLElement | null = null;
+  /** The thread being read keeps its tab until the user leaves it, even after it turns idle. */
+  let viewedKey: string | null = null;
+  let lastSignature = "";
+  /** `null` until the first collection, so stale Pet data from a previous run is replaced. */
+  let lastSyncSignature: string | null = null;
 
-  const createEl = <K extends keyof HTMLElementTagNameMap>(
-    tag: K,
-    className: string,
-    attrs?: Record<string, string>,
-    text?: string,
-  ): HTMLElementTagNameMap[K] => {
-    const node = doc.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    if (attrs) for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-    return node;
-  };
+  const rootKeyOf = (snapshot: SidebarThreadSnapshot): string =>
+    `${snapshot.hostId}:${options.tree?.rootThread?.(snapshot.hostId, snapshot.threadId) ?? snapshot.threadId}`;
 
-  const resolveRootThreadId = (hostId: string, threadId: HostThreadId): HostThreadId =>
-    options.tree?.rootThread ? options.tree.rootThread(hostId, threadId) : threadId;
-
-  const computeSurfaceDensity = (
-    s: HTMLElement | null | undefined,
-    itemCount: number,
-  ): TopTabsDensityMode => {
-    const w =
-      s?.clientWidth || s?.offsetWidth || win.innerWidth || doc.documentElement?.clientWidth || 800;
-    return computeTopTabsDensity(Math.max(200, w - 48), itemCount);
-  };
-
-  const syncGlider = (): void => {
-    if (!currentTrack || !currentGlider) return;
-    const selected = currentTrack.querySelector<HTMLElement>('.session-slot[data-selected="true"]');
-    currentGlider.style.opacity = selected ? "1" : "0";
-    currentGlider.style.width = `${selected?.offsetWidth ?? 0}px`;
-    if (selected)
-      currentGlider.style.transform = `translate3d(${selected.offsetLeft ?? 0}px, 0, 0)`;
-  };
-
-  const syncDensityAndGlider = (itemCount: number): void => {
-    if (!currentTrack) return;
-    const surface = currentTrack.closest<HTMLElement>(
-      `[${TOP_TABS_ROOT_ATTRIBUTE}]`,
-    )?.parentElement;
-    currentTrack.setAttribute("data-density", computeSurfaceDensity(surface, itemCount));
-    syncGlider();
-  };
-
-  const ensureRootContainer = (surface: HTMLElement): HTMLElement => {
-    for (const el of doc.querySelectorAll<HTMLElement>(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) {
-      if (el.parentElement !== surface || !isValidPageSurfaceMountTarget(el.parentElement))
-        el.remove();
-    }
-    let root = surface.querySelector<HTMLElement>(`[${TOP_TABS_ROOT_ATTRIBUTE}]`);
-    if (!root) {
-      root = createEl("div", "session-strip-shell", {
-        [TOP_TABS_ROOT_ATTRIBUTE]: "true",
-        role: "region",
+  const collectItems = (): StripItem[] => {
+    const snapshots = collectSidebarThreads(doc, options.getThreadAgent);
+    const groups = new Map<
+      string,
+      { root: SidebarThreadSnapshot; status: TopTabStatus; active: boolean }
+    >();
+    for (const [key, snapshot] of snapshots) {
+      const rootKey = rootKeyOf(snapshot);
+      const group = groups.get(rootKey);
+      const root = snapshots.get(rootKey) ?? group?.root ?? snapshot;
+      groups.set(rootKey, {
+        root: key === rootKey ? snapshot : root,
+        status: rollupTopTabStatus([snapshot.status, group?.status ?? "idle"]),
+        active: snapshot.active || (group?.active ?? false),
       });
     }
-    if (surface.firstChild !== root) surface.insertBefore(root, surface.firstChild);
-    return root;
+
+    let acknowledgementsChanged = false;
+    let activeKey: string | null = null;
+    for (const [key, group] of groups) {
+      if (group.active) activeKey = key;
+      if (
+        (group.status === "running" || group.status === "waiting") &&
+        acknowledgedFailedKeys.delete(key)
+      )
+        acknowledgementsChanged = true;
+    }
+    const activeGroup = activeKey ? groups.get(activeKey) : undefined;
+    if (
+      activeKey &&
+      activeGroup &&
+      (viewedKey === activeKey ||
+        isUnreadOrActiveSessionStatus(activeGroup.status, activeKey, acknowledgedFailedKeys))
+    ) {
+      viewedKey = activeKey;
+      if (activeGroup.status === "failed" && !acknowledgedFailedKeys.has(activeKey)) {
+        acknowledgedFailedKeys.add(activeKey);
+        acknowledgementsChanged = true;
+      }
+    } else {
+      viewedKey = null;
+    }
+
+    const syncSignature = [...snapshots]
+      .map(([key, s]) => `${key}:${s.status}:${iconSignature(s.agent, s.plugin)}:${s.title}`)
+      .join("|");
+    if (acknowledgementsChanged || syncSignature !== lastSyncSignature) {
+      lastSyncSignature = syncSignature;
+      options.onChange?.();
+    }
+
+    const items: StripItem[] = [];
+    for (const [key, group] of groups) {
+      const visible =
+        viewedKey === key ||
+        isUnreadOrActiveSessionStatus(group.status, key, acknowledgedFailedKeys);
+      if (!visible) continue;
+      items.push({
+        key,
+        snapshot: group.root,
+        status: group.status,
+        active: key === activeKey,
+        hostLabel: resolveShortHostLabel(
+          group.root.hostId,
+          options.getHostLabel?.(group.root.hostId) ?? null,
+        ),
+      });
+    }
+    return items;
+  };
+
+  const createTab = (item: StripItem): HTMLButtonElement => {
+    const { snapshot } = item;
+    const tab = doc.createElement("button");
+    tab.type = "button";
+    tab.className = "codexhost-session-tab";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute(TOP_TAB_ATTRIBUTE, item.key);
+    tab.setAttribute("data-status", item.status);
+    tab.setAttribute("aria-selected", item.active ? "true" : "false");
+    tab.title = item.hostLabel ? `${snapshot.title} · ${item.hostLabel}` : snapshot.title;
+
+    const icon = doc.createElement("span");
+    icon.className = "codexhost-session-tab-icon";
+    icon.appendChild(createRendererAgentIcon(snapshot.agent, 14, doc, snapshot.plugin));
+    tab.appendChild(icon);
+
+    const title = doc.createElement("span");
+    title.className = "codexhost-session-tab-title";
+    title.textContent = snapshot.title;
+    tab.appendChild(title);
+
+    if (item.hostLabel) {
+      const host = doc.createElement("span");
+      host.className = "codexhost-session-tab-host";
+      host.textContent = item.hostLabel;
+      tab.appendChild(host);
+    }
+
+    const glyph = snapshot.rowElement.querySelector(NATIVE_INDICATOR_GLYPH_SELECTOR);
+    if (glyph) {
+      const indicator = glyph.cloneNode(true) as HTMLElement;
+      indicator.classList.add("codexhost-session-tab-indicator");
+      tab.appendChild(indicator);
+    }
+
+    tab.addEventListener("click", (event) => {
+      event.preventDefault();
+      snapshot.rowElement.click();
+    });
+    return tab;
   };
 
   const render = (): void => {
     if (disposed) return;
-    ensureTopTabsStyles(doc);
-    const surface = findPageSurfaceMountTarget(doc);
+    const surface = findMountTarget(doc);
     if (!surface) return;
+    ensureTopTabsStyles(doc);
 
+    let root = surface.querySelector<HTMLElement>(`:scope > [${TOP_TABS_ROOT_ATTRIBUTE}]`);
+    for (const stale of doc.querySelectorAll(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) {
+      if (stale !== root) stale.remove();
+    }
+    if (!root) {
+      root = doc.createElement("div");
+      root.setAttribute(TOP_TABS_ROOT_ATTRIBUTE, "true");
+      root.setAttribute("role", "tablist");
+      lastSignature = "";
+    }
+    if (surface.firstElementChild !== root) surface.prepend(root);
+
+    const items = readTopTabsEnabledPreference(win) ? collectItems() : [];
     const locale = options.getLocale?.() ?? "en-US";
-    const root = ensureRootContainer(surface);
-    root.setAttribute("aria-label", locale.startsWith("zh") ? "活动会话" : "Active sessions");
-
-    const collapseRoot = (sig: string): void => {
-      root.setAttribute("data-hidden", "true");
-      root.setAttribute("aria-hidden", "true");
-      root.replaceChildren();
-      currentTrack = currentGlider = null;
-      lastRenderSignature = sig;
-    };
-
-    if (!readTopTabsEnabledPreference(win)) return collapseRoot("disabled");
-
-    const snapshots = collectSidebarThreads(doc, options.getThreadAgent);
-    const groupedByRoot = new Map<string, SidebarThreadSnapshot>();
-    for (const snap of snapshots.values()) {
-      const rootThreadId = resolveRootThreadId(snap.hostId, snap.threadId);
-      const rootKey = `${snap.hostId}:${rootThreadId}`;
-      const existing = groupedByRoot.get(rootKey);
-      const base = existing ?? snapshots.get(rootKey) ?? snap;
-      groupedByRoot.set(rootKey, {
-        ...base,
-        threadId: rootThreadId,
-        status: existing ? rollupTopTabStatus([existing.status, snap.status]) : snap.status,
-        active: (existing?.active ?? false) || snap.active,
-      });
-    }
-
-    let ackChanged = false;
-    for (const [key, entry] of groupedByRoot) {
-      if (
-        (entry.status === "running" || entry.status === "waiting") &&
-        acknowledgedFailedKeys.delete(key)
-      ) {
-        ackChanged = true;
-      }
-    }
-
-    let domActiveKey: string | null = null;
-    const explicitActive = options.getActiveThread?.();
-    if (explicitActive) {
-      const parsed = hostThreadIdSchema.safeParse(explicitActive.threadId);
-      if (parsed.success)
-        domActiveKey = `${explicitActive.hostId}:${resolveRootThreadId(explicitActive.hostId, parsed.data)}`;
-    }
-    if (!domActiveKey) {
-      for (const [key, entry] of groupedByRoot) {
-        if (entry.active) {
-          domActiveKey = key;
-          break;
-        }
-      }
-    }
-
-    if (domActiveKey !== lastDomActiveKey) {
-      optimisticActiveKey = null;
-      lastDomActiveKey = domActiveKey;
-    }
-    const activeRootKey =
-      optimisticActiveKey && groupedByRoot.has(optimisticActiveKey)
-        ? optimisticActiveKey
-        : domActiveKey;
-
-    if (viewedLeaseKey && activeRootKey !== viewedLeaseKey) viewedLeaseKey = null;
-    const activeEntry = activeRootKey ? groupedByRoot.get(activeRootKey) : undefined;
-    if (
-      activeRootKey &&
-      activeEntry &&
-      (isUnreadOrActiveSessionStatus(activeEntry.status, activeRootKey, acknowledgedFailedKeys) ||
-        viewedLeaseKey === activeRootKey)
-    ) {
-      viewedLeaseKey = activeRootKey;
-      if (activeEntry.status === "failed" && !acknowledgedFailedKeys.has(activeRootKey)) {
-        acknowledgedFailedKeys.add(activeRootKey);
-        ackChanged = true;
-      }
-    } else {
-      viewedLeaseKey = null;
-    }
-
-    const nextSnapshotsSig = [...snapshots.entries()]
-      .map(
-        ([k, s]) =>
-          `${k}:${s.status}:${s.agent}:${computeAgentIconSignature(s.agent, s.plugin)}:${s.title}`,
-      )
-      .join("|");
-    if (ackChanged || nextSnapshotsSig !== lastSnapshotsSignature) {
-      lastSnapshotsSignature = nextSnapshotsSig;
-      options.onChange?.();
-    }
-
-    const visibleItems: ActiveSessionStripItem[] = [];
-    for (const [key, entry] of groupedByRoot) {
-      if (
-        !isUnreadOrActiveSessionStatus(entry.status, key, acknowledgedFailedKeys) &&
-        !(viewedLeaseKey === key && activeRootKey === key)
-      )
-        continue;
-      const hostLabel = resolveShortHostLabel(
-        entry.hostId,
-        options.getHostLabel?.(entry.hostId) ?? null,
-      );
-      visibleItems.push({
-        ...entry,
-        key,
-        hostLabel,
-        iconSignature: computeAgentIconSignature(entry.agent, entry.plugin),
-        active: key === activeRootKey,
-      });
-    }
-
-    if (visibleItems.length === 0) return collapseRoot("empty");
-
-    root.setAttribute("data-hidden", "false");
-    root.removeAttribute("aria-hidden");
-
-    const density = computeSurfaceDensity(surface, visibleItems.length);
     const signature = JSON.stringify([
       locale,
-      density,
-      visibleItems.map((i) => [i.key, i.hostLabel, i.title, i.status, i.iconSignature, i.active]),
+      items.map(({ key, snapshot, status, active, hostLabel }) => [
+        key,
+        snapshot.title,
+        status,
+        active,
+        hostLabel,
+        iconSignature(snapshot.agent, snapshot.plugin),
+        snapshot.rowElement.getAttribute(NATIVE_INDICATOR_ATTRIBUTE),
+      ]),
     ]);
+    if (signature === lastSignature) return;
+    lastSignature = signature;
 
-    if (signature === lastRenderSignature && currentTrack && root.contains(currentTrack)) {
-      syncGlider();
-      return;
+    root.setAttribute("aria-label", locale.startsWith("zh") ? "活动会话" : "Active sessions");
+    root.hidden = items.length === 0;
+    root.replaceChildren(...items.map(createTab));
+    // Tabs keep a readable width and the strip scrolls; keep the open session in view.
+    const selected = root.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (selected) {
+      const start = selected.offsetLeft;
+      const end = start + selected.offsetWidth;
+      if (start < root.scrollLeft) root.scrollLeft = start;
+      else if (end > root.scrollLeft + root.clientWidth) root.scrollLeft = end - root.clientWidth;
     }
-    lastRenderSignature = signature;
-
-    root.replaceChildren();
-    const bar = createEl("div", "session-strip-bar");
-    const track = createEl("div", "session-pill-track", {
-      "data-codexhost-top-tabs-list": "true",
-      "data-density": density,
-      role: "tablist",
-    });
-    const glider = createEl("div", "active-glider-pill", {
-      "data-codexhost-top-tabs-glider": "true",
-    });
-    track.appendChild(glider);
-    currentTrack = track;
-    currentGlider = glider;
-
-    for (const item of visibleItems) {
-      const slot = createEl("div", "session-slot", {
-        "data-session-slot": item.key,
-        "data-selected": item.active ? "true" : "false",
-        "data-icon-signature": item.iconSignature,
-      });
-      const btn = createEl("button", "session-pill-btn", {
-        role: "tab",
-        [TOP_TAB_ATTRIBUTE]: item.key,
-        "data-host-id": item.hostId,
-        "data-thread-id": item.threadId,
-        "data-agent": item.agent,
-        "data-status": item.status,
-        "data-active": item.active ? "true" : "false",
-        "aria-selected": item.active ? "true" : "false",
-      });
-      btn.type = "button";
-      btn.title = item.hostLabel ? `[${item.hostLabel}] ${item.title}` : item.title;
-
-      const iconWrap = createEl("span", "s-icon", { "data-codexhost-top-tab-icon": "true" });
-      iconWrap.appendChild(createRendererAgentIcon(item.agent, 14, doc, item.plugin));
-      btn.appendChild(iconWrap);
-      if (item.hostId !== "local" && item.hostLabel) {
-        btn.appendChild(
-          createEl(
-            "span",
-            "s-host-badge",
-            { "data-codexhost-top-tab-host": "true" },
-            item.hostLabel,
-          ),
-        );
-      }
-      btn.appendChild(
-        createEl(
-          "span",
-          "s-title session-title",
-          { "data-codexhost-top-tab-title": "true" },
-          item.title,
-        ),
-      );
-      const stateText = STATUS_LABELS[item.status][locale.startsWith("zh") ? 0 : 1];
-      btn.appendChild(createEl("span", "s-state-label", { "data-st": item.status }, stateText));
-      btn.appendChild(
-        createEl("span", "s-status", {
-          "data-codexhost-top-tab-status": "true",
-          "data-st": item.status,
-          "data-status": item.status,
-        }),
-      );
-
-      const resetFloating = (): void => {
-        slot.removeAttribute("data-floating");
-        slot.removeAttribute("data-align-right");
-        slot.style.flex = slot.style.width = slot.style.minWidth = slot.style.maxWidth = "";
-      };
-
-      slot.addEventListener("pointerenter", () => {
-        if (
-          track.getAttribute("data-density") !== "compact-icons" ||
-          slot.getAttribute("data-selected") === "true"
-        )
-          return;
-        const startW = slot.offsetWidth || 42;
-        slot.style.flex = `0 0 ${startW}px`;
-        slot.style.width = slot.style.minWidth = slot.style.maxWidth = `${startW}px`;
-        slot.setAttribute("data-floating", "true");
-        const naturalW = Math.min(340, Math.max((btn.scrollWidth || 160) + 6, 150));
-        const barW = bar.clientWidth || root.clientWidth || track.offsetWidth || 600;
-        const slotLeft = slot.offsetLeft || 0;
-        if (slotLeft + naturalW > barW - 8 && slotLeft + startW >= naturalW)
-          slot.setAttribute("data-align-right", "true");
-        else slot.removeAttribute("data-align-right");
-      });
-
-      slot.addEventListener("pointerleave", resetFloating);
-
-      const onActivateSlot = (event: Event): void => {
-        event.preventDefault();
-        event.stopPropagation();
-        resetFloating();
-        viewedLeaseKey = optimisticActiveKey = item.key;
-        if (item.status === "failed" && !acknowledgedFailedKeys.has(item.key)) {
-          acknowledgedFailedKeys.add(item.key);
-          options.onChange?.();
-        }
-        snapshots.get(item.key)?.rowElement.click();
-        lastRenderSignature = "";
-        render();
-      };
-
-      slot.addEventListener("click", onActivateSlot);
-      slot.appendChild(btn);
-      track.appendChild(slot);
-    }
-
-    bar.appendChild(track);
-    root.appendChild(bar);
-    syncDensityAndGlider(visibleItems.length);
   };
 
-  let scanScheduled = false;
-  const scheduleFrame =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0);
+  // A timer rather than requestAnimationFrame: frames stall while the window is hidden or
+  // occluded, but the strip must keep the Pet's session list current in that state.
+  let pendingTimer: number | null = null;
   const scheduleRender = (): void => {
-    if (disposed || scanScheduled) return;
-    scanScheduled = true;
-    scheduleFrame(() => {
-      scanScheduled = false;
+    if (disposed || pendingTimer !== null) return;
+    pendingTimer = win.setTimeout(() => {
+      pendingTimer = null;
       render();
-    });
+    }, 50);
   };
 
-  const onResize = (): void => {
-    if (!disposed && currentTrack)
-      syncDensityAndGlider(currentTrack.querySelectorAll(".session-slot").length);
+  /** Sidebar rows changed, or the mount point itself was (re)placed; transcript updates are ignored. */
+  const isRelevantMutation = (record: MutationRecord): boolean => {
+    if (record.type === "attributes") return true;
+    const target = record.target;
+    if (!(target instanceof Element) || target.closest(`[${TOP_TABS_ROOT_ATTRIBUTE}]`))
+      return false;
+    if (target.closest(SIDEBAR_SCROLL_SELECTOR)) return true;
+    const surface = findMountTarget(doc);
+    return !surface || target === surface || target.contains(surface);
   };
-  win.addEventListener("resize", onResize);
-  const unsubscribePref = subscribeTopTabsPreference(win, () => {
-    lastRenderSignature = "";
-    scheduleRender();
+  const observer = new MutationObserver((records) => {
+    if (records.some(isRelevantMutation)) scheduleRender();
   });
-
-  const isExtMut = (m: MutationRecord): boolean =>
-    !(m.target as HTMLElement | null)?.closest?.(`[${TOP_TABS_ROOT_ATTRIBUTE}]`);
-  const mutationObserver =
-    typeof MutationObserver !== "undefined"
-      ? new MutationObserver((ms) => {
-          if (ms.some(isExtMut)) scheduleRender();
-        })
-      : null;
-  if (mutationObserver && doc.documentElement) {
-    mutationObserver.observe(doc.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-  }
+  observer.observe(doc.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: [
+      NATIVE_INDICATOR_ATTRIBUTE,
+      NATIVE_SELECTED_ATTRIBUTE,
+      NATIVE_TITLE_ATTRIBUTE,
+    ],
+  });
+  const unsubscribePreference = subscribeTopTabsPreference(win, scheduleRender);
 
   render();
 
   return {
     refresh: () => {
-      lastRenderSignature = "";
+      lastSignature = "";
+      lastSyncSignature = null;
       render();
     },
     dispose: () => {
       if (disposed) return;
       disposed = true;
-      win.removeEventListener("resize", onResize);
-      unsubscribePref();
-      mutationObserver?.disconnect();
+      if (pendingTimer !== null) win.clearTimeout(pendingTimer);
+      observer.disconnect();
+      unsubscribePreference();
       for (const el of doc.querySelectorAll(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) el.remove();
     },
   };

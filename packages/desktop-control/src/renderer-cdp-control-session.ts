@@ -18,6 +18,10 @@ import {
   type RendererModuleCdpClient,
 } from "./renderer-loaded-modules.js";
 import { installNativeRpcRemoteControlDirect } from "./renderer-native-rpc-install.js";
+import {
+  AVATAR_OVERLAY_STACK_PATCHED_EXPR,
+  installAvatarOverlayStackHeightPatch,
+} from "./avatar-overlay-stack-height.js";
 import { installRendererRpcSteeringDirect } from "./renderer-rpc-steering.js";
 
 export interface ProductionRendererStatus {
@@ -323,6 +327,7 @@ async function installTarget(
 class InstalledRendererCdpControlSession implements RendererCdpControlSession {
   #closed = false;
   readonly #overlayClients = new Map<string, RendererCdpClient>();
+  readonly #stackPatchReloadedTargets = new Set<string>();
   #overlayPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -398,17 +403,44 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
           client.close();
           return;
         }
-        if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_INSTALLED_EXPR))) {
-          await client.command("Page.enable");
-          await client.command("Page.addScriptToEvaluateOnNewDocument", {
-            source: this.rendererSource,
-          });
+        // Script registration and chunk interception belong to this CDP session, so both are
+        // set up on every connection; they only take effect on the next Pet load.
+        await client.command("Page.enable");
+        await client.command("Page.addScriptToEvaluateOnNewDocument", {
+          source: this.rendererSource,
+        });
+        await installAvatarOverlayStackHeightPatch(client);
+        if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_INSTALLED_EXPR)))
           await evaluateSource(client, this.rendererSource);
-        }
         this.#overlayClients.set(overlay.id, client);
+        if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_STACK_PATCHED_EXPR)))
+          await this.#reloadAvatarOverlay(overlay.id, client);
       } catch {
         client?.close();
       }
+    }
+  }
+
+  /** Applies the stack height patch to a Pet that loaded before this session attached. Once per
+   * target, so an incompatible Codex build is not reloaded again. A Pet that was showing is
+   * reopened, since Codex keeps a reloaded Pet hidden. */
+  async #reloadAvatarOverlay(targetId: string, client: RendererCdpClient): Promise<void> {
+    if (this.#stackPatchReloadedTargets.has(targetId)) return;
+    this.#stackPatchReloadedTargets.add(targetId);
+    const wasVisible = await client.evaluate<boolean>("document.visibilityState === 'visible'");
+    await client.command("Page.reload");
+    if (!wasVisible) return;
+    for (let attempt = 0; attempt < 10 && !this.#closed; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      if (
+        await client.evaluate<boolean>("document.visibilityState === 'visible'").catch(() => true)
+      )
+        return;
+      await this.renderer
+        .evaluate(
+          "void window.electronBridge?.sendMessageFromView?.({ type: 'avatar-overlay-open' })",
+        )
+        .catch(() => undefined);
     }
   }
 

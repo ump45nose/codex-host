@@ -30,6 +30,7 @@
 | [`architecture/delegation-titles.md`](architecture/delegation-titles.md) | 委派子会话标题、子任务显示名、创建快照与重试边界。 |
 | [`architecture/delegation-thread-list.md`](architecture/delegation-thread-list.md) | 委派 CLI 列表的共享 catalog、独立来源分页、查询绑定与活列表一致性边界。 |
 | [`architecture/sidebar-thread-tree.md`](architecture/sidebar-thread-tree.md) | 侧边栏按委派和 Fork 关系缩进父子 Thread 的数据来源、Renderer 绑定与边界。 |
+| [`architecture/avatar-overlay-pet.md`](architecture/avatar-overlay-pet.md) | Pet 窗口的外部 Harness 卡片图标、可调会话栈高度（加载时改写 Codex chunk）与 Quick Chat Agent 选择；修改 Pet 或 Desktop 更新后排查时阅读。 |
 | [`architecture/sidebar-archive-children.md`](architecture/sidebar-archive-children.md) | 归档父 Thread 时询问或按设置归档其委派和 Fork 子 Thread 的交互、实现与边界。 |
 | [`architecture/thread-watch.md`](architecture/thread-watch.md) | Thread 停下通知与可选卡住提醒（`thread watch`）的模型、结果、送达与边界；修改委派跟进或通知时阅读。 |
 | [`architecture/delegation-capacity.md`](architecture/delegation-capacity.md) | 本机同时运行的委派上限：设置下发、计数口径、超出时排队、各命令对排队 Thread 的行为与重启恢复；修改委派启动或该设置时阅读。 |

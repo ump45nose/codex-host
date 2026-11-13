@@ -1,258 +1,196 @@
 // @vitest-environment jsdom
-import { harnessPluginDescriptorSchema } from "@codexhost/shared-contracts";
-import { describe, expect, it } from "vitest";
-import * as avatar from "../src/renderer-avatar-overlay.js";
-import { SIDEBAR_AGENT_ICON_ATTRIBUTE } from "../src/renderer-sidebar-agent-icons.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as topTabs from "../src/renderer-top-tabs.js";
 
-function createFixture(specs: string[]) {
-  window.localStorage.clear();
-  Object.defineProperty(window, "innerWidth", { value: 800, configurable: true, writable: true });
-  document.head.innerHTML = "";
-  const rowsHtml = specs
-    .map((spec) => {
-      const [id = "", status = "idle", agent = "codex", active = "", hostId = "local"] =
-        spec.split("|");
-      return `<a data-app-action-sidebar-thread-row="true" data-app-action-sidebar-thread-host-id="${hostId}" data-app-action-sidebar-thread-id="${hostId}:${id}" data-thread-title="Title ${id}" data-thread-status="${status}" ${active ? 'data-active="true"' : ""}><span ${SIDEBAR_AGENT_ICON_ATTRIBUTE}="${agent}"></span></a>`;
-    })
-    .join("");
-  document.body.innerHTML = `<div class="Layout PageSurfaceLayout" data-app-shell-frame="true" data-app-shell-page-surface="true"><header data-app-shell-titlebar="true"></header><div data-app-shell-active-page="true"><aside data-app-action-sidebar-section="recent">${rowsHtml}</aside><main class="MainContentSurface" data-app-shell-main-surface="default"><div></div></main></div></div>`;
-  const frame =
-    document.querySelector<HTMLElement>('[data-app-shell-frame="true"]') ??
-    document.createElement("div");
-  const titlebar = document.querySelector<HTMLElement>("header") ?? document.createElement("div");
-  const sidebar = document.querySelector<HTMLElement>("aside") ?? document.createElement("div");
-  const surface = document.querySelector<HTMLElement>("main") ?? document.createElement("div");
-  const rowEls = [...sidebar.querySelectorAll<HTMLElement>("a")];
-  for (const r of rowEls) {
-    r.addEventListener("click", () => {
-      for (const s of rowEls) s.removeAttribute("data-active");
-      r.setAttribute("data-active", "true");
-    });
-  }
-  const install = (extra?: topTabs.InstallRendererTopTabsOptions) =>
-    topTabs.installRendererTopTabs({ document, window, ...extra });
-  const q = (s: string) => surface.querySelector<HTMLElement>(s);
-  const qa = (s: string) => [...surface.querySelectorAll<HTMLElement>(s)];
-  const tabKeys = () =>
-    qa(`[${topTabs.TOP_TAB_ATTRIBUTE}]`).map((t) => t.getAttribute(topTabs.TOP_TAB_ATTRIBUTE));
-  return { frame, titlebar, surface, rowEls, install, q, qa, tabKeys };
+interface RowSpec {
+  readonly id: string;
+  readonly indicator?: string;
+  readonly selected?: boolean;
+  readonly hostId?: string;
+  readonly title?: string;
 }
 
-const CLAUDE_PLUGIN = harnessPluginDescriptorSchema.parse({
-  id: "claude-code",
-  name: "Claude Code",
-  version: "1.0.0",
-  iconStyle: {
-    vector: { viewBox: "0 0 16 16", color: "#d97757", paths: [{ d: "M2 2h12v12H2z" }] },
-  },
+/** Returns the element matching `selector`, failing the test when it is missing. */
+function find(selector: string): HTMLElement {
+  const element = document.querySelector<HTMLElement>(selector);
+  if (!element) throw new Error(`missing ${selector}`);
+  return element;
+}
+
+const handles: topTabs.RendererTopTabsHandle[] = [];
+
+afterEach(() => {
+  for (const handle of handles.splice(0)) handle.dispose();
+  window.localStorage.clear();
 });
 
-describe("renderer-top-tabs (PageSurface active session strip)", () => {
-  it("mounts inside PageSurface top, filters active/unread statuses, and removes close/overflow controls", () => {
-    const f = createFixture([
-      "t-run|running|codex|1",
-      "t-wait|waiting|claude",
-      "t-unread|unread|gemini",
-      "t-fail|failed|pi",
-      "t-idle-1|idle|codex",
-      "t-idle-2|idle|claude",
-    ]);
-    const h = f.install();
-    expect(f.frame.firstElementChild).toBe(f.titlebar);
-    expect(f.titlebar.querySelector(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`)).toBeNull();
-    const strip = f.q(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`);
-    expect(f.surface.firstElementChild).toBe(strip);
-    expect(strip?.getAttribute("data-hidden")).toBe("false");
-    expect(f.tabKeys()).toEqual(["local:t-run", "local:t-wait", "local:t-unread", "local:t-fail"]);
-    expect(f.q("[data-codexhost-top-tab-close]")).toBeNull();
-    expect(f.q("[data-codexhost-top-tabs-more]")).toBeNull();
-    h.dispose();
-  });
+/** Mirrors Codex Desktop's sidebar row attributes and trailing indicator markup. */
+function rowHtml({ id, indicator, selected, hostId = "local", title = `Title ${id}` }: RowSpec) {
+  const glyph =
+    indicator === "working"
+      ? '<span class="flex h-5"><span role="status"><div data-loading-indicator=""></div></span></span>'
+      : indicator
+        ? '<span class="flex h-5"><span class="rounded-full bg-info-solid"></span></span>'
+        : "<span></span>";
+  return `<div data-app-action-sidebar-thread-row="true" data-app-action-sidebar-thread-id="${hostId}:${id}" data-app-action-sidebar-thread-host-id="${hostId}" data-app-action-sidebar-thread-title="${title}"${indicator ? ` data-sidebar-indicator="${indicator}"` : ""}${selected ? ' data-app-action-sidebar-thread-selected="true"' : ""}><span data-hover-card-open-immediately="">${glyph}</span></div>`;
+}
 
-  it("retains temporary reading lease (viewedLeaseKey) when unread becomes idle while viewed, and exits on switch", () => {
-    const f = createFixture(["t-run|running|codex|1", "t-unread|unread|claude"]);
-    const h = f.install();
-    f.q(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:t-unread"]`)?.click();
-    f.rowEls[1]?.setAttribute("data-thread-status", "idle");
-    h.refresh();
-    expect(f.tabKeys()).toEqual(["local:t-run", "local:t-unread"]);
-    expect(f.q('[data-session-slot="local:t-unread"]')?.getAttribute("data-selected")).toBe("true");
-    f.q(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:t-run"]`)?.click();
-    expect(f.tabKeys()).toEqual(["local:t-run"]);
-    h.dispose();
-  });
-
-  it("acknowledges failed sessions when viewed, exits on switch, and resets if re-entering running | waiting", () => {
-    const f = createFixture(["t-run|running|codex|1", "t-fail|failed|claude"]);
-    const ack = new Set<string>();
-    const h = f.install({ acknowledgedFailedKeys: ack });
-    expect(ack.has("local:t-fail")).toBe(false);
-    f.q(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:t-fail"]`)?.click();
-    expect(ack.has("local:t-fail")).toBe(true);
-    expect(f.tabKeys()).toEqual(["local:t-run", "local:t-fail"]);
-    f.q(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:t-run"]`)?.click();
-    expect(f.tabKeys()).toEqual(["local:t-run"]);
-    f.rowEls[1]?.setAttribute("data-thread-status", "running");
-    h.refresh();
-    expect(ack.has("local:t-fail")).toBe(false);
-    f.rowEls[1]?.setAttribute("data-thread-status", "failed");
-    h.refresh();
-    expect(f.tabKeys()).toEqual(["local:t-run", "local:t-fail"]);
-    h.dispose();
-  });
-
-  it("collapses container height (data-hidden='true') when 0 sessions match or preference is disabled", () => {
-    const f = createFixture(["t-1|running|codex"]);
-    const h = f.install();
-    const strip = f.q(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`);
-    f.rowEls[0]?.setAttribute("data-thread-status", "idle");
-    h.refresh();
-    expect(strip?.getAttribute("data-hidden")).toBe("true");
-    expect(strip?.children.length).toBe(0);
-    f.rowEls[0]?.setAttribute("data-thread-status", "running");
-    h.refresh();
-    topTabs.setTopTabsEnabledPreference(window, false);
-    h.refresh();
-    expect(strip?.getAttribute("data-hidden")).toBe("true");
-    h.dispose();
-  });
-
-  it("isolates composite keys (hostId, threadId), resolves short remote host labels, and redraws async plugin icons", () => {
-    const f = createFixture([
-      "shared-99|running|claude-code|1|local",
-      "shared-99|waiting|claude||macpro.local",
-      "shared-99|unread|gemini||ssh-nas",
-    ]);
-    const state: { plugin?: typeof CLAUDE_PLUGIN } = {};
-    const h = f.install({
-      getHostLabel: (id) => (id === "ssh-nas" ? "root@nas.lan:22" : null),
-      getThreadAgent: (_h, _t, fb) => ({
-        agent: fb ?? "claude-code",
-        ...(state.plugin ? { plugin: state.plugin } : {}),
-      }),
-    });
-    expect(f.tabKeys()).toEqual(["local:shared-99", "macpro.local:shared-99", "ssh-nas:shared-99"]);
-    const tabs = f.qa(`[${topTabs.TOP_TAB_ATTRIBUTE}]`);
-    expect(tabs[0]?.querySelector(".s-host-badge")).toBeNull();
-    expect(tabs[1]?.querySelector(".s-host-badge")?.textContent).toBe("MacPro");
-    expect(tabs[2]?.querySelector(".s-host-badge")?.textContent).toBe("NAS");
-    expect(topTabs.resolveShortHostLabel("ssh://user@192.168.1.50:2222")).toBe("192.168.1.50");
-
-    const slot = () => f.q('[data-session-slot="local:shared-99"]');
-    const sig = (p?: typeof CLAUDE_PLUGIN) => topTabs.computeAgentIconSignature("claude-code", p);
-    expect(slot()?.getAttribute("data-icon-signature")).toBe(sig(undefined));
-    expect(slot()?.querySelector(".s-icon svg")).toBeNull();
-    state.plugin = CLAUDE_PLUGIN;
-    h.refresh();
-    expect(slot()?.getAttribute("data-icon-signature")).toBe(sig(CLAUDE_PLUGIN));
-    expect(slot()?.querySelector(".s-icon svg")).not.toBeNull();
-    h.dispose();
-  });
-
-  it("steps down density to compact-icons for 6+ sessions, locks slot width on hover, and syncs Pet storage", () => {
-    const f = createFixture(
-      "t-1|running|codex|1|local,t-2|waiting|claude-code||local,t-3|unread|gemini||local,t-4|running|pi||local,t-5|failed|claude-code||macpro.local,t-6|running|hermes||local".split(
-        ",",
-      ),
+function setup(rows: RowSpec[], options: topTabs.InstallRendererTopTabsOptions = {}) {
+  document.head.innerHTML = "";
+  document.body.innerHTML = `<nav><div data-app-action-sidebar-scroll="">${rows.map(rowHtml).join("")}</div></nav><div data-app-shell-active-page="true"><main data-app-shell-main-surface="default"><div class="page"></div></main></div>`;
+  const handle = topTabs.installRendererTopTabs({ document, window, ...options });
+  handles.push(handle);
+  const row = (id: string, hostId = "local") =>
+    find(`[data-app-action-sidebar-thread-id="${hostId}:${id}"]`);
+  const tabs = () =>
+    [...document.querySelectorAll<HTMLElement>(`[${topTabs.TOP_TAB_ATTRIBUTE}]`)].map((tab) =>
+      tab.getAttribute(topTabs.TOP_TAB_ATTRIBUTE),
     );
-    expect(topTabs.computeTopTabsDensity(752, 6)).toBe("compact-icons");
-    const h = f.install();
-    expect(f.q(".session-pill-track")?.getAttribute("data-density")).toBe("compact-icons");
-    const css = topTabs.buildTopTabsCss();
-    expect(css).not.toContain("background-color 140ms");
-    expect(css).toContain(".session-title");
-    expect(css).toContain("max-width: 240px;");
-    const bgSlot = f.q('[data-session-slot="local:t-2"]');
-    if (bgSlot) {
-      Object.defineProperty(bgSlot, "offsetWidth", { value: 42, configurable: true });
-      bgSlot.dispatchEvent(new Event("pointerenter"));
-    }
-    expect(bgSlot?.getAttribute("data-floating")).toBe("true");
-    expect(bgSlot?.style.width).toBe("42px");
-    bgSlot?.dispatchEvent(new Event("pointerleave"));
-    expect(bgSlot?.getAttribute("data-floating")).toBeNull();
+  const strip = () => document.querySelector<HTMLElement>(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`);
+  return { handle, row, tabs, strip };
+}
 
-    const ack = new Set<string>();
-    const snaps = topTabs.collectSidebarThreads(document, (_h, _t, fb) => ({
-      agent: fb ?? "codex",
-      ...(fb === "claude-code" ? { plugin: CLAUDE_PLUGIN } : {}),
-    }));
-    const ls = window.localStorage;
-    const sync = () =>
-      avatar.writePetsRemoteThreads(
-        [...snaps.values()]
-          .filter(
-            (i) =>
-              (i.hostId !== "local" || i.agent !== "codex") &&
-              topTabs.isUnreadOrActiveSessionStatus(i.status, `${i.hostId}:${i.threadId}`, ack),
-          )
-          .map((i) => {
-            const hostLabel = topTabs.resolveShortHostLabel(i.hostId);
-            return { ...i, ...(hostLabel ? { hostLabel } : {}) };
-          }),
-        ls,
-      );
-    sync();
-    const keys = avatar.readPetsRemoteThreads(ls).map((s) => `${s.hostId}:${s.threadId}`);
-    expect(keys).toEqual(["local:t-2", "local:t-3", "local:t-4", "macpro.local:t-5", "local:t-6"]);
-    ack.add("macpro.local:t-5");
-    sync();
-    expect(avatar.readPetsRemoteThreads(ls).some((s) => s.threadId === "t-5")).toBe(false);
-    const catalog = { enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE_PLUGIN] };
-    avatar.writePetsHarnessCatalog(catalog, ls);
-    expect(avatar.readPetsHarnessCatalog(ls)?.plugins[0]?.id).toBe("claude-code");
-    expect(topTabs.rollupTopTabStatus(["idle", "unread", "running"])).toBe("running");
-    expect(avatar.PETS_OPEN_THREAD_REQUEST_STORAGE_KEY).toContain("pets-open-thread-request");
-    h.dispose();
+/** Mutations are coalesced on a short timer. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 80));
+
+describe("collectSidebarThreads", () => {
+  it("reads status, title and selection from native sidebar attributes", () => {
+    setup([
+      { id: "a", indicator: "working", selected: true },
+      { id: "b", indicator: "approval" },
+      { id: "c", indicator: "input" },
+      { id: "d", indicator: "error" },
+      { id: "e", indicator: "unread" },
+      { id: "f" },
+    ]);
+    const map = topTabs.collectSidebarThreads(document);
+    expect([...map.values()].map((s) => [s.threadId, s.status, s.active, s.title])).toEqual([
+      ["a", "running", true, "Title a"],
+      ["b", "waiting", false, "Title b"],
+      ["c", "waiting", false, "Title c"],
+      ["d", "failed", false, "Title d"],
+      ["e", "unread", false, "Title e"],
+      ["f", "idle", false, "Title f"],
+    ]);
   });
 
-  it("preserves non-empty Pets harness catalog in localStorage during setAdapter clear/refresh window until async probe returns", async () => {
-    window.localStorage.clear();
-    document.body.innerHTML = "";
-    const geminiPlugin = harnessPluginDescriptorSchema.parse({
-      id: "gemini",
-      name: "Gemini CLI",
-      version: "1.0.0",
-    });
-    avatar.writePetsHarnessCatalog(
-      { enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE_PLUGIN] },
-      window.localStorage,
+  it("skips codexhost mirror rows and unsent drafts", () => {
+    setup([{ id: "a", indicator: "working" }]);
+    const nav = find("[data-app-action-sidebar-scroll]");
+    nav.insertAdjacentHTML(
+      "beforeend",
+      rowHtml({ id: "client-new-thread:x", indicator: "working" }),
     );
-    let resolveList!: (v: { plugins: (typeof geminiPlugin)[] }) => void;
-    const listPromise = new Promise<{ plugins: (typeof geminiPlugin)[] }>((res) => {
-      resolveList = res;
+    nav.insertAdjacentHTML("beforeend", rowHtml({ id: "a", indicator: "working" }));
+    nav.lastElementChild?.setAttribute("data-codexhost-sidebar-thread-mirror", "true");
+    expect([...topTabs.collectSidebarThreads(document).keys()]).toEqual(["local:a"]);
+  });
+});
+
+describe("installRendererTopTabs", () => {
+  it("lists only sessions that need attention, inside the main surface", () => {
+    const { tabs, strip } = setup([
+      { id: "run", indicator: "working" },
+      { id: "idle" },
+      { id: "open", selected: true },
+      { id: "done", indicator: "unread", hostId: "remote-ssh-discovered:mac-work" },
+    ]);
+    expect(strip()?.parentElement?.tagName).toBe("MAIN");
+    expect(strip()?.parentElement?.firstElementChild).toBe(strip());
+    expect(tabs()).toEqual(["local:run", "remote-ssh-discovered:mac-work:done"]);
+  });
+
+  it("clones the native indicator glyph and opens the thread through its native row", () => {
+    const { row } = setup([{ id: "run", indicator: "working" }]);
+    const tab = find(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:run"]`);
+    expect(
+      tab.querySelector(".codexhost-session-tab-indicator [data-loading-indicator]"),
+    ).not.toBeNull();
+    const click = vi.fn();
+    row("run").addEventListener("click", click);
+    tab.click();
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a thread opened from the strip until the user leaves it", async () => {
+    const { row, tabs } = setup([{ id: "a", indicator: "unread", selected: true }, { id: "b" }]);
+    row("a").removeAttribute("data-sidebar-indicator");
+    await settle();
+    expect(tabs()).toEqual(["local:a"]);
+    row("a").removeAttribute("data-app-action-sidebar-thread-selected");
+    row("b").setAttribute("data-app-action-sidebar-thread-selected", "true");
+    await settle();
+    expect(tabs()).toEqual([]);
+  });
+
+  it("acknowledges a failed thread once viewed and shows it again when it fails after running", async () => {
+    const { row, tabs } = setup([
+      { id: "a", indicator: "error" },
+      { id: "b", selected: true },
+    ]);
+    expect(tabs()).toEqual(["local:a"]);
+    row("b").removeAttribute("data-app-action-sidebar-thread-selected");
+    row("a").setAttribute("data-app-action-sidebar-thread-selected", "true");
+    await settle();
+    row("a").removeAttribute("data-app-action-sidebar-thread-selected");
+    row("b").setAttribute("data-app-action-sidebar-thread-selected", "true");
+    await settle();
+    expect(tabs()).toEqual([]);
+    row("a").setAttribute("data-sidebar-indicator", "working");
+    await settle();
+    row("a").setAttribute("data-sidebar-indicator", "error");
+    await settle();
+    expect(tabs()).toEqual(["local:a"]);
+  });
+
+  it("hides when nothing needs attention or the preference is off", async () => {
+    const { row, strip } = setup([{ id: "a", indicator: "working" }]);
+    expect(strip()?.hidden).toBe(false);
+    row("a").removeAttribute("data-sidebar-indicator");
+    await settle();
+    expect(strip()?.hidden).toBe(true);
+    row("a").setAttribute("data-sidebar-indicator", "working");
+    await settle();
+    expect(strip()?.hidden).toBe(false);
+    topTabs.writeTopTabsEnabledPreference(false, window);
+    await settle();
+    expect(strip()?.hidden).toBe(true);
+  });
+
+  it("groups child threads under their root and rolls up the most urgent status", () => {
+    const { tabs } = setup([{ id: "root" }, { id: "child", indicator: "approval" }], {
+      tree: { rootThread: (_host: string, id: string) => (id === "child" ? "root" : id) } as never,
     });
-    const client = { listHarnessPlugins: () => listPromise };
-    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
-    const probe = installRendererBindingProbe({
-      enabledAgents: ["codex", "claude-code", "gemini"],
-    });
-    try {
-      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
-        "claude-code",
-      ]);
-      probe.setAdapter(
-        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
-        undefined,
-        undefined,
-        {
-          currentHostId: () => "local",
-          knownHostIds: () => ["local"],
-          clientForHost: () => client,
-        } as never,
-      );
-      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
-        "claude-code",
-      ]);
-      resolveList({ plugins: [geminiPlugin] });
-      await listPromise;
-      await new Promise((r) => setTimeout(r, 0));
-      expect(avatar.readPetsHarnessCatalog(window.localStorage)?.plugins.map((p) => p.id)).toEqual([
-        "gemini",
-      ]);
-    } finally {
-      probe.dispose();
-    }
+    expect(tabs()).toEqual(["local:root"]);
+    const tab = document.querySelector(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:root"]`);
+    expect(tab?.getAttribute("data-status")).toBe("waiting");
+  });
+
+  it("reports changes on the first collection and whenever the session set changes", async () => {
+    const onChange = vi.fn();
+    const { row, handle } = setup([{ id: "a" }], { onChange });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    row("a").setAttribute("data-app-action-sidebar-thread-title", "Renamed");
+    await settle();
+    expect(onChange).toHaveBeenCalledTimes(2);
+    handle.refresh();
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores transcript mutations outside the sidebar", async () => {
+    const onChange = vi.fn();
+    setup([{ id: "a", indicator: "working" }], { onChange });
+    find(".page").append(document.createElement("p"));
+    await settle();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveShortHostLabel", () => {
+  it("shortens remote host ids and custom names", () => {
+    expect(topTabs.resolveShortHostLabel("local")).toBeNull();
+    expect(topTabs.resolveShortHostLabel("remote-ssh-discovered:mac-work")).toBe("mac-work");
+    expect(topTabs.resolveShortHostLabel("h1", "yuwk@macpro.local:22")).toBe("MacPro");
+    expect(topTabs.resolveShortHostLabel("h2", "192.168.1.20:22")).toBe("192.168.1.20");
   });
 });

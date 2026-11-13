@@ -106,6 +106,8 @@ export interface RendererSettingsMessages {
   readonly sidebarAutoCollapseDescription: string;
   readonly topTabsTitle: string;
   readonly topTabsDescription: string;
+  readonly petsStackMaxHeightTitle: string;
+  readonly petsStackMaxHeightDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -421,6 +423,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   topTabsTitle: "Top active session strip",
   topTabsDescription:
     "Show only running, waiting, and unread sessions at the top of the page surface; viewed sessions exit smoothly upon leaving.",
+  petsStackMaxHeightTitle: "Pet session stack max height",
+  petsStackMaxHeightDescription:
+    "Height of the expanded session stack next to the Pet, so more sessions show at once. Capped to fit the screen.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -777,6 +782,9 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     "跨入 < 1080px 时触发一次原生收起，保留 57px 侧轨与左缘抽屉；窄屏下手动展开后保持常驻。",
   topTabsTitle: "顶部活动会话条",
   topTabsDescription: "在主内容区顶部仅展示运行中、待确认与未读会话；读完离开平滑退场。",
+  petsStackMaxHeightTitle: "Pet 会话栈最大高度",
+  petsStackMaxHeightDescription:
+    "Pet 旁会话栈展开后的高度，越高同时显示的会话越多；超出屏幕时自动收窄。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

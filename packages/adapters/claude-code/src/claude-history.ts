@@ -11,6 +11,7 @@ import {
   nativeCheckpointRefSchema,
   nativeTurnRefSchema,
   type HarnessId,
+  type JsonValue,
 } from "@codexhost/shared-contracts";
 
 import {
@@ -21,6 +22,7 @@ import {
 import { ClaudeBackgroundOccupancy } from "./background-occupancy.js";
 import { claudeTranscriptItemId } from "./item-identity.js";
 import { readClaudeQueuedCommand } from "./claude-queued-command.js";
+import { ClaudeTaskTracker, isClaudeTaskTool } from "./task-tracker.js";
 
 interface ClaudeHistoryRecord {
   uuid: string;
@@ -32,6 +34,8 @@ interface ClaudeHistoryRecord {
   interrupted: boolean;
   startsTurn: boolean;
   forkSourceUuid?: string;
+  /** Native structured Tool results by call ID, as the live Tool lifecycle receives them. */
+  structuredResults?: Map<string, JsonValue>;
 }
 
 type ClaudeHistoryMessage = ClaudeHistoryRecord &
@@ -247,6 +251,8 @@ function conversationMessages(values: unknown[], sessionId: string): ClaudeHisto
         occupancy.occupySpawn(event.callId, event.taskId);
       } else if (event.type === "subagent.settled") {
         occupancy.notify(event.callId, event.nativeSubagentId);
+      } else if (event.type === "tool.completed" && event.structuredResult !== undefined) {
+        (message.structuredResults ??= new Map()).set(event.callId, event.structuredResult);
       }
     }
     if (notification) pendingNotification = true;
@@ -346,7 +352,12 @@ function itemOutcome(outcome: HistoricalTurnOutcome): HostItemOutcome {
   return { status: "succeeded" };
 }
 
-export function mapClaudeSnapshot(values: unknown[], sessionId: string): HostThreadSnapshot {
+/** `tasks` receives the Session's task state, replayed in order as the live Tool lifecycle does. */
+export function mapClaudeSnapshot(
+  values: unknown[],
+  sessionId: string,
+  tasks = new ClaudeTaskTracker(),
+): HostThreadSnapshot {
   const messages = conversationMessages(values, sessionId);
   const turns: HostThreadSnapshot["turns"] = [];
   for (let index = 0; index < messages.length;) {
@@ -362,6 +373,9 @@ export function mapClaudeSnapshot(values: unknown[], sessionId: string): HostThr
     const turnMessages = messages.slice(index, end);
     const outcome = turnOutcome(turnMessages);
     const results = toolResultBlocks(turnMessages);
+    const structuredResults = new Map(
+      turnMessages.flatMap(({ structuredResults }) => [...(structuredResults ?? [])]),
+    );
     const checkpointIndex = turnMessages.findLastIndex(
       ({ type, interrupted, nested }) => !nested && (type === "assistant" || interrupted),
     );
@@ -537,13 +551,33 @@ export function mapClaudeSnapshot(values: unknown[], sessionId: string): HostThr
             continue;
           }
           const argumentsResult = jsonValueSchema.safeParse(block.input);
+          const outputContent = output
+            ? { output: { content: [{ type: "text" as const, text: output }] } }
+            : {};
+          if (toolItem !== null && isClaudeTaskTool(block.name)) {
+            const todos =
+              !failed && argumentsResult.success
+                ? tasks.apply(block.name, argumentsResult.data, structuredResults.get(block.id))
+                : null;
+            items.push({
+              item: {
+                type: "toolExecution",
+                itemId,
+                toolName: "Todo",
+                arguments: todos ?? {},
+                ...outputContent,
+              },
+              outcome: toolOutcome,
+            });
+            continue;
+          }
           items.push({
             item: {
               type: "toolExecution",
               itemId,
               toolName: block.name,
               arguments: argumentsResult.success ? argumentsResult.data : null,
-              ...(output ? { output: { content: [{ type: "text" as const, text: output }] } } : {}),
+              ...outputContent,
             },
             outcome: toolOutcome,
           });

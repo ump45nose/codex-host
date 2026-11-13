@@ -73,6 +73,8 @@ export interface ExternalThread {
   // history cannot be refreshed.
   projectedTerminalTurnId: HostTurnId | null;
   latestUsage: HostUsage | null;
+  /** turn/plan/updated params projected live since history was last loaded; newer than history. */
+  livePlan: JsonObject | null;
   /** Host metering for the current Session only; replaced with it. */
   usageMeter: UsageMeter;
   usageTurnId: HostTurnId | null;
@@ -433,6 +435,7 @@ export class ExternalThreadRuntime {
       running,
       activeTurnId: null,
       latestUsage: input.session.initialUsage,
+      livePlan: null,
       usageMeter: new UsageMeter(),
       usageTurnId: null,
       projectedTurns: new Map(),
@@ -650,6 +653,7 @@ export class ExternalThreadRuntime {
           ? thread.turns
           : aligned.turns;
       thread.record = aligned.record;
+      if (turns !== thread.turns) thread.livePlan = null;
       thread.turns = turns;
       thread.historyHydrated = true;
       thread.thread = externalThreadValue({
@@ -763,6 +767,7 @@ export class ExternalThreadRuntime {
       thread.session = session;
       thread.record = aligned.record;
       thread.turns = aligned.turns;
+      thread.livePlan = null;
       thread.historyHydrated = true;
       thread.sessionUnavailable = false;
       thread.persistenceError = null;

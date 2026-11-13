@@ -34,7 +34,7 @@
 | B5 | Fork | 原生有则必做 | P1 | 受限 | src/claude-fork.ts、claude-fork-references.ts | test/claude-queued-fork.test.ts、claude-rollback.test.ts、claude-fork-references.test.ts | 校验原生完整前缀；本次不执行真实 Fork |
 | B6 | 跨目录 Fork | 原生有则必做 | P2 | 不支持 | src/claude-code-adapter.ts | history.forkAcrossCwd=false；test/claude-code-adapter.test.ts | 原生会话 cwd 约束 |
 | B7 | 回滚最后一轮 | 原生有则必做 | P1 | 受限 | src/claude-fork.ts、pending-session.ts | test/claude-rollback.test.ts | 派生并校验前缀，不改源 Session |
-| B8 | 工具、命令、文件内容 | 原生有则必做 | P0 | 支持 | src/native-message.ts、tool-lifecycle.ts、file-change.ts | test/native-message.test.ts、file-change.test.ts | 历史不把普通附件当用户输入 |
+| B8 | 工具、命令、文件内容 | 原生有则必做 | P0 | 支持 | src/native-message.ts、tool-lifecycle.ts、file-change.ts、task-tracker.ts、sdk-transport.ts | test/native-message.test.ts、file-change.test.ts、claude-history.test.ts、sdk-transport.test.ts | 历史不把普通附件当用户输入；任务工具见下 |
 | B9 | 审批 | 原生有则必做 | P0 | 支持 | src/sdk-transport.ts、claude-code-adapter.ts | test/sdk-transport.test.ts、claude-code-adapter.test.ts | 使用公共 Interaction |
 | B10 | 提问 | 原生有则必做 | P0 | 支持 | src/sdk-transport.ts、claude-code-adapter.ts | test/sdk-transport.test.ts、claude-code-adapter.test.ts | 使用原生问题回调 |
 | B11 | 原生 Subagent | 原生有则必做 | P2 | 支持 | src/subagent-lifecycle.ts、claude-history.ts | test/claude-history.test.ts、native-message.test.ts | 根级与子 Agent 不混淆 |
@@ -63,12 +63,13 @@
 - A6、B4：取消、无头权限依赖原生能力和确认；不承诺所有 CLI 版本一致。
 - A7：只恢复有明确人类来源的 prompt queued_command；不推断其他附件。原生结果证据不完整时保持 unknown。公共历史 Item 不携带本地 Web requestId 或每条输入的发送时间。
 - B5、B7：只接受原生可精确保留且验证通过的前缀，不把附件 UUID 用作 checkpoint；原生 Fork 未保留内容时拒绝派生结果。
+- B8 任务工具：SDK 启动默认设 `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`（用户已设值时不覆盖；不设 `CLAUDE_CODE_ENABLE_TASKS`，它会让这些工具再次消失），非交互模式因此提供 TaskCreate / TaskGet / TaskList / TaskUpdate。根级调用经 task-tracker 累积为 `Todo` 计划，实时与历史回放用同一套规则：TaskCreate / TaskUpdate 改写，TaskList / TaskGet 只读并以原生结果为准；Subagent 内调用不进入根计划。每次读取历史（含 resume 打开）都用回放结果替换实时 tracker，之后只带状态的 TaskUpdate 直接作用于已有任务。Codex 历史没有待办 Item（`plan` Item 是计划模式正文），Desktop 只从 `turn/plan/updated` 建立计划；Host 在 external thread/resume 与带 Turn 的 thread/read 响应后，对最后一个含计划的历史 Turn 重发一次该通知。Desktop 实际显示未实测。
 - B12、C8：后台续态与额度依原生帧/接口，不将未知状态猜成支持或成功。
 - B15、B16、D3：仅定位既有实现/测试，没有完成完整委派或插件 Loader/发行验证。
 
 ## 插件外改动
 
-`docs/harnesses/claude-code/claude-code-steer.md` 记录冷历史恢复规则、checkpoint 与验证边界。恢复输入使用已有 `HostUserMessageItem`，不扩展公共契约；Web 通过通用的同轮用户 Item 投影独立显示，不读取 Claude 原生 attachment。官方 Codex 的队列和实时工具修复由 Host Runtime 负责，不属于本插件。
+`docs/harnesses/claude-code/claude-code-steer.md` 记录冷历史恢复规则、checkpoint 与验证边界。恢复输入使用已有 `HostUserMessageItem`，不扩展公共契约；Web 通过通用的同轮用户 Item 投影独立显示，不读取 Claude 原生 attachment。官方 Codex 的队列和实时工具修复由 Host Runtime 负责，不属于本插件。计划重放只用于 Claude Code（其他 Harness 的计划随 Turn 结束）：protocol-core 的 `projectHistoricalTurn` 把每个历史 Turn 的最后计划记在不发给客户端的旁路表里，`historicalPlanUpdate` 生成通知；host-runtime `app-server-host.ts` 优先重放实时最新计划（含进行中的 Turn），否则重放历史计划。
 
 ## 验证记录
 
@@ -76,6 +77,7 @@
 |---|---|---|
 | Adapter 公共行为 | `npx vitest run --config tests/vitest.config.js` 指定 claude-queued-history、claude-transcript、claude-history、claude-queued-fork、claude-rollback、claude-fork-references、claude-code-adapter 七个测试文件 | 聚焦历史测试及完整 adapter 文件通过；与 Host 回归合计 312 项 |
 | 类型与静态检查 | 插件 `tsc --noEmit`（buildInfo 放临时目录）；按 tests/tsconfig.json 选取三个所改测试文件创建 TypeScript Program；所改 TS 文件 eslint / prettier；`node tools/check-boundaries.mjs` | 通过；仓库 `npm run build:typescript`、`npm run typecheck` 与所改源码静态检查也通过 |
+| 任务工具 | Claude Code 2.1.323 init 工具列表（由需求方核对）；`claude-history`、`sdk-transport`、`claude-code-adapter`、`native-message` 及 host-runtime `app-server-host.projection-4` 聚焦测试 | 启用变量后出现四个任务工具；聚焦测试通过；未在 Codex Desktop 实测计划面板 |
 | 原生边界 | 当前源码默认 Adapter `open(resume)` / `readSnapshot()` 只读三份既有 CLI 2.1.319 / claude-haiku-4-5-20251001 测试 transcript | 恢复 3 + 2 + 2 条输入，10 + 2 + 2 个 Turn、checkpoint 及其他 Item 不变；重复读取稳定；源文件 SHA-256 不变；不发任务 |
 | 插件加载 | `npm run build:typescript` 包含 `build:plugins`；不替换已安装插件 | 构建通过；已安装 CC 插件加载未验收 |
 | Host 集成 | 运行中共享 Host 保持原状 | 本次未部署修复 |

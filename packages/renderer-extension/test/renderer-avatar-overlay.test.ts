@@ -244,6 +244,7 @@ describe("installRendererAvatarOverlay", () => {
       hostId: "remote-ssh:mac",
       projectId: "p1",
       path: "/Users/me/nook",
+      environment: { type: "local" },
       clientThreadId: "c-1",
     });
     option("data-agent-option", "claude-code").click();

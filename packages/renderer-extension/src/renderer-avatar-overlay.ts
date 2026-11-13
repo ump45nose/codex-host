@@ -16,6 +16,7 @@ import {
   type PetsRemoteProject,
 } from "./renderer-pets-quick-chat-target.js";
 import { createRemoteHostGlobe } from "./renderer-sidebar-remote-projects.js";
+import { writePetsCardThreads } from "./renderer-pets-card-agents.js";
 
 export const AVATAR_OVERLAY_STYLE_ID = "codexhost-avatar-overlay-styles";
 export const AVATAR_OVERLAY_ROOT_ATTR = "data-codexhost-avatar-overlay";
@@ -617,14 +618,19 @@ export function installRendererAvatarOverlay(
     const agents = readPetsThreadAgents(readStorage());
     const cards = doc.querySelectorAll<HTMLElement>("[data-avatar-overlay-activity-stack-item]");
     const threadIds = cards[0] ? readNativeActivityThreadIds(cards[0]) : new Map<string, string>();
+    const cardThreads: string[] = [];
     for (const card of cards) {
       const id = card.getAttribute("data-avatar-overlay-activity-stack-item") ?? "";
       const parsed = parseNativeActivityId(threadIds.get(id) ?? id);
-      const agent = parsed ? agents.get(`${parsed.hostId}:${parsed.threadId}`) : undefined;
+      const key = parsed ? `${parsed.hostId}:${parsed.threadId}` : null;
+      if (key) cardThreads.push(key);
+      const agent = key ? agents.get(key) : undefined;
       if (!agent) card.removeAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR);
       else if (card.getAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR) !== agent)
         card.setAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR, agent);
     }
+    // The main window only knows Agents of threads its sidebar shows; it asks Host for the rest.
+    writePetsCardThreads(cardThreads, readStorage());
   };
 
   // Native Quick Chat leaves the composing state once its editor blurs, so the picker must not

@@ -5,6 +5,7 @@ Codex Desktop 的 Pet 窗口（`app://-/index.html?initialRoute=%2Favatar-overla
 ## 外部 Harness 卡片图标
 
 - 主窗口在侧栏会话变化时，把外部 Harness 会话写入 `localStorage` 的 `codexhost.pets-thread-agents.v1`（键为 `hostId:threadId`，值为 Agent），并把插件图标写入 `codexhost.pets-harness-catalog.v1`。内容不变时不重写。
+- 侧栏只覆盖已展开项目里的会话。Pet 把当前卡片的会话写入 `codexhost.pets-card-threads.v1`，主窗口对其中侧栏没有的会话按 Host 调用 `listThreadOwnership` 查归属，结果并入 `codexhost.pets-thread-agents.v1`；判为 Codex 的会话 30 秒后可再查一次，以覆盖 Host 尚未记下外部会话的情况。
 - Pet 读取原生卡片的 `data-avatar-overlay-activity-stack-item`（`local:local:<id>` 或 `remote-host:<hostId>:<id>`），给外部 Harness 卡片加 `data-codexhost-pets-agent` 属性；图标由样式表在标题前的 `::before` 中绘制。原生节点只多一个属性，不插入子节点。Codex 会话不加图标。
 - 从 Quick Chat 发起的会话，卡片在会话建好后仍保留 `client-new-thread:<uuid>`。真实会话由原生通知的 `notificationPreferenceId` 给出；Pet 从卡片栈组件的 `notifications` prop 读取这一映射后再查 Agent。
 

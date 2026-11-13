@@ -18,6 +18,8 @@ export interface QuickChatRemoteProjectTarget {
   readonly hostId: string;
   readonly projectId: string;
   readonly path: string;
+  /** Quick Chat runs in the project directory itself, never in a new worktree. */
+  readonly environment: { readonly type: "local" };
   readonly clientThreadId: string;
 }
 
@@ -108,6 +110,7 @@ export function installPetsQuickChatTargetHook(
           hostId: project.hostId,
           projectId: project.projectId,
           path: project.path,
+          environment: { type: "local" },
           clientThreadId,
         }
       : undefined;

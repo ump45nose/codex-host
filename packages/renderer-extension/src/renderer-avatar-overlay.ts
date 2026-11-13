@@ -4,7 +4,18 @@ import {
   type HarnessPluginDescriptor,
 } from "@codexhost/shared-contracts";
 import { DEFAULT_RENDERER_AGENTS, type RendererAgent } from "./agent-selection-state.js";
+import { findReactProps } from "./react-fiber-props.js";
 import { createRendererAgentIcon, rendererAgentLabel } from "./renderer-agent-icon.js";
+import {
+  PETS_QUICK_CHAT_TARGET_STORAGE_KEY,
+  PETS_REMOTE_PROJECTS_STORAGE_KEY,
+  installPetsQuickChatTargetHook,
+  readPetsQuickChatTarget,
+  readPetsRemoteProjects,
+  writePetsQuickChatTarget,
+  type PetsRemoteProject,
+} from "./renderer-pets-quick-chat-target.js";
+import { createRemoteHostGlobe } from "./renderer-sidebar-remote-projects.js";
 
 export const AVATAR_OVERLAY_STYLE_ID = "codexhost-avatar-overlay-styles";
 export const AVATAR_OVERLAY_ROOT_ATTR = "data-codexhost-avatar-overlay";
@@ -351,7 +362,7 @@ export function buildAvatarOverlayCss(): string {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 180px;
+  max-width: 260px;
   height: 28px;
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
@@ -374,7 +385,8 @@ export function buildAvatarOverlayCss(): string {
   bottom: 44px;
   display: flex;
   flex-direction: column;
-  min-width: 200px;
+  min-width: 220px;
+  max-width: 320px;
   max-height: 260px;
   padding: 4px;
   overflow-y: auto;
@@ -398,6 +410,21 @@ export function buildAvatarOverlayCss(): string {
   text-align: start;
   cursor: pointer;
 }
+[${AVATAR_OVERLAY_AGENT_MENU_ATTR}] small {
+  margin-inline-start: auto;
+  padding-inline-start: 12px;
+  color: var(--color-token-text-tertiary, currentColor);
+  font-size: var(--text-xs, 12px);
+  white-space: nowrap;
+}
+[${AVATAR_OVERLAY_AGENT_MENU_ATTR}] [role="separator"] {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+[${AVATAR_OVERLAY_AGENT_MENU_ATTR}] button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codexhost-pets-globe { width: 12px !important; height: 12px !important; display: block; flex-shrink: 0; }
 [${AVATAR_OVERLAY_AGENT_MENU_ATTR}] button:hover,
 [${AVATAR_OVERLAY_AGENT_MENU_ATTR}] button[aria-checked="true"] { background: var(--color-token-list-hover-background, rgba(0, 0, 0, 0.05)); }
 `.trim();
@@ -434,6 +461,25 @@ function agentIconBackground(icon: Element): string | null {
 
 const ACTIVE_HANDLE_SYMBOL = Symbol.for("codexhost.avatarOverlayActiveHandle");
 const OWN_NODE_SELECTOR = `[${AVATAR_OVERLAY_AGENT_PILL_ATTR}], [${AVATAR_OVERLAY_AGENT_MENU_ATTR}]`;
+
+/**
+ * A card started from Quick Chat keeps its `client-new-thread:` id after the thread exists; the
+ * native notification behind it names the thread in `notificationPreferenceId`. Maps card id to
+ * that thread id, read from the stack component's `notifications` prop.
+ */
+export function readNativeActivityThreadIds(card: Element): Map<string, string> {
+  const ids = new Map<string, string>();
+  const notifications = findReactProps(card, (props) =>
+    Array.isArray(props.notifications) ? (props.notifications as unknown[]) : null,
+  );
+  for (const notification of notifications ?? []) {
+    if (!isRecord(notification)) continue;
+    const { id, notificationPreferenceId } = notification;
+    if (typeof id === "string" && typeof notificationPreferenceId === "string")
+      ids.set(id, notificationPreferenceId);
+  }
+  return ids;
+}
 
 /** Native Pet activity ids are `local:local:<threadId>` or `remote-host:<hostId>:<threadId>`. */
 export function parseNativeActivityId(id: string): { hostId: string; threadId: string } | null {
@@ -492,12 +538,36 @@ export function installRendererAvatarOverlay(
     return catalogState;
   };
 
+  let remoteProjectsRaw: string | null | undefined;
+  let remoteProjects: PetsRemoteProject[] = [];
+  const resolveRemoteProjects = (): PetsRemoteProject[] => {
+    const storage = readStorage();
+    const raw = storage?.getItem(PETS_REMOTE_PROJECTS_STORAGE_KEY) ?? null;
+    if (raw !== remoteProjectsRaw) {
+      remoteProjectsRaw = raw;
+      remoteProjects = readPetsRemoteProjects(storage);
+    }
+    return remoteProjects;
+  };
+  /** The remote project Quick Chat starts in, or `null` for this machine. */
+  const selectedTarget = (): PetsRemoteProject | null =>
+    readPetsQuickChatTarget(readStorage(), resolveRemoteProjects());
+  /** Agents the selected location can run: every enabled Agent here, the host's installed ones remotely. */
+  const availableAgents = (target = selectedTarget()): readonly RendererAgent[] => {
+    const { enabledAgents } = resolveCatalogState();
+    return target
+      ? enabledAgents.filter((agent) => agent === "codex" || target.agents.includes(agent))
+      : enabledAgents;
+  };
   const selectedAgent = (): RendererAgent => {
     const stored = readStorage()?.getItem(PETS_QUICK_CHAT_AGENT_STORAGE_KEY);
-    return stored && resolveCatalogState().enabledAgents.includes(stored as RendererAgent)
+    return stored && availableAgents().includes(stored as RendererAgent)
       ? (stored as RendererAgent)
       : "codex";
   };
+  const disposeTargetHook = installPetsQuickChatTargetHook(win, selectedTarget);
+  const isChinese = (): boolean =>
+    (doc.documentElement.lang || win.navigator?.language || "").toLowerCase().startsWith("zh");
 
   // Quick Chat creates its thread through a capnweb `startConversation` frame; route it to the
   // selected external Harness by rewriting the model route in that frame only.
@@ -545,12 +615,11 @@ export function installRendererAvatarOverlay(
 
   const tagNativeCards = (): void => {
     const agents = readPetsThreadAgents(readStorage());
-    for (const card of doc.querySelectorAll<HTMLElement>(
-      "[data-avatar-overlay-activity-stack-item]",
-    )) {
-      const parsed = parseNativeActivityId(
-        card.getAttribute("data-avatar-overlay-activity-stack-item") ?? "",
-      );
+    const cards = doc.querySelectorAll<HTMLElement>("[data-avatar-overlay-activity-stack-item]");
+    const threadIds = cards[0] ? readNativeActivityThreadIds(cards[0]) : new Map<string, string>();
+    for (const card of cards) {
+      const id = card.getAttribute("data-avatar-overlay-activity-stack-item") ?? "";
+      const parsed = parseNativeActivityId(threadIds.get(id) ?? id);
       const agent = parsed ? agents.get(`${parsed.hostId}:${parsed.threadId}`) : undefined;
       if (!agent) card.removeAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR);
       else if (card.getAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR) !== agent)
@@ -566,15 +635,59 @@ export function installRendererAvatarOverlay(
     closeAgentMenu?.();
     const portal = doc.querySelector<HTMLElement>("[data-above-composer-portal]");
     if (!portal) return;
-    const { enabledAgents, pluginMap } = resolveCatalogState();
+    const { pluginMap } = resolveCatalogState();
     const current = selectedAgent();
+    const target = selectedTarget();
 
     const menu = doc.createElement("div");
     menu.setAttribute(AVATAR_OVERLAY_AGENT_MENU_ATTR, "true");
     menu.setAttribute("data-avatar-overlay-hit-region", "notification-composer");
     menu.setAttribute("role", "menu");
     menu.addEventListener("mousedown", keepComposerFocus);
-    for (const agent of enabledAgents) {
+    const projects = resolveRemoteProjects();
+    if (projects.length > 0) {
+      const locations: Array<PetsRemoteProject | null> = [null, ...projects];
+      for (const project of locations) {
+        const option = doc.createElement("button");
+        option.type = "button";
+        option.setAttribute("role", "menuitemradio");
+        option.setAttribute(
+          "data-location-option",
+          project ? `${project.hostId}|${project.projectId}` : "local",
+        );
+        const checked = project
+          ? target?.hostId === project.hostId && target.projectId === project.projectId
+          : target === null;
+        option.setAttribute("aria-checked", checked ? "true" : "false");
+        const label = doc.createElement("span");
+        label.textContent = project ? project.label : isChinese() ? "本机" : "This Mac";
+        if (project) {
+          const host = doc.createElement("small");
+          host.textContent = project.hostLabel;
+          option.title = project.path;
+          option.append(
+            createRemoteHostGlobe(doc, project.hostColor, "codexhost-pets-globe"),
+            label,
+            host,
+          );
+        } else {
+          option.append(label);
+        }
+        option.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          writePetsQuickChatTarget(project, readStorage());
+          // The Agent list depends on the location; reopen the menu so it can be picked next.
+          openAgentMenu(pill);
+          scheduleRefresh();
+        });
+        menu.appendChild(option);
+      }
+      const separator = doc.createElement("div");
+      separator.setAttribute("role", "separator");
+      menu.appendChild(separator);
+    }
+    for (const agent of availableAgents(target)) {
       const plugin = pluginMap.get(agent);
       const option = doc.createElement("button");
       option.type = "button";
@@ -650,13 +763,21 @@ export function installRendererAvatarOverlay(
 
     const agent = selectedAgent();
     const plugin = pluginMap.get(agent);
-    const signature = `${agent}:${plugin?.icon ?? ""}`;
+    const target = selectedTarget();
+    const signature = JSON.stringify([agent, plugin?.icon ?? "", target]);
     if (pill.getAttribute("data-agent") === signature) return;
     pill.setAttribute("data-agent", signature);
     const label = doc.createElement("span");
     label.textContent = rendererAgentLabel(agent, plugin);
-    pill.title = label.textContent;
+    pill.title = target
+      ? `${label.textContent} · ${target.label} (${target.hostLabel})`
+      : label.textContent;
     pill.replaceChildren(createRendererAgentIcon(agent, 14, doc, plugin), label);
+    if (target) {
+      const project = doc.createElement("span");
+      project.textContent = target.label;
+      pill.append(createRemoteHostGlobe(doc, target.hostColor, "codexhost-pets-globe"), project);
+    }
   };
 
   const refresh = (): void => {
@@ -682,7 +803,9 @@ export function installRendererAvatarOverlay(
       !event.key ||
       event.key === PETS_THREAD_AGENTS_STORAGE_KEY ||
       event.key === PETS_HARNESS_CATALOG_STORAGE_KEY ||
-      event.key === PETS_QUICK_CHAT_AGENT_STORAGE_KEY
+      event.key === PETS_QUICK_CHAT_AGENT_STORAGE_KEY ||
+      event.key === PETS_QUICK_CHAT_TARGET_STORAGE_KEY ||
+      event.key === PETS_REMOTE_PROJECTS_STORAGE_KEY
     )
       scheduleRefresh();
   };
@@ -716,6 +839,7 @@ export function installRendererAvatarOverlay(
       )
         messagePortProto.postMessage = originalPostMessage;
       closeAgentMenu?.();
+      disposeTargetHook();
       observer.disconnect();
       win.removeEventListener("storage", onStorage);
       doc.documentElement.removeAttribute(AVATAR_OVERLAY_ROOT_ATTR);

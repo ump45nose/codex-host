@@ -1,23 +1,36 @@
 import type { RendererModuleCdpClient } from "./renderer-loaded-modules.js";
 
 /**
- * Codex fixes the Pet activity stack's viewport height in its Pet chunk (208px, or half the work
- * area while Quick Chat is presented). The chunk is rewritten as it loads so the height comes
- * from the codexhost Pet hook; the native expression stays as the fallback. A chunk without the
- * expression, for example after a Codex update, loads unchanged.
+ * Codex fixes two Pet behaviors in its Pet chunk that codexhost makes configurable, so the chunk
+ * is rewritten as it loads. Each rewrite keeps the native value as the fallback, and a chunk
+ * without the expected expression (for example after a Codex update) loads unchanged.
+ *
+ * - The activity stack's viewport height (208px, or half the work area while Quick Chat is
+ *   presented) comes from `__codexhostPetsStackMaxHeight`.
+ * - Quick Chat creates every thread on this machine without a project; the target comes from
+ *   `__codexhostQuickChatTarget`, which may name a remote project instead.
  */
 const STACK_HEIGHT_EXPRESSION =
   /(activityStackMaxViewportHeight\$:[\w$]+\(([\w$]+)=>\{let ([\w$]+)=\2\([\w$]+\)\.quickChat;return )([^{};]+)\}/;
+const QUICK_CHAT_TARGET_EXPRESSION =
+  /(threadSource:"avatar_quick_chat",[^;]{0,300}?target:)\{type:"projectless",clientThreadId:([\w$]+)\}/;
 const PATCHED_MARKER = "__codexhostPetsStackPatched";
 
 export const AVATAR_OVERLAY_STACK_PATCHED_EXPR = `globalThis.${PATCHED_MARKER} === true`;
 
-export function rewriteAvatarOverlayStackHeightSource(source: string): string | null {
-  const match = STACK_HEIGHT_EXPRESSION.exec(source);
-  if (!match) return null;
-  const [whole, head, , quickChat, nativeHeight] = match;
-  const patched = `${head}((h)=>globalThis.__codexhostPetsStackMaxHeight?.(${quickChat},h)??h)(${nativeHeight})}`;
-  return `globalThis.${PATCHED_MARKER}=true;${source.slice(0, match.index)}${patched}${source.slice(match.index + whole.length)}`;
+export function rewriteAvatarOverlayChunkSource(source: string): string | null {
+  let patched = source;
+  const stack = STACK_HEIGHT_EXPRESSION.exec(patched);
+  if (stack) {
+    const [whole, head, , quickChat, nativeHeight] = stack;
+    patched = `globalThis.${PATCHED_MARKER}=true;${patched.slice(0, stack.index)}${head}((h)=>globalThis.__codexhostPetsStackMaxHeight?.(${quickChat},h)??h)(${nativeHeight})}${patched.slice(stack.index + whole.length)}`;
+  }
+  const target = QUICK_CHAT_TARGET_EXPRESSION.exec(patched);
+  if (target) {
+    const [whole, head, clientThreadId] = target;
+    patched = `${patched.slice(0, target.index)}${head}(globalThis.__codexhostQuickChatTarget?.(${clientThreadId})??{type:"projectless",clientThreadId:${clientThreadId}})${patched.slice(target.index + whole.length)}`;
+  }
+  return patched === source ? null : patched;
 }
 
 interface RequestPausedParams {
@@ -36,7 +49,7 @@ const isRequestPaused = (value: unknown): value is RequestPausedParams =>
  * Intercepts the Pet window's async chunks for the lifetime of this CDP session. The HTTP cache
  * is disabled because cached `app://` scripts bypass Fetch interception.
  */
-export async function installAvatarOverlayStackHeightPatch(
+export async function installAvatarOverlayChunkPatch(
   client: RendererModuleCdpClient,
 ): Promise<void> {
   client.on("Fetch.requestPaused", (params) => {
@@ -54,7 +67,7 @@ export async function installAvatarOverlayStackHeightPatch(
               ? Buffer.from(body.body, "base64").toString("utf8")
               : body.body
             : "";
-        const patched = rewriteAvatarOverlayStackHeightSource(source);
+        const patched = rewriteAvatarOverlayChunkSource(source);
         if (patched !== null) {
           await client.command("Fetch.fulfillRequest", {
             requestId,

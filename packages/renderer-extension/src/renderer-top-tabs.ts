@@ -1,9 +1,13 @@
 export {
   TOP_TABS_ROOT_ATTRIBUTE,
   TOP_TAB_ATTRIBUTE,
+  TOP_TABS_COLUMNS,
+  TOP_TABS_MENU_ATTRIBUTE,
+  TOP_TABS_MORE_ATTRIBUTE,
   collectSidebarThreads,
   installRendererTopTabs,
   isUnreadOrActiveSessionStatus,
+  layoutTopTabs,
   resolveShortHostLabel,
   rollupTopTabStatus,
   sidebarRowStatus,
@@ -14,10 +18,14 @@ export {
 } from "./renderer-top-tabs/index.js";
 export {
   DEFAULT_TOP_TABS_ENABLED,
+  DEFAULT_TOP_TABS_TWO_ROWS,
   TOP_TABS_ENABLED_STORAGE_KEY,
   TOP_TABS_PREFERENCE_CHANGE_EVENT,
+  TOP_TABS_TWO_ROWS_STORAGE_KEY,
   readTopTabsEnabledPreference,
+  readTopTabsTwoRowsPreference,
   setTopTabsEnabledPreference,
+  setTopTabsTwoRowsPreference,
   subscribeTopTabsPreference,
   writeTopTabsEnabledPreference,
 } from "./renderer-top-tabs/preference.js";

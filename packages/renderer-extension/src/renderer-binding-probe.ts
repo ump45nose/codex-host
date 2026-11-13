@@ -136,6 +136,14 @@ import {
   writePetsThreadAgents,
 } from "./renderer-avatar-overlay.js";
 import {
+  writePetsRemoteProjects,
+  type PetsRemoteProject,
+} from "./renderer-pets-quick-chat-target.js";
+import {
+  collectSidebarRemoteProjects,
+  readRemoteHostGlobeColors,
+} from "./renderer-sidebar-remote-projects.js";
+import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
@@ -1116,6 +1124,32 @@ export function installRendererBindingProbe(
         if (agent && agent !== "codex") threadAgents[`${hostId}:${threadId}`] = agent;
       }
       writePetsThreadAgents(threadAgents, window.localStorage);
+      // Pet Quick Chat can start in a remote project with any Agent installed on its host.
+      const globeColors = readRemoteHostGlobeColors(document);
+      writePetsRemoteProjects(
+        collectSidebarRemoteProjects(document).map(
+          ({ hostDisplayName, ...project }): PetsRemoteProject => {
+            const state = harnessAvailabilityByHost.get(project.hostId);
+            if (!state?.plugins && !state?.request && state?.retryTimer == null)
+              void refreshHarnessAvailabilityForHost(project.hostId);
+            return {
+              ...project,
+              hostLabel: resolveHostLabel(project.hostId) ?? (hostDisplayName || project.hostId),
+              hostColor: globeColors.get(project.hostId) ?? null,
+              agents: [
+                "codex",
+                ...(state?.plugins ?? EMPTY_PLUGINS)
+                  .filter(({ id }) => {
+                    const status = state?.availability[id];
+                    return status === undefined || status === "checking" || status === "ready";
+                  })
+                  .map(({ id }) => id),
+              ],
+            };
+          },
+        ),
+        window.localStorage,
+      );
       const pluginsById = new Map<string, HarnessPluginDescriptor>();
       let hasResolvedHostDirectory = false;
       for (const [hostId, s] of harnessAvailabilityByHost) {

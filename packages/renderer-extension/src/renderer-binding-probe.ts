@@ -126,6 +126,11 @@ import {
 } from "./renderer-sidebar-stash.js";
 import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
 import {
+  createPetsCardAgentResolver,
+  PETS_CARD_THREADS_STORAGE_KEY,
+  readPetsCardThreads,
+} from "./renderer-pets-card-agents.js";
+import {
   collectSidebarThreads,
   installRendererTopTabs,
   resolveShortHostLabel,
@@ -1115,6 +1120,10 @@ export function installRendererBindingProbe(
     const plugin = pluginForHost(hostId, agent);
     return { agent, ...(plugin ? { plugin } : {}) };
   };
+  const petsCardAgents = createPetsCardAgentResolver({
+    getClient: modelClientForHost,
+    onResolved: () => syncPetsCatalog(),
+  });
   const syncPetsCatalog = (): void => {
     try {
       // The Pet lists sessions natively; it only needs each external thread's Agent for its icon.
@@ -1125,6 +1134,10 @@ export function installRendererBindingProbe(
       ).values()) {
         if (agent && agent !== "codex") threadAgents[`${hostId}:${threadId}`] = agent;
       }
+      Object.assign(
+        threadAgents,
+        petsCardAgents.resolve(readPetsCardThreads(window.localStorage), threadAgents),
+      );
       writePetsThreadAgents(threadAgents, window.localStorage);
       // Pet Quick Chat can start in a remote project with any Agent installed on its host.
       const globeColors = readRemoteHostGlobeColors(document);
@@ -1191,6 +1204,9 @@ export function installRendererBindingProbe(
     acknowledgedFailedKeys,
     onChange: syncPetsCatalog,
   });
+  const onPetsCardThreads = (event: StorageEvent): void => {
+    if (event.key === PETS_CARD_THREADS_STORAGE_KEY) syncPetsCatalog();
+  };
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
@@ -3753,6 +3769,7 @@ export function installRendererBindingProbe(
   window.addEventListener("codexhost:draft-workspace", onDraftWorkspace);
   window.addEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
   window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("storage", onPetsCardThreads);
   delegationMention = installRendererDelegationMention(document, {
     readSkills: (editor) => skillLibrary.read(editor),
     onClose: () => skillLibrary.close(),
@@ -3994,6 +4011,7 @@ export function installRendererBindingProbe(
       window.removeEventListener("codexhost:draft-prewarm-policy-changed", onHostRouteChange);
       window.removeEventListener("codexhost:draft-workspace", onDraftWorkspace);
       window.removeEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
+      window.removeEventListener("storage", onPetsCardThreads);
       window.removeEventListener("focus", onWindowFocus);
       for (const state of harnessAvailabilityByHost.values()) {
         state.requestGeneration += 1;

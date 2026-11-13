@@ -898,13 +898,11 @@ class ClaudeHarnessSession implements HarnessSession {
         };
       }
       try {
-        return {
-          ok: true,
-          value: {
-            ...mapClaudeSnapshot(messages, this.#sessionId, this.#mcpServers),
-            state: this.#state,
-          },
-        };
+        const tasks = new ClaudeTaskTracker();
+        const snapshot = mapClaudeSnapshot(messages, this.#sessionId, this.#mcpServers, tasks);
+        // Native tasks outlive a Turn; later status-only updates apply to the restored list.
+        this.#taskTracker.replaceWith(tasks);
+        return { ok: true, value: { ...snapshot, state: this.#state } };
       } catch {
         return {
           ok: false,

@@ -184,6 +184,67 @@ describe("installRendererTopTabs", () => {
     await settle();
     expect(onChange).toHaveBeenCalledTimes(1);
   });
+
+  it("mounts on the page on screen when Codex keeps hidden pages mounted", () => {
+    setup([{ id: "a", indicator: "working" }]);
+    find("[data-app-shell-active-page]").insertAdjacentHTML(
+      "beforebegin",
+      '<div data-app-shell-active-page="false"><main data-app-shell-main-surface="default"></main></div>',
+    );
+    handles[0]?.refresh();
+    expect(
+      document
+        .querySelector(`[${topTabs.TOP_TABS_ROOT_ATTRIBUTE}]`)
+        ?.closest("[data-app-shell-active-page]")
+        ?.getAttribute("data-app-shell-active-page"),
+    ).toBe("true");
+  });
+
+  it("marks remote tabs with their host's globe color from the sidebar project icon", () => {
+    const { strip } = setup([{ id: "r", indicator: "working", hostId: "remote-ssh:mac" }]);
+    const nav = find("[data-app-action-sidebar-scroll]");
+    nav.insertAdjacentHTML(
+      "beforeend",
+      '<span data-sidebar-project-kind="remote"><svg style="--remote-host-globe-color: #ffc300"></svg></span>',
+    );
+    const svg = nav.querySelector("svg") as SVGElement;
+    Object.defineProperty(svg, "__reactFiber$test", {
+      value: {
+        memoizedProps: { style: {} },
+        return: { memoizedProps: { hostId: "remote-ssh:mac" } },
+      },
+    });
+    handles[0]?.refresh();
+    expect(strip()?.querySelector(".codexhost-session-tab-host path")?.getAttribute("fill")).toBe(
+      "#ffc300",
+    );
+  });
+
+  it("wraps into two rows of five and collapses the rest into a +N menu", async () => {
+    const rows = Array.from({ length: 13 }, (_, i) => ({
+      id: `t${i}`,
+      indicator: "working",
+      selected: i === 12,
+    }));
+    const { tabs } = setup(rows);
+    // Nine tabs and the "+N" cell fill the 5 × 2 grid; the open thread stays visible.
+    expect(tabs()).toHaveLength(9);
+    expect(tabs()[8]).toBe("local:t12");
+    const more = find(`[${topTabs.TOP_TABS_MORE_ATTRIBUTE}]`);
+    expect(more.textContent).toBe("+4");
+    more.click();
+    const menuItems = [
+      ...document.querySelectorAll(`[${topTabs.TOP_TABS_MENU_ATTRIBUTE}] [role="menuitem"]`),
+    ].map((item) => item.getAttribute(topTabs.TOP_TAB_ATTRIBUTE));
+    expect(menuItems).toEqual(["local:t8", "local:t9", "local:t10", "local:t11"]);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(document.querySelector(`[${topTabs.TOP_TABS_MENU_ATTRIBUTE}]`)).toBeNull();
+
+    topTabs.setTopTabsTwoRowsPreference(window, false);
+    await settle();
+    expect(tabs()).toHaveLength(4);
+    expect(find(`[${topTabs.TOP_TABS_MORE_ATTRIBUTE}]`).textContent).toBe("+9");
+  });
 });
 
 describe("resolveShortHostLabel", () => {

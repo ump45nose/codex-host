@@ -1,6 +1,7 @@
 import "./renderer-schema-config.js";
 import { installRendererBinding } from "./install-renderer-binding.js";
 import {
+  installPetsStackHeightHook,
   installRendererAvatarOverlay,
   isAvatarOverlayLocation,
 } from "./renderer-avatar-overlay.js";
@@ -49,6 +50,10 @@ const install = (): void => {
   }
   installRendererBinding();
 };
+
+// The Pet chunk reads its stack height as soon as it renders, before the DOM is ready for the
+// overlay itself.
+if (isAvatarOverlayLocation(window.location)) installPetsStackHeightHook(window);
 
 if (document.documentElement && document.body) {
   install();

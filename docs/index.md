@@ -34,6 +34,7 @@
 | [`architecture/delegation-thread-list.md`](architecture/delegation-thread-list.md) | 委派 CLI 列表的共享 catalog、独立来源分页、查询绑定与活列表一致性边界。 |
 | [`architecture/web-thread-tree.md`](architecture/web-thread-tree.md) | Web 侧栏会话树：委派关系决定的显示父 Thread、Host 树接口、祖先补齐、归档级联、排序与置顶规则；修改侧栏层级或委派显示时阅读。 |
 | [`architecture/sidebar-thread-tree.md`](architecture/sidebar-thread-tree.md) | 侧边栏按委派和 Fork 关系缩进父子 Thread 的数据来源、Renderer 绑定与边界。 |
+| [`architecture/avatar-overlay-pet.md`](architecture/avatar-overlay-pet.md) | Pet 窗口的外部 Harness 卡片图标、可调会话栈高度（加载时改写 Codex chunk）与 Quick Chat Agent 选择；修改 Pet 或 Desktop 更新后排查时阅读。 |
 | [`architecture/sidebar-archive-children.md`](architecture/sidebar-archive-children.md) | 归档父 Thread 时询问或按设置归档其委派和 Fork 子 Thread 的交互、实现与边界。 |
 | [`architecture/thread-watch.md`](architecture/thread-watch.md) | 一次性 Thread 停下或等待回答通知（`thread watch`）的模型、结果、送达与边界；修改委派跟进或通知时阅读。 |
 | [`architecture/external-clients.md`](architecture/external-clients.md) | 同用户 CLI 自动认证、命名客户端登记、本机监听、Thread 引用、调试导出、事件日志与 MCP；修改外部接入时阅读。 |

@@ -20,8 +20,8 @@ import {
 import { installNativeRpcRemoteControlDirect } from "./renderer-native-rpc-install.js";
 import {
   AVATAR_OVERLAY_STACK_PATCHED_EXPR,
-  installAvatarOverlayStackHeightPatch,
-} from "./avatar-overlay-stack-height.js";
+  installAvatarOverlayChunkPatch,
+} from "./avatar-overlay-chunk-patch.js";
 import { installRendererRpcSteeringDirect } from "./renderer-rpc-steering.js";
 
 export interface ProductionRendererStatus {
@@ -409,7 +409,7 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
         await client.command("Page.addScriptToEvaluateOnNewDocument", {
           source: this.rendererSource,
         });
-        await installAvatarOverlayStackHeightPatch(client);
+        await installAvatarOverlayChunkPatch(client);
         if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_INSTALLED_EXPR)))
           await evaluateSource(client, this.rendererSource);
         this.#overlayClients.set(overlay.id, client);

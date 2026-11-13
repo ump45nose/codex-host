@@ -12,11 +12,22 @@ import {
   threadIdFromSidebarRowElement,
 } from "../renderer-sidebar-agent-icons.js";
 import type { RendererSidebarThreadTree } from "../renderer-sidebar-thread-tree.js";
-import { readTopTabsEnabledPreference, subscribeTopTabsPreference } from "./preference.js";
+import {
+  createRemoteHostGlobe,
+  readRemoteHostGlobeColors,
+} from "../renderer-sidebar-remote-projects.js";
+import {
+  readTopTabsEnabledPreference,
+  readTopTabsTwoRowsPreference,
+  subscribeTopTabsPreference,
+} from "./preference.js";
 import { ensureTopTabsStyles } from "./style.js";
 
 export const TOP_TABS_ROOT_ATTRIBUTE = "data-codexhost-top-tabs";
 export const TOP_TAB_ATTRIBUTE = "data-codexhost-top-tab";
+export const TOP_TABS_MORE_ATTRIBUTE = "data-codexhost-top-tabs-more";
+export const TOP_TABS_MENU_ATTRIBUTE = "data-codexhost-top-tabs-menu";
+export const TOP_TABS_COLUMNS = 5;
 
 export type TopTabStatus = "waiting" | "failed" | "running" | "unread" | "idle";
 
@@ -44,6 +55,7 @@ const NATIVE_INDICATOR_GLYPH_SELECTOR =
   '[data-hover-card-open-immediately] > span:has([data-loading-indicator], [role="status"], .rounded-full)';
 const SIDEBAR_MIRROR_ATTRIBUTE = "data-codexhost-sidebar-thread-mirror";
 const SIDEBAR_SCROLL_SELECTOR = "[data-app-action-sidebar-scroll]";
+const ACTIVE_PAGE_ATTRIBUTE = "data-app-shell-active-page";
 
 export interface SidebarThreadSnapshot {
   readonly hostId: string;
@@ -165,9 +177,12 @@ export function collectSidebarThreads(
   return map;
 }
 
+/** Codex keeps several pages mounted; the strip belongs to the one on screen. */
 function findMountTarget(doc: Document): HTMLElement | null {
-  return doc.querySelector<HTMLElement>(
-    '[data-app-shell-active-page="true"] main[data-app-shell-main-surface], main[data-app-shell-main-surface]',
+  return (
+    doc.querySelector<HTMLElement>(
+      `[${ACTIVE_PAGE_ATTRIBUTE}="true"] main[data-app-shell-main-surface]`,
+    ) ?? doc.querySelector<HTMLElement>("main[data-app-shell-main-surface]")
   );
 }
 
@@ -182,6 +197,27 @@ interface StripItem {
   readonly status: TopTabStatus;
   readonly active: boolean;
   readonly hostLabel: string | null;
+  /** `undefined` for local threads; `null` for a remote host whose color is not known. */
+  readonly hostColor: string | null | undefined;
+}
+
+/** Fills `columns × rows` cells; when more remain, the last cell becomes "+N" and the open thread stays visible. */
+export function layoutTopTabs<T extends { readonly active: boolean }>(
+  items: readonly T[],
+  rows: number,
+): { visible: T[]; overflow: T[] } {
+  const capacity = TOP_TABS_COLUMNS * rows;
+  if (items.length <= capacity) return { visible: [...items], overflow: [] };
+  const visible = items.slice(0, capacity - 1);
+  const overflow = items.slice(capacity - 1);
+  const activeIndex = overflow.findIndex((item) => item.active);
+  if (activeIndex >= 0) {
+    const [active] = overflow.splice(activeIndex, 1);
+    const displaced = visible.pop();
+    if (displaced) overflow.unshift(displaced);
+    if (active) visible.push(active);
+  }
+  return { visible, overflow };
 }
 
 export function installRendererTopTabs(
@@ -195,6 +231,7 @@ export function installRendererTopTabs(
   /** The thread being read keeps its tab until the user leaves it, even after it turns idle. */
   let viewedKey: string | null = null;
   let lastSignature = "";
+  let menuOpen = false;
   /** `null` until the first collection, so stale Pet data from a previous run is replaced. */
   let lastSyncSignature: string | null = null;
 
@@ -253,6 +290,7 @@ export function installRendererTopTabs(
     }
 
     const items: StripItem[] = [];
+    const globeColors = readRemoteHostGlobeColors(doc);
     for (const [key, group] of groups) {
       const visible =
         viewedKey === key ||
@@ -267,17 +305,19 @@ export function installRendererTopTabs(
           group.root.hostId,
           options.getHostLabel?.(group.root.hostId) ?? null,
         ),
+        hostColor:
+          group.root.hostId === "local" ? undefined : (globeColors.get(group.root.hostId) ?? null),
       });
     }
     return items;
   };
 
-  const createTab = (item: StripItem): HTMLButtonElement => {
+  const createTab = (item: StripItem, inMenu = false): HTMLButtonElement => {
     const { snapshot } = item;
     const tab = doc.createElement("button");
     tab.type = "button";
     tab.className = "codexhost-session-tab";
-    tab.setAttribute("role", "tab");
+    tab.setAttribute("role", inMenu ? "menuitem" : "tab");
     tab.setAttribute(TOP_TAB_ATTRIBUTE, item.key);
     tab.setAttribute("data-status", item.status);
     tab.setAttribute("aria-selected", item.active ? "true" : "false");
@@ -293,12 +333,8 @@ export function installRendererTopTabs(
     title.textContent = snapshot.title;
     tab.appendChild(title);
 
-    if (item.hostLabel) {
-      const host = doc.createElement("span");
-      host.className = "codexhost-session-tab-host";
-      host.textContent = item.hostLabel;
-      tab.appendChild(host);
-    }
+    if (item.hostColor !== undefined)
+      tab.appendChild(createRemoteHostGlobe(doc, item.hostColor, "codexhost-session-tab-host"));
 
     const glyph = snapshot.rowElement.querySelector(NATIVE_INDICATOR_GLYPH_SELECTOR);
     if (glyph) {
@@ -309,11 +345,42 @@ export function installRendererTopTabs(
 
     tab.addEventListener("click", (event) => {
       event.preventDefault();
+      if (menuOpen) setMenuOpen(false);
       snapshot.rowElement.click();
     });
     return tab;
   };
 
+  const setMenuOpen = (open: boolean): void => {
+    if (menuOpen === open) return;
+    menuOpen = open;
+    lastSignature = "";
+    render();
+  };
+
+  const createMore = (overflow: readonly StripItem[], locale: string): HTMLElement[] => {
+    const more = doc.createElement("button");
+    more.type = "button";
+    more.className = "codexhost-session-tab";
+    more.setAttribute(TOP_TABS_MORE_ATTRIBUTE, "true");
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", menuOpen ? "true" : "false");
+    more.setAttribute("data-status", rollupTopTabStatus(overflow.map((item) => item.status)));
+    more.title = locale.startsWith("zh")
+      ? `另外 ${overflow.length} 个会话`
+      : `${overflow.length} more sessions`;
+    more.textContent = `+${overflow.length}`;
+    more.addEventListener("click", (event) => {
+      event.preventDefault();
+      setMenuOpen(!menuOpen);
+    });
+    if (!menuOpen) return [more];
+    const menu = doc.createElement("div");
+    menu.setAttribute(TOP_TABS_MENU_ATTRIBUTE, "true");
+    menu.setAttribute("role", "menu");
+    menu.append(...overflow.map((item) => createTab(item, true)));
+    return [more, menu];
+  };
   const render = (): void => {
     if (disposed) return;
     const surface = findMountTarget(doc);
@@ -333,15 +400,21 @@ export function installRendererTopTabs(
     if (surface.firstElementChild !== root) surface.prepend(root);
 
     const items = readTopTabsEnabledPreference(win) ? collectItems() : [];
+    const rows = readTopTabsTwoRowsPreference(win) ? 2 : 1;
+    const { visible, overflow } = layoutTopTabs(items, rows);
+    if (overflow.length === 0) menuOpen = false;
     const locale = options.getLocale?.() ?? "en-US";
     const signature = JSON.stringify([
       locale,
-      items.map(({ key, snapshot, status, active, hostLabel }) => [
+      rows,
+      menuOpen,
+      overflow.length,
+      items.map(({ key, snapshot, status, active, hostColor }) => [
         key,
         snapshot.title,
         status,
         active,
-        hostLabel,
+        hostColor,
         iconSignature(snapshot.agent, snapshot.plugin),
         snapshot.rowElement.getAttribute(NATIVE_INDICATOR_ATTRIBUTE),
       ]),
@@ -351,15 +424,10 @@ export function installRendererTopTabs(
 
     root.setAttribute("aria-label", locale.startsWith("zh") ? "活动会话" : "Active sessions");
     root.hidden = items.length === 0;
-    root.replaceChildren(...items.map(createTab));
-    // Tabs keep a readable width and the strip scrolls; keep the open session in view.
-    const selected = root.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (selected) {
-      const start = selected.offsetLeft;
-      const end = start + selected.offsetWidth;
-      if (start < root.scrollLeft) root.scrollLeft = start;
-      else if (end > root.scrollLeft + root.clientWidth) root.scrollLeft = end - root.clientWidth;
-    }
+    root.replaceChildren(
+      ...visible.map((item) => createTab(item)),
+      ...(overflow.length > 0 ? createMore(overflow, locale) : []),
+    );
   };
 
   // A timer rather than requestAnimationFrame: frames stall while the window is hidden or
@@ -391,12 +459,29 @@ export function installRendererTopTabs(
     subtree: true,
     attributes: true,
     attributeFilter: [
+      ACTIVE_PAGE_ATTRIBUTE,
       NATIVE_INDICATOR_ATTRIBUTE,
       NATIVE_SELECTED_ATTRIBUTE,
       NATIVE_TITLE_ATTRIBUTE,
     ],
   });
   const unsubscribePreference = subscribeTopTabsPreference(win, scheduleRender);
+  const onPointerDown = (event: Event): void => {
+    const target = event.target;
+    if (
+      menuOpen &&
+      !(
+        target instanceof Element &&
+        target.closest(`[${TOP_TABS_MENU_ATTRIBUTE}], [${TOP_TABS_MORE_ATTRIBUTE}]`)
+      )
+    )
+      setMenuOpen(false);
+  };
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (menuOpen && event.key === "Escape") setMenuOpen(false);
+  };
+  doc.addEventListener("pointerdown", onPointerDown, true);
+  doc.addEventListener("keydown", onKeyDown, true);
 
   render();
 
@@ -412,6 +497,8 @@ export function installRendererTopTabs(
       if (pendingTimer !== null) win.clearTimeout(pendingTimer);
       observer.disconnect();
       unsubscribePreference();
+      doc.removeEventListener("pointerdown", onPointerDown, true);
+      doc.removeEventListener("keydown", onKeyDown, true);
       for (const el of doc.querySelectorAll(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) el.remove();
     },
   };

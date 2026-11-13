@@ -4,16 +4,13 @@ export const TOP_TABS_STYLE_ID = "codexhost-top-tabs-styles";
 export function buildTopTabsCss(): string {
   return `
 [data-codexhost-top-tabs] {
-  container-type: inline-size;
   position: relative;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   min-width: 0;
   padding: 6px 12px 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
   font: inherit;
   color: var(--color-token-text-secondary);
   -webkit-app-region: no-drag;
@@ -23,8 +20,7 @@ export function buildTopTabsCss(): string {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 180px;
-  min-width: 168px;
+  min-width: 0;
   height: 28px;
   padding: 0 8px;
   border: 0;
@@ -38,18 +34,37 @@ export function buildTopTabsCss(): string {
 .codexhost-session-tab:hover { background: var(--color-token-list-hover-background); color: var(--color-token-foreground); }
 .codexhost-session-tab:focus-visible { outline: 2px solid var(--color-token-focus-border); outline-offset: -2px; }
 .codexhost-session-tab[aria-selected="true"] {
-  flex-basis: 220px;
   background: var(--color-token-interactive-bg-secondary-selected);
   color: var(--color-token-foreground);
 }
+.codexhost-session-tab[data-codexhost-top-tabs-more] { justify-content: center; font-variant-numeric: tabular-nums; }
+.codexhost-session-tab[data-codexhost-top-tabs-more][aria-expanded="true"] { background: var(--color-token-list-hover-background); color: var(--color-token-foreground); }
 .codexhost-session-tab-icon { display: inline-flex; flex-shrink: 0; }
 .codexhost-session-tab-icon :is(svg, img) { width: 14px; height: 14px; display: block; }
-.codexhost-session-tab-title { flex: 1 1 0; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
-.codexhost-session-tab-host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-token-text-tertiary); }
+.codexhost-session-tab-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.codexhost-session-tab-host { flex-shrink: 0; width: 12px; height: 12px; display: block; }
 .codexhost-session-tab-indicator { flex-shrink: 0; }
-@container (max-width: 720px) {
-  .codexhost-session-tab:not([aria-selected="true"]) { flex: 0 0 auto; min-width: 0; }
-  .codexhost-session-tab:not([aria-selected="true"]) :is(.codexhost-session-tab-title, .codexhost-session-tab-host) { display: none; }
+[data-codexhost-top-tabs-menu] {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 12px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100% - 24px));
+  max-height: 360px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--color-token-menu-border, var(--color-token-dropdown-border));
+  border-radius: 12px;
+  background: var(--color-token-menu-background, var(--color-token-dropdown-background));
+  color: var(--color-token-menu-foreground, var(--color-token-foreground));
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
+}
+[data-codexhost-top-tabs-menu] .codexhost-session-tab { flex-shrink: 0; width: 100%; }
+[data-codexhost-top-tabs-menu] .codexhost-session-tab:hover {
+  background: var(--color-token-menu-selection-background, var(--color-token-list-hover-background));
+  color: var(--color-token-menu-selection-foreground, var(--color-token-foreground));
 }
 `.trim();
 }

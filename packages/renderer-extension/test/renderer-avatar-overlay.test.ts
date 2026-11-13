@@ -18,6 +18,7 @@ import {
   writePetsThreadAgents,
   type RendererAvatarOverlayHandle,
 } from "../src/renderer-avatar-overlay.js";
+import { writePetsRemoteProjects } from "../src/renderer-pets-quick-chat-target.js";
 
 /** Returns the element matching `selector`, failing the test when it is missing. */
 function find(selector: string): HTMLElement {
@@ -142,6 +143,26 @@ describe("installRendererAvatarOverlay", () => {
     expect(cardAgent("remote-host:remote-ssh-discovered:mac-work:r-1")).toBeNull();
   });
 
+  it("resolves Quick Chat cards that keep a client id through the native notification", () => {
+    const { install } = setup();
+    seedCatalog();
+    const stack = find('[data-avatar-overlay-size="notification-tray"]');
+    stack.insertAdjacentHTML(
+      "beforeend",
+      '<div data-avatar-overlay-activity-stack-item="client-new-thread:c-1"><div data-avatar-overlay-activity-text="title">Quick</div></div>',
+    );
+    const notifications = [
+      { id: "client-new-thread:c-1", notificationPreferenceId: "local:local:ext-1" },
+    ];
+    for (const card of stack.querySelectorAll("[data-avatar-overlay-activity-stack-item]"))
+      Object.defineProperty(card, "__reactFiber$test", {
+        value: { memoizedProps: {}, return: { memoizedProps: { notifications } } },
+      });
+    install();
+    expect(cardAgent("client-new-thread:c-1")).toBe("claude-code");
+    expect(cardAgent("local:local:codex-1")).toBeNull();
+  });
+
   it("shows the Agent picker only while composing, above the bar without taking focus", async () => {
     const { install } = setup("minimized");
     seedCatalog();
@@ -178,6 +199,70 @@ describe("installRendererAvatarOverlay", () => {
     expect(document.querySelector(`[${AVATAR_OVERLAY_AGENT_PILL_ATTR}]`)?.textContent).toBe(
       "Claude Code",
     );
+  });
+
+  it("starts Quick Chat in a picked remote project with that host's Agents", async () => {
+    const { install } = setup("composing");
+    seedCatalog();
+    writePetsRemoteProjects(
+      [
+        {
+          hostId: "remote-ssh:mac",
+          hostLabel: "MacAir",
+          hostColor: "#ffc300",
+          projectId: "p1",
+          label: "nook",
+          path: "/Users/me/nook",
+          agents: ["codex", "claude-code"],
+        },
+        {
+          hostId: "remote-ssh:nas",
+          hostLabel: "NAS",
+          hostColor: null,
+          projectId: "p2",
+          label: "jobs",
+          path: "/srv/jobs",
+          agents: ["codex"],
+        },
+      ],
+      window.localStorage,
+    );
+    install();
+    const hook = () =>
+      (
+        window as unknown as { __codexhostQuickChatTarget?: (id: string) => unknown }
+      ).__codexhostQuickChatTarget?.("c-1");
+    expect(hook()).toBeUndefined();
+
+    const openMenu = () => find(`[${AVATAR_OVERLAY_AGENT_PILL_ATTR}]`).click();
+    const option = (attr: string, value: string) =>
+      find(`[${AVATAR_OVERLAY_AGENT_MENU_ATTR}] [${attr}="${value}"]`);
+    openMenu();
+    option("data-location-option", "remote-ssh:mac|p1").click();
+    expect(hook()).toEqual({
+      type: "remoteProject",
+      hostId: "remote-ssh:mac",
+      projectId: "p1",
+      path: "/Users/me/nook",
+      clientThreadId: "c-1",
+    });
+    option("data-agent-option", "claude-code").click();
+    await settle();
+    expect(find(`[${AVATAR_OVERLAY_AGENT_PILL_ATTR}]`).textContent).toBe("Claude Codenook");
+
+    // A host without the selected Agent falls back to Codex.
+    openMenu();
+    option("data-location-option", "remote-ssh:nas|p2").click();
+    expect(
+      document.querySelector(
+        `[${AVATAR_OVERLAY_AGENT_MENU_ATTR}] [data-agent-option="claude-code"]`,
+      ),
+    ).toBeNull();
+    await settle();
+    expect(find(`[${AVATAR_OVERLAY_AGENT_PILL_ATTR}]`).textContent).toBe("Codexjobs");
+
+    option("data-location-option", "local").click();
+    expect(hook()).toBeUndefined();
   });
 
   it("routes Quick Chat to the selected Harness and leaves Codex untouched", () => {

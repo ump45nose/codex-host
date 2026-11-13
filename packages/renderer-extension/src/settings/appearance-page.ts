@@ -21,7 +21,9 @@ import {
 } from "../renderer-sidebar-overlay.js";
 import {
   readTopTabsEnabledPreference,
+  readTopTabsTwoRowsPreference,
   setTopTabsEnabledPreference,
+  setTopTabsTwoRowsPreference,
   subscribeTopTabsPreference,
 } from "../renderer-top-tabs.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
@@ -158,15 +160,35 @@ export function createAppearanceSettingsPage(
         controlId: topTabsId,
       });
       const topTabsToggle = createPreferenceSwitch(document, topTabsId, topTabsRow.description.id);
-      topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
       topTabsToggle.addEventListener("change", () => {
         setTopTabsEnabledPreference(ownerWindow, topTabsToggle.checked);
       });
-      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, () => {
-        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
-      });
       topTabsRow.item.append(topTabsToggle);
       sidebar.card.append(topTabsRow.item);
+
+      const topTabsRowsId = preferenceId("top-tabs-two-rows");
+      const topTabsRowsRow = createPreferenceItem(document, {
+        title: messages.topTabsTwoRowsTitle,
+        description: messages.topTabsTwoRowsDescription,
+        controlId: topTabsRowsId,
+      });
+      const topTabsRowsToggle = createPreferenceSwitch(
+        document,
+        topTabsRowsId,
+        topTabsRowsRow.description.id,
+      );
+      topTabsRowsToggle.addEventListener("change", () => {
+        setTopTabsTwoRowsPreference(ownerWindow, topTabsRowsToggle.checked);
+      });
+      topTabsRowsRow.item.append(topTabsRowsToggle);
+      sidebar.card.append(topTabsRowsRow.item);
+      const syncTopTabs = (): void => {
+        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+        topTabsRowsToggle.checked = readTopTabsTwoRowsPreference(ownerWindow);
+        topTabsRowsToggle.disabled = !topTabsToggle.checked;
+      };
+      syncTopTabs();
+      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, syncTopTabs);
 
       const petsHeightId = preferenceId("pets-stack-max-height");
       const petsHeightRow = createPreferenceItem(document, {

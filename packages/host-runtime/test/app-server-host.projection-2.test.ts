@@ -420,13 +420,20 @@ describe("AppServerHost HarnessAdapter projection", () => {
       },
     });
     session.appendText("Checking auth.");
-    await expect(
-      delegationApi.read({ threadId: started.threadId, view: "result" }),
-    ).resolves.toMatchObject({
-      status: "running",
-      progress: [expect.objectContaining({ text: "Checking auth." })],
-      result: { availability: "pending" },
-    });
+    // The Session emits the item update on its event channel and the Host
+    // projects it asynchronously, so poll instead of assuming the read below
+    // already observes the appended text.
+    await vi.waitFor(
+      async () =>
+        expect(
+          await delegationApi.read({ threadId: started.threadId, view: "result" }),
+        ).toMatchObject({
+          status: "running",
+          progress: [expect.objectContaining({ text: "Checking auth." })],
+          result: { availability: "pending" },
+        }),
+      { timeout: 5_000 },
+    );
     session.succeedTurn();
     const completed = await fixture.collector.waitFor(
       (message) =>

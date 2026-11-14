@@ -46,6 +46,7 @@ import {
   PiRpcFaultError,
   type PiAutonomousTurn,
   type PiCompactResult,
+  type PiImageContent,
   type PiInteractionResponse,
   type PiRpcSessionOptions,
   type PiSessionState,
@@ -180,14 +181,17 @@ class FakePiTransport implements PiTurnTransport {
       return { outcome: "succeeded" };
     },
   );
-  readonly runTurn = vi.fn((text: string, onEvent: (event: PiTurnEvent) => void) => {
-    this.text = text;
-    this.onEvent = onEvent;
-    return new Promise<PiTurnResult>((resolve, reject) => {
-      this.resolveTurn = resolve;
-      this.rejectTurn = reject;
-    });
-  });
+  readonly runTurn = vi.fn(
+    (text: string, onEvent: (event: PiTurnEvent) => void, images?: PiImageContent[]) => {
+      void images;
+      this.text = text;
+      this.onEvent = onEvent;
+      return new Promise<PiTurnResult>((resolve, reject) => {
+        this.resolveTurn = resolve;
+        this.rejectTurn = reject;
+      });
+    },
+  );
   history: PiSessionHistory = { entries: [], leafId: null };
   onEvent: ((event: PiTurnEvent) => void) | null = null;
   assistantMessageId: string | null = null;
@@ -2079,6 +2083,35 @@ describe("Pi HarnessAdapter Session", () => {
     });
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     await session.close();
+  });
+
+  it("sends Desktop image attachments as native prompt images with the unchanged text", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pi-adapter-images-"));
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+      const shot = path.join(directory, "shot.png");
+      const missing = path.join(directory, "missing.png");
+      await writeFile(shot, png);
+      const text =
+        `# Files mentioned by the user:\n\n## shot.png: ${shot}\nImage attachment: true\n\n` +
+        `## missing.png: ${missing}\nImage attachment: true\n\n## My request:\nWhat is this?`;
+      const { adapter, transports } = fixture();
+      const session = await openSession(adapter);
+      await expect(
+        session.execute({
+          type: "turn.start",
+          turnId: hostTurnIdSchema.parse("image-turn"),
+          input: [{ type: "text", text }],
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(transports[0]?.runTurn).toHaveBeenCalledWith(text, expect.any(Function), [
+        { type: "image", data: png.toString("base64"), mimeType: "image/png" },
+      ]);
+      transports[0]?.succeed("A screenshot");
+      await session.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("starts lazily and emits an ordered successful text lifecycle", async () => {

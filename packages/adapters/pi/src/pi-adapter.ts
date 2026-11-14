@@ -115,9 +115,11 @@ import {
   type PiAutonomousTurn,
   type PiAutonomousTurnLifecycle,
   type PiCompactResult,
+  type PiImageContent,
   type PiTurnEvent,
   type PiTurnResult,
 } from "./pi-rpc-session.js";
+import { piPromptImages } from "./pi-turn-input.js";
 import {
   decodePiModelRef,
   encodePiModelRef,
@@ -174,7 +176,11 @@ export interface PiTurnTransport {
     customInstructions: string | undefined,
     onEvent: (event: PiTurnEvent) => void,
   ): Promise<PiCompactResult>;
-  runTurn(text: string, onEvent: (event: PiTurnEvent) => void): Promise<PiTurnResult>;
+  runTurn(
+    text: string,
+    onEvent: (event: PiTurnEvent) => void,
+    images?: PiImageContent[],
+  ): Promise<PiTurnResult>;
   respondToInteraction(response: PiInteractionResponse): Promise<void>;
   abort(): Promise<void>;
   close(): Promise<void>;
@@ -626,6 +632,7 @@ class PiHarnessSession implements HarnessSession {
 
     this.#acceptingTurn = true;
     try {
+      const images = await piPromptImages(text);
       let transport: PiTurnTransport;
       try {
         transport = await this.#ensureTransport();
@@ -690,7 +697,7 @@ class PiHarnessSession implements HarnessSession {
       this.#event({ type: "item.started", turnId: command.turnId, item });
 
       void transport
-        .runTurn(text, (event) => this.#handleTurnEvent(active, event))
+        .runTurn(text, (event) => this.#handleTurnEvent(active, event), images)
         .then(async (result) => {
           active.settling = true;
           try {

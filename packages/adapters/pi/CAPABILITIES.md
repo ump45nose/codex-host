@@ -19,7 +19,7 @@
 | A2 | 工厂 | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
 | A3 | 检查 | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
 | A4 | 创建 Session | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
-| A5 | 执行 Turn | 必做 | P0 | 受限 | Pi RPC / adapter | 请求与自主回合组合回归 | 本轮验证准入、输出和终态；Desktop 应用待验收 |
+| A5 | 执行 Turn | 必做 | P0 | 受限 | Pi RPC / adapter、pi-turn-input | 请求与自主回合组合回归；pi-turn-input.test.ts；Pi 1.5.2 实机附图回合 | 本轮验证准入、输出和终态；Desktop 图片附件作为 RPC `prompt.images` 发送（仅 ≤20 MiB 的 PNG/JPEG/GIF/WebP，每 Turn 合计 ≤32 MiB，其他只保留路径文字）；Desktop 应用待验收 |
 | A6 | 取消 | 必做 | P0 | 受限 | Pi RPC / adapter | 首消息前取消、旧轮收尾、close 回归 | 不误取消后继自主回合 |
 | A7 | 只读快照 | 必做 | P0 | 受限 | pi-history | 真实历史候选回放 | 可见通知、phase 和命令元数据；不宣称所有快照形态已覆盖 |
 | A8 | 持久身份 + resume | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
@@ -63,6 +63,14 @@
 - 构建与加载：Pi 生产构建、完整类型检查、定向 ESLint / Prettier、boundary 检查通过；候选 Bundle 在临时隔离根经公共 Loader 冷加载，创建／关闭未启动原生进程或请求模型。
 - 限制：本地为 macOS / Node 24.18.0；Windows／WSL 实机验证未执行，跨平台合成回放不作为实机通过。保留既有 Native Session 的目录，不把 Windows Pi 自动切换为 WSL 内的 Pi。
 - 插件外改动：`docs/architecture/harness-executable-discovery.md` 补充此启动边界；无 Host、Renderer、共享契约或其他 Adapter 改动。
+
+## 图片输入验证范围（2026-11-14）
+
+- 开始 Turn 时，从 Desktop 附件清单读出图片路径，按出现顺序去重；先查大小、读文件头识别 PNG/JPEG/GIF/WebP，≤20 MiB 且本 Turn 合计不超过 32 MiB 才整文件读入，以 Pi `ImageContent`（`{type:"image",data,mimeType}`）放入 RPC `prompt` 的 `images` 字段，原文字不变。读不到、目录、超限、超出合计或其他格式（如 HEIC/SVG）不附图，只保留路径文字，Turn 照常开始。
+- 原生形态核对：Pi 1.5.2 的 `docs/rpc-commands.md` 与 `dist/modes/rpc/rpc-mode.js`（`prompt` 把 `command.images` 交给 `session.prompt`），`agent-session.js` 在开始 Run 前按当前模型缩放图片，故 Adapter 不做尺寸限制。
+- 实机：本机 Pi 1.5.2 经构建后的 `PiRpcSession` 发送带 64×64 红色 PNG 附件清单的 Turn（magpie/antigravity/gemini-4-hydrogen），模型回答 "Red"，原生历史用户消息为 text + image 块。
+- 回归：pi-turn-input、pi-rpc-session、pi-adapter 3 文件 177 项通过，其中新增 7 项在改动前失败；`npx tsc -b`、所改文件 ESLint / Prettier、boundary 检查通过。
+- 限制：未在真实 Desktop 附图流程中验收。Pi 缩放图片时会在原生用户文字末尾追加尺寸说明，历史回放的用户消息会带这段说明。运行中插入（steer）不在本次范围。
 
 ## 受限与已知缺口
 

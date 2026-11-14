@@ -80,6 +80,7 @@ class FakePiRpcProcess extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   fastEnabled = false;
   readonly commands: string[] = [];
+  readonly frames: Record<string, unknown>[] = [];
   holdEntries = false;
   holdStates = false;
   holdAborts = false;
@@ -275,6 +276,7 @@ class FakePiRpcProcess extends EventEmitter {
     const command = value as Record<string, unknown>;
     if (typeof command.id !== "string" || typeof command.type !== "string") return;
     this.commands.push(command.type);
+    this.frames.push(command);
     if (command.type === "abort" && this.holdAborts) {
       this.#heldAborts.push(command);
       return;
@@ -2161,6 +2163,24 @@ describe("Pi RPC Turn aggregation", () => {
     await waitFor(() => turns.length === 1);
     expect(turns[0]).toMatchObject({ nativeTurnKey: null, result: { status: "failed" } });
     expect(onFault).toHaveBeenCalledOnce();
+    await rpc.close();
+  });
+
+  it("sends Turn images in the native prompt's images field and omits it without images", async () => {
+    const child = new FakePiRpcProcess("final-only");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), closeTimeoutMs: 500 },
+      { spawn: () => child as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    const image = { type: "image" as const, data: "iVBORw0KGgo=", mimeType: "image/png" as const };
+    await rpc.runTurn("look", () => undefined, [image]);
+    await rpc.runTurn("plain", () => undefined);
+    const prompts = child.frames.filter((frame) => frame.type === "prompt");
+    expect(prompts).toEqual([
+      { id: expect.any(String), type: "prompt", message: "look", images: [image] },
+      { id: expect.any(String), type: "prompt", message: "plain" },
+    ]);
     await rpc.close();
   });
 

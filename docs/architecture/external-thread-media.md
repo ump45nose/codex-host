@@ -63,6 +63,8 @@ Desktop 发送带图片的消息时，请求里既有 `localImage` 条目，也�
 
 `protocol-core` 投影用户消息时，从文字中 `## My request:` 之前的附件清单读出这些路径，补回 `localImage` 条目，放在文字之后。开始 Turn、运行中插入和历史回放三处投影一致，因此新旧会话都显示缩略图，`imageCount` 也与 Desktop 的乐观消息一致。解析规则在 `@codexhost/shared-contracts` 的 `desktopImageAttachmentPaths`，Renderer 的远程附件补存使用同一规则。
 
+Pi Adapter 开始 Turn 时用同一规则读出附件清单里的图片，原文字不变放入 RPC `prompt` 的 `message`，按出现顺序（同一路径只发一次）把图片以 `{type: "image", data, mimeType}` 放入 `images` 字段，由 Pi 按当前模型缩放。先查文件大小、只读文件头识别格式，只发送不超过 20 MiB 的 PNG、JPEG、GIF、WebP，同一 Turn 的图片合计不超过 32 MiB（所有图片在一行 RPC 里发送，需在 prompt 超时内被 Pi 读完）；其他格式、超限、超出合计或读不到的文件只保留文字中的路径，不拒绝该输入。Pi 原生历史里用户消息带 image 块，回放仍按文字及附件清单还原。
+
 边界：
 
 - 只认附件清单中的绝对路径；用户在请求正文里写的路径不算附件。附件清单必须位于消息开头（前面只允许空行），遇到单独成行的 `## My request:` 时结束；纯图片消息没有该标题时，清单延伸到文本末尾。清单前有其他文字时不读取附件。

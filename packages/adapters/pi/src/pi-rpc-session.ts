@@ -102,6 +102,13 @@ export type PiInteractionResponse =
   | { requestId: string; value: string }
   | { requestId: string; confirmed: boolean };
 
+/** Pi RPC `ImageContent`, sent in a prompt's `images` field. */
+export interface PiImageContent {
+  type: "image";
+  data: string;
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+}
+
 export type PiTurnEvent =
   | PiProgressMessage
   | {
@@ -1017,7 +1024,11 @@ export class PiRpcSession {
     }
   }
 
-  async runTurn(text: string, onEvent: (event: PiTurnEvent) => void): Promise<PiTurnResult> {
+  async runTurn(
+    text: string,
+    onEvent: (event: PiTurnEvent) => void,
+    images: PiImageContent[] = [],
+  ): Promise<PiTurnResult> {
     if (!this.#child || !this.#state || this.#closed || this.#failed) {
       throw new Error("Pi RPC Session is unavailable");
     }
@@ -1057,7 +1068,7 @@ export class PiRpcSession {
     });
     try {
       this.#drainProgress(onEvent);
-      await this.#send("prompt", { message: text });
+      await this.#send("prompt", images.length > 0 ? { message: text, images } : { message: text });
     } catch (error) {
       this.#rejectActiveTurn(error instanceof Error ? error : new Error(message(error)));
     }

@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import {
-  unsupportedSteer,
   HarnessOutputChannel,
   validateHostQuestionResponse,
   type HarnessAdapter,
@@ -108,6 +107,7 @@ import {
   PiRpcBusyError,
   PiRpcSession,
   PiRpcUnsupportedCommandError,
+  PiSteerNotTakenError,
   type PiInteractionRequest,
   type PiInteractionResponse,
   type PiRpcSessionOptions,
@@ -177,6 +177,10 @@ export interface PiTurnTransport {
   runTurn(text: string, onEvent: (event: PiTurnEvent) => void): Promise<PiTurnResult>;
   respondToInteraction(response: PiInteractionResponse): Promise<void>;
   abort(): Promise<void>;
+  /** Whether the running requested Turn can take steered input now; absent without steering. */
+  readonly canSteer?: boolean;
+  /** Queues input into the running requested Turn; throws PiSteerNotTakenError when not queued. */
+  steer?(text: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -208,6 +212,8 @@ interface ActiveTurn {
   interactionByNativeId: Map<string, HostInteractionId>;
   cancellationRequested: boolean;
   settling: boolean;
+  /** Steers written into this Turn; each delivered one persists as its own native User Entry. */
+  steers: number;
   beforeNativeTurnKeys: Set<string>;
   progressItems: Set<HostItemId>;
   completion: Promise<void>;
@@ -453,6 +459,7 @@ class PiHarnessSession implements HarnessSession {
     this.#requestedThinkingOptionId = options.thinkingOptionId;
     this.#toolOutputLimit = options.toolOutputLimit;
     this.#isFastSupported = options.isFastSupported;
+    const canSteer = (): boolean => this.#canSteer();
     this.capabilities = {
       configuration: {
         selectModel: true,
@@ -463,6 +470,9 @@ class PiHarnessSession implements HarnessSession {
       history: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
       autonomousTurns: { observe: true },
       subagents: { observe: true, readTranscript: true },
+      get steer(): boolean {
+        return canSteer();
+      },
     };
     this.commands = {
       list: async () => ({ ok: true, value: await this.#refreshLiveCommands() }),
@@ -587,7 +597,7 @@ class PiHarnessSession implements HarnessSession {
     if (this.#phase !== "open") {
       return { ok: false, error: invalidState("Pi Session is not open") };
     }
-    if (command.type === "turn.steer") return unsupportedSteer("Pi");
+    if (command.type === "turn.steer") return this.#steer(command);
     if (command.type === "turn.cancel") return this.#cancel(command);
     if (command.type === "interaction.respond") return this.#respond(command);
     if (command.type === "model.select") return this.#selectModel(command);
@@ -678,6 +688,7 @@ class PiHarnessSession implements HarnessSession {
         interactionByNativeId: new Map(),
         cancellationRequested: false,
         settling: false,
+        steers: 0,
         beforeNativeTurnKeys: new Set(
           beforeHistory.turns.map((turn) => turn.nativeTurnRef.nativeTurnKey),
         ),
@@ -749,6 +760,61 @@ class PiHarnessSession implements HarnessSession {
       this.#acceptingTurn = false;
       if (this.#transport) this.#drainPendingAutonomousTurns(this.#transport);
     }
+  }
+
+  /**
+   * Read live: a requested Turn that is not ending can take input through Pi's native `steer`,
+   * which joins the same run before its next model request. Autonomous runs stop and restart.
+   */
+  #canSteer(): boolean {
+    const active = this.#active;
+    return (
+      this.#phase === "open" &&
+      active !== null &&
+      active.autonomousRunId === undefined &&
+      !active.cancellationRequested &&
+      !active.settling &&
+      this.#transport?.steer !== undefined &&
+      this.#transport.canSteer === true
+    );
+  }
+
+  async #steer(command: TurnSteerCommand): Promise<HarnessResult<TurnSteerAccepted>> {
+    const text = command.input.map((input) => input.text).join("\n");
+    if (text.length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalidRequest",
+          message: "Pi steer text must not be empty",
+          retryable: false,
+        },
+      };
+    }
+    const active = this.#active;
+    if (
+      !active ||
+      active.autonomousRunId !== undefined ||
+      active.command.turnId !== command.turnId
+    ) {
+      return { ok: false, error: invalidState("Pi steer target is not the active requested Turn") };
+    }
+    const transport = this.#transport;
+    if (!this.#canSteer() || !transport?.steer) {
+      return { ok: false, error: invalidState("Pi steer target is ending") };
+    }
+    // Counted before the write: a steer whose answer is lost may still have been delivered.
+    active.steers += 1;
+    try {
+      await transport.steer(text);
+    } catch (error) {
+      if (error instanceof PiSteerNotTakenError) {
+        active.steers -= 1;
+        return { ok: false, error: invalidState(error.message) };
+      }
+      throw error;
+    }
+    return { ok: true, value: { accepted: true } };
   }
 
   close(): Promise<void> {
@@ -1106,6 +1172,7 @@ class PiHarnessSession implements HarnessSession {
         interactionByNativeId: new Map(),
         cancellationRequested: false,
         settling: false,
+        steers: 0,
         beforeNativeTurnKeys: new Set(),
         progressItems: new Set(),
         completion,
@@ -1413,6 +1480,7 @@ class PiHarnessSession implements HarnessSession {
       interactionByNativeId: new Map(),
       cancellationRequested: false,
       settling: false,
+      steers: 0,
       beforeNativeTurnKeys: new Set(),
       progressItems: new Set(),
       completion,
@@ -1963,16 +2031,21 @@ class PiHarnessSession implements HarnessSession {
       (turn) =>
         turn.input.length > 0 && !active.beforeNativeTurnKeys.has(turn.nativeTurnRef.nativeTurnKey),
     );
-    if (created.length !== 1) {
+    // Pi persists each delivered steer as a User Entry, so native history splits the Turn there.
+    // The Turn keeps the identity of its own prompt and the Checkpoint after its last steer.
+    if (created.length < 1 || created.length > 1 + active.steers) {
       throw new Error(
-        `Pi Turn persisted ${created.length} new User Entries; exactly one is required`,
+        active.steers === 0
+          ? `Pi Turn persisted ${created.length} new User Entries; exactly one is required`
+          : `Pi Turn with ${active.steers} steers persisted ${created.length} new User Entries`,
       );
     }
-    const turn = created[0];
-    if (!turn) throw new Error("Pi Turn has no persisted User identity");
+    const first = created[0];
+    const last = created.at(-1);
+    if (!first || !last) throw new Error("Pi Turn has no persisted User identity");
     return {
-      nativeTurnRef: turn.nativeTurnRef,
-      ...(turn.checkpoint ? { checkpoint: turn.checkpoint } : {}),
+      nativeTurnRef: first.nativeTurnRef,
+      ...(last.checkpoint ? { checkpoint: last.checkpoint } : {}),
     };
   }
 

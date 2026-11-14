@@ -23,7 +23,7 @@
 | A6 | 取消 | 必做 | P0 | 受限 | Pi RPC / adapter | 首消息前取消、旧轮收尾、close 回归 | 不误取消后继自主回合 |
 | A7 | 只读快照 | 必做 | P0 | 受限 | pi-history | 真实历史候选回放 | 可见通知、phase 和命令元数据；不宣称所有快照形态已覆盖 |
 | A8 | 持久身份 + resume | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
-| A9 | 错误与并发 | 必做 | P0 | 受限 | Pi RPC / adapter | 异步预检竞争、typed sessionBusy 回归 | 未接纳输入不 dispatch、不自动重试 |
+| A9 | 错误与并发 | 必做 | P0 | 受限 | Pi RPC / adapter | 异步预检竞争、typed sessionBusy 回归；Pi 1.5.2 实机 steer | 未接纳输入不 dispatch、不自动重试；运行中的用户 Turn 经原生 `steer` 同轮插入（见下文） |
 | A10 | 关闭 | 必做 | P0 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
 | B1 | 切换 Model | 原生有则必做 | P1 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
 | B2 | 切换 Thinking | 原生有则必做 | P1 | 待验证 | 既有 Adapter | 本次未重验 | 只验 B11 及受影响路径 |
@@ -95,3 +95,13 @@
 原生自动续跑从 `agent_start` 开始向 Host 公布忙状态和实时进度。异步预检后再次仲裁用户输入；已在收尾的旧轮取消不会作用于后继新轮，关闭期间当前轮的真实取消回执仍能完成入账。
 
 2026-10-28：Node 24 下 Pi 生产构建、专项测试类型检查通过，5 个相关测试文件 194 项通过；新增 7 个真实 Adapter＋RPC 组合回归覆盖启动空档、预检竞争、递延回合、显式重试、取消、重试过程及关闭。独立代码审查确认旧轮取消与 closing 终态两项问题已解决。候选插件经公共 Loader 加载及隔离 RPC 回放，确认 `agent_start` 即 busy、自主正文在终态前发出、竞争输入没有下发、唯一终态保留原生身份。未重启或修改运行环境。
+
+## 运行中插入（steer）验证范围（2026-11-14）
+
+- 能力：`capabilities.steer` 实时读取，仅在用户发起的 Turn 的 prompt 已获 Pi 回执 `disposition: "started"`（预检失败时插入不会遗留到下一 Turn）、未开始取消、未进入收尾，且 RPC 会话可写时为 `true`；自主 Turn 与其他情况走 Host 的停止后重发。`turn.steer` 写入前复查同样条件。
+- 原生形态：Pi 1.5.2 `docs/rpc-commands.md` 与 `dist/modes/rpc/rpc-mode.js` 的 `steer` 命令（`{type:"steer", message}`，回执 `data.disposition` 为 `queued` / `handled`）；`agent-session.js` 与 `pi-agent-core` 的 `agent-loop.js` 显示插入在当前工具调用结束后、下一次模型请求前送达，同一 Run 结束前（含 `agent_end` 后的续跑检查）都会取走队列。只有 `success:false` 回执视为未收下（如扩展命令不可排队、旧版本未知命令）；写入后超时或断开按回执丢失抛出，不报告为拒绝。
+- Run 已过最后一次队列检查才收到的插入会留在 Pi 队列，原本会混入下一次 prompt。Turn 收尾时先等所有插入回执，再按 `get_state.pendingMessageCount` 检查：有残留时用 `clear_queue` 取出，以 `prompt` 在同一 Turn 内续跑；已请求取消时只清除、不续跑（与 Pi 交互模式 Esc 先清队列再中止一致）。续跑 prompt 回执为 `handled`（扩展接管、未开 Run）时 Turn 直接收尾；prompt 被拒时 Turn 失败，错误信息带上该插入原文；续跑预检期间收到的取消会被 Pi 忽略，因此回执 `started` 后再发一次 `abort`。被一并取出的 follow-up 用 `follow_up` 放回。
+- 历史：Pi 把每条已送达的插入记成普通 User Entry，冷历史在插入点分轮；实时 Turn 仍用自身 prompt 的 User Entry 作为 nativeTurnRef，checkpoint 取最后一条插入所在原生轮。插入后的 Fork / 撤销由 Host 的 steered Turn 保护处理。
+- 实机：本机 Pi 1.5.2，经构建后的 `PiAdapter` 开始要求执行 `sleep 8` 的 Turn（magpie/qoder/qmodel_latest），工具运行中 `turn.steer` 4 ms 返回 accepted；Turn 以 succeeded 结束，最终回复满足插入的要求，未产生自主 Turn，nativeTurnRef 为原 prompt，checkpoint 为插入所在 Entry；冷历史为两轮。另一次用 antigravity 模型时，插入后的模型请求被服务端 403 拒绝，Turn 按 failed 结束，身份与 checkpoint 同样正确。
+- 回归：pi-rpc-session.test.ts 新增 8 项（真实 Adapter＋RPC 组合下的同轮插入与身份、原生拒绝为未收下、收尾残留插入同轮续跑、取消时丢弃残留、prompt 回执前不收插入、续跑被扩展接管时收尾、续跑被拒时保留原文、续跑预检中取消时补发 abort），改动前全部失败；Pi 全部 26 个测试文件 410 项通过；`npx tsc -b`、所改文件 ESLint / Prettier、boundary 检查通过。
+- 限制：只发送文字，Desktop 图片附件在 steer 中仍只是路径文字。残留插入续跑与取消丢弃只有合成回放，未在真实 Pi 上复现该时序。未在真实 Desktop 上验收插入展示与刷新后的分轮显示。

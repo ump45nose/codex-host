@@ -14,6 +14,7 @@ import { CodexTurnProjector } from "@codexhost/protocol-core";
 
 import {
   PiRpcSession,
+  PiSteerNotTakenError,
   piRpcProcessCommand,
   type PiAutonomousTurn,
   type PiRpcProcessAdapter,
@@ -83,6 +84,16 @@ class FakePiRpcProcess extends EventEmitter {
   holdEntries = false;
   holdStates = false;
   holdAborts = false;
+  readonly prompts: string[] = [];
+  readonly steers: string[] = [];
+  /** Pi's steering queue: steers it took and has not delivered yet. */
+  readonly queuedSteering: string[] = [];
+  steerRejection: string | null = null;
+  /** Holds Prompt answers, as while Pi still runs a Prompt's preflight. */
+  holdPrompts = false;
+  /** Pi's answer to the next Prompt in place of a started run. */
+  promptReply: { disposition: string } | { error: string } | null = null;
+  #heldPrompts: Record<string, unknown>[] = [];
   #heldAborts: Record<string, unknown>[] = [];
   #heldStates: Record<string, unknown>[] = [];
   #heldEntries: Record<string, unknown>[] = [];
@@ -101,6 +112,13 @@ class FakePiRpcProcess extends EventEmitter {
   releaseAborts(): void {
     this.holdAborts = false;
     for (const command of this.#heldAborts.splice(0)) this.#respond(command);
+  }
+
+  releasePrompts(): void {
+    this.holdPrompts = false;
+    for (const command of this.#heldPrompts.splice(0)) {
+      this.#respond(command, { disposition: "started" });
+    }
   }
 
   releaseStates(): void {
@@ -254,6 +272,15 @@ class FakePiRpcProcess extends EventEmitter {
     });
   }
 
+  /** Pi delivers its queued steers into the running run as User messages. */
+  deliverSteering(): void {
+    for (const text of this.queuedSteering.splice(0)) {
+      const message = { role: "user", content: [{ type: "text", text }] };
+      this.#output({ type: "message_start", message });
+      this.#output({ type: "message_end", message });
+    }
+  }
+
   emitAgentSettled(streaming = false): void {
     this.#isStreaming = streaming;
     this.#output({ type: "agent_settled" });
@@ -277,6 +304,49 @@ class FakePiRpcProcess extends EventEmitter {
     this.commands.push(command.type);
     if (command.type === "abort" && this.holdAborts) {
       this.#heldAborts.push(command);
+      return;
+    }
+    if (command.type === "prompt") {
+      this.prompts.push(String(command.message));
+      if (this.holdPrompts) {
+        this.#heldPrompts.push(command);
+        return;
+      }
+      const reply = this.promptReply;
+      this.promptReply = null;
+      if (reply && "error" in reply) {
+        this.#output({
+          id: command.id,
+          type: "response",
+          command: "prompt",
+          success: false,
+          error: reply.error,
+        });
+        return;
+      }
+      if (reply) {
+        this.#respond(command, reply);
+        return;
+      }
+    }
+    if (command.type === "steer") {
+      this.steers.push(String(command.message));
+      if (this.steerRejection) {
+        this.#output({
+          id: command.id,
+          type: "response",
+          command: "steer",
+          success: false,
+          error: this.steerRejection,
+        });
+        return;
+      }
+      this.queuedSteering.push(String(command.message));
+      this.#respond(command, { disposition: "queued" });
+      return;
+    }
+    if (command.type === "clear_queue") {
+      this.#respond(command, { steering: this.queuedSteering.splice(0), followUp: [] });
       return;
     }
     if (command.type === "get_state" && this.holdStates) {
@@ -349,6 +419,7 @@ class FakePiRpcProcess extends EventEmitter {
         },
         thinkingLevel: this.#thinkingLevel,
         isStreaming: this.#isStreaming,
+        pendingMessageCount: this.queuedSteering.length,
         contextUsage: { tokens: 45, contextWindow: 200 },
       });
       return;
@@ -583,7 +654,7 @@ class FakePiRpcProcess extends EventEmitter {
       }, 2_500);
       return;
     }
-    this.#respond(command);
+    this.#respond(command, command.type === "prompt" ? { disposition: "started" } : undefined);
     if (
       command.type === "abort" &&
       ["cancel", "cancel-no-settle", "interaction-cancel"].includes(this.#scenario)
@@ -1209,6 +1280,251 @@ function persistFakeRun(
   fake.autonomousHistory = history;
   return message;
 }
+
+function steerTurn(turnId: string, text: string) {
+  return {
+    type: "turn.steer" as const,
+    turnId: hostTurnIdSchema.parse(turnId),
+    input: [{ type: "text" as const, text }],
+  };
+}
+
+function emitAssistant(
+  fake: FakePiRpcProcess,
+  responseId: string,
+  text: string,
+  stopReason: string,
+) {
+  const message = { role: "assistant", responseId, content: [{ type: "text", text }], stopReason };
+  fake.emitFrame({ type: "message_start", message });
+  fake.emitFrame({ type: "message_end", message });
+  return message;
+}
+
+describe("Pi native steer", () => {
+  it("steers a running requested Turn natively and keeps its prompt identity", async () => {
+    const harness = await liveAutonomousHarness();
+    try {
+      const native = harness.native;
+      expect(harness.session.capabilities.steer).toBe(false);
+      await expect(harness.session.execute(userTurn("first"))).resolves.toMatchObject({ ok: true });
+      await waitFor(() => native.commands.includes("prompt"));
+      native.emitAgentStart();
+      const working = emitAssistant(native, "first-response", "Working", "toolUse");
+      expect(harness.session.capabilities.steer).toBe(true);
+
+      await expect(
+        harness.session.execute(steerTurn("first", "Also cover the edge case")),
+      ).resolves.toEqual({ ok: true, value: { accepted: true } });
+      expect(native.steers).toEqual(["Also cover the edge case"]);
+
+      native.deliverSteering();
+      const done = emitAssistant(native, "steer-response", "Covered", "stop");
+      native.autonomousHistory = {
+        entries: [
+          {
+            id: "first",
+            parentId: null,
+            type: "message",
+            message: { role: "user", content: [{ type: "text", text: "first" }] },
+          },
+          { id: "first-answer", parentId: "first", type: "message", message: working },
+          {
+            id: "steer-1",
+            parentId: "first-answer",
+            type: "message",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "Also cover the edge case" }],
+            },
+          },
+          { id: "steer-1-answer", parentId: "steer-1", type: "message", message: done },
+        ],
+        leafId: "steer-1-answer",
+      };
+      native.emitAgentSettled();
+      await waitFor(() => harness.events.some((event) => event.type === "turn.completed"));
+      expect(harness.events.find((event) => event.type === "turn.completed")).toMatchObject({
+        turnId: "first",
+        outcome: { status: "succeeded", checkpoint: { checkpointId: "steer-1" } },
+        nativeTurnRef: { nativeTurnKey: "first" },
+      });
+      expect(harness.events.some((event) => event.type === "turn.autonomous.started")).toBe(false);
+      expect(harness.session.capabilities.steer).toBe(false);
+      await expect(harness.session.execute(steerTurn("first", "too late"))).resolves.toMatchObject({
+        ok: false,
+        error: { code: "invalidState" },
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("reports input Pi refused as not taken", async () => {
+    const harness = await liveAutonomousHarness();
+    try {
+      await harness.session.execute(userTurn("first"));
+      await waitFor(() => harness.native.commands.includes("prompt"));
+      harness.native.steerRejection = 'Extension command "/deploy" cannot be queued.';
+      await expect(
+        harness.session.execute(steerTurn("first", "/deploy now")),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "invalidState", message: expect.stringContaining("/deploy") },
+      });
+      expect(harness.native.queuedSteering).toEqual([]);
+      expect(harness.session.capabilities.steer).toBe(true);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("runs a steer Pi queued after its last check as the next run of the same Turn", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    const autonomous = vi.fn();
+    rpc.setAutonomousTurnHandler(autonomous);
+    await rpc.start();
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => fake.commands.includes("prompt"));
+    fake.emitAgentStart();
+    emitAssistant(fake, "first-response", "First answer", "stop");
+    await rpc.steer("One more thing");
+    // Pi settles with the steer still queued; it would otherwise ride along with the next prompt.
+    fake.emitAgentSettled();
+    await waitFor(() => fake.prompts.length === 2);
+    expect(fake.commands).toContain("clear_queue");
+    expect(fake.prompts).toEqual(["first", "One more thing"]);
+    expect(rpc.isBusy).toBe(true);
+
+    fake.emitAgentStart();
+    fake.deliverSteering();
+    emitAssistant(fake, "late-response", " Late answer", "stop");
+    fake.emitAgentSettled();
+    await expect(pending).resolves.toEqual({
+      text: "First answer Late answer",
+      cancelled: false,
+    });
+    expect(autonomous).not.toHaveBeenCalled();
+    await rpc.close();
+  });
+
+  it("drops steers still queued when the Turn is cancelled", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, cancelTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => fake.commands.includes("prompt"));
+    fake.emitAgentStart();
+    await rpc.steer("Never mind");
+    const aborting = rpc.abort();
+    expect(rpc.canSteer).toBe(false);
+    await expect(rpc.steer("Too late")).rejects.toBeInstanceOf(PiSteerNotTakenError);
+    fake.emitAgentSettled();
+    await aborting;
+    await expect(pending).resolves.toMatchObject({ cancelled: true });
+    expect(fake.commands).toContain("clear_queue");
+    expect(fake.queuedSteering).toEqual([]);
+    expect(fake.prompts).toEqual(["first"]);
+    await rpc.close();
+  });
+
+  it("takes no steer until Pi answers that the Prompt started a run", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    fake.holdPrompts = true;
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => fake.commands.includes("prompt"));
+    // A failed preflight would leave this steer queued for the next Turn.
+    expect(rpc.canSteer).toBe(false);
+    await expect(rpc.steer("early")).rejects.toBeInstanceOf(PiSteerNotTakenError);
+    expect(fake.steers).toEqual([]);
+    fake.releasePrompts();
+    await waitFor(() => rpc.canSteer);
+    fake.emitAgentStart();
+    emitAssistant(fake, "first-response", "Done", "stop");
+    fake.emitAgentSettled();
+    await expect(pending).resolves.toMatchObject({ text: "Done", cancelled: false });
+    await rpc.close();
+  });
+
+  it("ends the Turn when Pi handles a stranded steer without starting a run", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => rpc.canSteer);
+    fake.emitAgentStart();
+    emitAssistant(fake, "first-response", "First answer", "stop");
+    await rpc.steer("Handled by an extension");
+    fake.promptReply = { disposition: "handled" };
+    fake.emitAgentSettled();
+    await expect(pending).resolves.toEqual({ text: "First answer", cancelled: false });
+    expect(fake.prompts).toEqual(["first", "Handled by an extension"]);
+    expect(rpc.isBusy).toBe(false);
+    await rpc.close();
+  });
+
+  it("fails the Turn with the stranded steer text when Pi refuses to run it", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => rpc.canSteer);
+    fake.emitAgentStart();
+    emitAssistant(fake, "first-response", "First answer", "stop");
+    await rpc.steer("Please also update the docs");
+    fake.promptReply = { error: "Authentication failed" };
+    fake.emitAgentSettled();
+    await expect(pending).rejects.toThrow(
+      /Please also update the docs[\s\S]*Authentication failed/u,
+    );
+    await rpc.close();
+  });
+
+  it("aborts the stranded steer run again when cancelled before Pi started it", async () => {
+    const fake = new FakePiRpcProcess("manual-run");
+    const rpc = new PiRpcSession(
+      { cwd: process.cwd(), commandTimeoutMs: 2_000, cancelTimeoutMs: 2_000, closeTimeoutMs: 500 },
+      { spawn: () => fake as unknown as ChildProcessWithoutNullStreams },
+    );
+    await rpc.start();
+    const pending = rpc.runTurn("first", () => undefined);
+    await waitFor(() => rpc.canSteer);
+    fake.emitAgentStart();
+    emitAssistant(fake, "first-response", "First answer", "stop");
+    await rpc.steer("One more thing");
+    fake.holdPrompts = true;
+    fake.emitAgentSettled();
+    await waitFor(() => fake.prompts.length === 2);
+    expect(rpc.canSteer).toBe(false);
+    // Pi drops an Abort that arrives during the Prompt's preflight.
+    await rpc.abort();
+    expect(fake.commands.filter((command) => command === "abort")).toHaveLength(1);
+    fake.releasePrompts();
+    await waitFor(() => fake.commands.filter((command) => command === "abort").length === 2);
+    fake.emitAgentStart();
+    fake.emitAgentSettled();
+    await expect(pending).resolves.toMatchObject({ cancelled: true });
+    await rpc.close();
+  });
+});
 
 describe("Pi autonomous live admission", () => {
   it.each(["agent_start", "message_start"] as const)(

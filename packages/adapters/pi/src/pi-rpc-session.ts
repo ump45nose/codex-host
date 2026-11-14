@@ -189,10 +189,26 @@ export class PiRpcFaultError extends Error {
   }
 }
 
-export class PiRpcUnsupportedCommandError extends Error {
+/** Pi answered a command with `success: false`, so it did not apply the command. */
+export class PiRpcCommandRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PiRpcCommandRejectedError";
+  }
+}
+
+export class PiRpcUnsupportedCommandError extends PiRpcCommandRejectedError {
   constructor(readonly command: string) {
     super(`Pi RPC does not support '${command}'`);
     this.name = "PiRpcUnsupportedCommandError";
+  }
+}
+
+/** Steered input Pi did not take; nothing was queued, so stopping and restarting is still safe. */
+export class PiSteerNotTakenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PiSteerNotTakenError";
   }
 }
 
@@ -279,6 +295,13 @@ interface ActiveTurn {
   tools: Map<string, string>;
   interactions: Map<string, { request: PiInteractionRequest; timeout: NodeJS.Timeout | null }>;
   settlement: "pending" | "confirming" | "confirmed";
+  /**
+   * Pi answered this Turn's latest Prompt with a started run. Before that answer, a steer would
+   * stay queued for the next Turn if the Prompt failed its preflight.
+   */
+  promptStarted: boolean;
+  /** Steers Pi took into this requested Turn, and steer commands still awaiting Pi's answer. */
+  steers: { taken: number; inFlight: Set<Promise<unknown>> };
   cancellation: "none" | "requesting" | "accepted";
   cancellationTimeout: NodeJS.Timeout | null;
   abortPromise: Promise<void> | null;
@@ -350,6 +373,27 @@ function parseSessionStreaming(response: Record<string, unknown>): boolean {
     throw new PiRpcFaultError("protocolError", "Pi RPC state has no Streaming status");
   }
   return isStreaming;
+}
+
+/** Pi answers a Prompt with `started` once its run began, or `handled` / `queued` without one. */
+function promptStartedRun(response: Record<string, unknown>): boolean {
+  return isRecord(response.data) && response.data.disposition === "started";
+}
+
+/** Queued steering and follow-up messages; older Pi versions omit the count. */
+function sessionPendingMessageCount(response: Record<string, unknown>): number {
+  const count = sessionStateData(response).pendingMessageCount;
+  return typeof count === "number" ? count : 0;
+}
+
+function sessionQueue(response: Record<string, unknown>): {
+  steering: string[];
+  followUp: string[];
+} {
+  const data = isRecord(response.data) ? response.data : {};
+  const texts = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((text): text is string => typeof text === "string") : [];
+  return { steering: texts(data.steering), followUp: texts(data.followUp) };
 }
 
 function parseSessionHistory(response: Record<string, unknown>): PiSessionHistory {
@@ -1050,18 +1094,61 @@ export class PiRpcSession {
         tools: new Map(),
         interactions: new Map(),
         settlement: "pending",
+        promptStarted: false,
+        steers: { taken: 0, inFlight: new Set() },
         cancellation: "none",
         cancellationTimeout: null,
         abortPromise: null,
       };
     });
+    const active = this.#activeTurn;
     try {
       this.#drainProgress(onEvent);
-      await this.#send("prompt", { message: text });
+      const response = await this.#send("prompt", { message: text });
+      if (active && this.#activeTurn === active) active.promptStarted = promptStartedRun(response);
     } catch (error) {
       this.#rejectActiveTurn(error instanceof Error ? error : new Error(message(error)));
     }
     return settled;
+  }
+
+  /** Whether a requested Turn is running and can still take steered input. */
+  get canSteer(): boolean {
+    const active = this.#activeTurn;
+    return (
+      this.#child?.stdin.writable === true &&
+      !this.#closed &&
+      !this.#failed &&
+      active?.origin === "requested" &&
+      active.promptStarted &&
+      active.settlement === "pending" &&
+      active.cancellation === "none"
+    );
+  }
+
+  /**
+   * Queues text into the running requested Turn with Pi's `steer` command. Pi delivers it after
+   * the current tool calls, before the next model request of the same run. Throws
+   * {@link PiSteerNotTakenError} when nothing was queued; any other error leaves it unknown.
+   */
+  async steer(text: string): Promise<void> {
+    const active = this.#activeTurn;
+    if (!active || !this.canSteer) {
+      throw new PiSteerNotTakenError("Pi has no running requested Turn that can take input");
+    }
+    const writing = this.#send("steer", { message: text });
+    active.steers.inFlight.add(writing);
+    try {
+      await writing;
+      active.steers.taken += 1;
+    } catch (error) {
+      if (error instanceof PiRpcCommandRejectedError) {
+        throw new PiSteerNotTakenError(`Pi did not take the steered input: ${error.message}`);
+      }
+      throw error;
+    } finally {
+      active.steers.inFlight.delete(writing);
+    }
   }
 
   respondToInteraction(response: PiInteractionResponse): Promise<void> {
@@ -1457,6 +1544,8 @@ export class PiRpcSession {
       tools: new Map(),
       interactions: new Map(),
       settlement: "pending",
+      promptStarted: false,
+      steers: { taken: 0, inFlight: new Set() },
       cancellation: "none",
       cancellationTimeout: null,
       abortPromise: null,
@@ -1705,7 +1794,7 @@ export class PiRpcSession {
       if (value.command === pending.command && error === `Unknown command: ${pending.command}`) {
         pending.reject(new PiRpcUnsupportedCommandError(pending.command));
       } else {
-        pending.reject(new Error(error));
+        pending.reject(new PiRpcCommandRejectedError(error));
       }
     }
   }
@@ -1816,13 +1905,21 @@ export class PiRpcSession {
 
   async #confirmSettledTurn(active: ActiveTurn, generation: number): Promise<void> {
     try {
+      // A steer Pi answers after this point is already queued, so the state below counts it.
+      await Promise.allSettled(active.steers.inFlight);
       const response = await this.#send("get_state", {});
       const state = parseSessionState(response);
       if (!this.#isSettlementCurrent(active, generation)) return;
       // Pi's deferred settled actions may already have opened the next native run.
       // Require its ordered agent_start fence; a bare Streaming disagreement still faults.
-      if (parseSessionStreaming(response)) await this.#waitForNextRun(generation);
+      const streaming = parseSessionStreaming(response);
+      if (streaming) await this.#waitForNextRun(generation);
       if (!this.#isSettlementCurrent(active, generation)) return;
+      // A next run that already started takes queued steers itself.
+      if (!streaming && active.steers.taken > 0 && sessionPendingMessageCount(response) > 0) {
+        if (await this.#runStrandedSteers(active, generation)) return;
+        if (!this.#isSettlementCurrent(active, generation)) return;
+      }
       if (active.origin === "autonomous" && active.autonomousMessage) {
         const history = await this.getEntries();
         const snapshot = mapPiSnapshot(history, { sessionId: state.sessionId, model: null });
@@ -1868,6 +1965,55 @@ export class PiRpcSession {
             );
       this.#fail(fault);
     }
+  }
+
+  /**
+   * A steer Pi queued after its run's last queue check stays queued once the run settles; Pi would
+   * otherwise send it with the next prompt. Take it out of the queue and run it as the next native
+   * run of the same Turn. After cancellation it is dropped, like Pi's own clear before abort.
+   * Returns whether the Turn now waits on another run or has failed; false leaves it settling.
+   */
+  async #runStrandedSteers(active: ActiveTurn, generation: number): Promise<boolean> {
+    const queued = sessionQueue(await this.#send("clear_queue", {}));
+    if (queued.steering.length === 0 || active.cancellation !== "none") {
+      await this.#requeueFollowUps(queued.followUp);
+      return false;
+    }
+    const steering = queued.steering.join("\n\n");
+    active.settlement = "pending";
+    active.promptStarted = false;
+    let response: Record<string, unknown>;
+    try {
+      response = await this.#send("prompt", { message: steering });
+    } catch (error) {
+      // The input already left Pi's queue; keep it in the failure the user sees.
+      if (this.#activeTurn === active) {
+        this.#rejectActiveTurn(
+          new Error(`Pi did not run the steered input "${steering}": ${message(error)}`),
+        );
+      }
+      return true;
+    }
+    if (this.#activeTurn !== active) return true;
+    if (!promptStartedRun(response)) {
+      // Pi handled the input without a run of its own (an extension took it). A run the handler
+      // started has already moved this Turn on; otherwise the Turn settles here.
+      if (active.runGeneration !== generation || active.settlement !== "pending") return true;
+      active.settlement = "confirming";
+      await this.#requeueFollowUps(queued.followUp);
+      return false;
+    }
+    active.promptStarted = true;
+    // Pi ignores an Abort that arrives before the run starts, so repeat a cancellation now.
+    if (active.cancellation !== "none") {
+      void this.#send("abort", {}).catch(() => undefined);
+    }
+    await this.#requeueFollowUps(queued.followUp);
+    return true;
+  }
+
+  async #requeueFollowUps(followUps: string[]): Promise<void> {
+    for (const followUp of followUps) await this.#send("follow_up", { message: followUp });
   }
 
   #finishSettledTurn(active: ActiveTurn): void {

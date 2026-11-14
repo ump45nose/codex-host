@@ -42,3 +42,8 @@ clean/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-thre
 clean/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
 fix/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
 feat/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view
+30d0633e64e675fc58b16f564f9ad03a0018a2ff # feat/claude-code-todo-tools; Claude Code task tools -> plan panel, history and reopen replay
+d9d06cf222b98c970acf9d49d7de8ddc4add6b92 # feat/claude-code-model-efforts; per-model thinking options from Claude Code ModelInfo
+2658a9aaf9429bb541cb904aee33643c43ce9683 # feat/reasoning-summary-parts; rolling Reasoning preview as titled summary parts
+6186f9f862051719be30a0c5e52395e5632006b5 # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
+42286d0d7fea0c5b049d90c1a199826516530ced # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)

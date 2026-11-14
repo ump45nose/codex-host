@@ -633,6 +633,8 @@ class ClaudeHarnessSession implements HarnessSession {
   readonly #backgroundCommands: ClaudeBackgroundCommandItems;
   readonly #continuationQuiescenceMs: number;
   readonly #taskTracker = new ClaudeTaskTracker();
+  /** MCP server names the latest native Segment reported; they disambiguate MCP Tool names. */
+  #mcpServers: readonly string[] = [];
   #acceptingTurn = false;
   #active: ActiveTurn | null = null;
   #closePromise: Promise<void> | null = null;
@@ -1007,6 +1009,7 @@ class ClaudeHarnessSession implements HarnessSession {
         cwd: this.#cwd,
         outputLimit: this.#toolOutputLimit,
         taskTracker: this.#taskTracker,
+        mcpServers: () => this.#mcpServers,
         nativeTurnKey,
         newItemId: () => hostItemIdSchema.parse(this.#randomUUID()),
         emit: (event) => this.#event(event),
@@ -1214,6 +1217,7 @@ class ClaudeHarnessSession implements HarnessSession {
         cwd: this.#cwd,
         outputLimit: this.#toolOutputLimit,
         taskTracker: this.#taskTracker,
+        mcpServers: () => this.#mcpServers,
         nativeTurnKey,
         newItemId: () => hostItemIdSchema.parse(this.#randomUUID()),
         emit: (event) => this.#event(event),
@@ -1997,6 +2001,7 @@ class ClaudeHarnessSession implements HarnessSession {
     if (this.#active !== active || this.#phase === "closed" || this.#phase === "faulted") return;
     switch (event.type) {
       case "segment.started":
+        if (event.mcpServers) this.#mcpServers = event.mcpServers;
         this.#observeRootOutput(active);
         if (active.cancellation && !active.cancellation.interrupting) {
           this.#interruptCancelledSegment(active).catch(() => this.#hardCancel(active));
@@ -2469,6 +2474,7 @@ class ClaudeHarnessSession implements HarnessSession {
         cwd: this.#cwd,
         outputLimit: this.#toolOutputLimit,
         taskTracker: this.#taskTracker,
+        mcpServers: () => this.#mcpServers,
         nativeTurnKey,
         newItemId: () => hostItemIdSchema.parse(this.#randomUUID()),
         emit: (event) => this.#event(event),

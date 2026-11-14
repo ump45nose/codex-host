@@ -64,6 +64,7 @@ export interface ExternalTurnProjectionHost {
   outputFailed(thread: ExternalThread): void;
   submitPrewarm(thread: ExternalThread): Promise<boolean>;
   notifyExternalThreadStarted(thread: JsonObject): Promise<void>;
+  touchThread(thread: ExternalThread): Promise<void>;
   persistTerminalIdentity(
     thread: ExternalThread,
     event: Parameters<ExternalThreadRuntime["persistTerminalIdentity"]>[1],
@@ -161,6 +162,8 @@ export class ExternalTurnProjection {
     }
     const result = projection.projector.project(event as ProjectableHostEvent);
     if (event.type === "turn.started") {
+      // Not awaited: the write must not delay the Turn's first output.
+      void this.#host.touchThread(thread);
       await this.#host.setThreadStatus(thread, { type: "active", activeFlags: [] });
     }
     if (event.type === "turn.completed") {
@@ -181,6 +184,8 @@ export class ExternalTurnProjection {
       thread.historyHydrated = false;
       thread.running = false;
       thread.activeTurnId = null;
+      // Before any completion message, so a client acting on it reads the touched record.
+      await this.#host.touchThread(thread);
       // Detached Items (native background commands) settle on this Turn later.
       if (!projection.projector.hasOpenDetachedItems) thread.projectedTurns.delete(event.turnId);
       thread.responseGates.delete(event.turnId);

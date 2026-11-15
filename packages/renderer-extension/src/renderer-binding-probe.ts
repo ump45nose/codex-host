@@ -10,7 +10,6 @@ import {
   catalogModelForRef,
   decodeHarnessPluginRoute,
   harnessIdSchema,
-  hostThreadIdSchema,
   permissionModeFixedAtCreate,
   type HarnessCommandDescriptor,
   type HarnessPluginDescriptor,
@@ -127,18 +126,28 @@ import {
 } from "./renderer-sidebar-stash.js";
 import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
 import {
+  createPetsCardAgentResolver,
+  PETS_CARD_THREADS_STORAGE_KEY,
+  readPetsCardThreads,
+} from "./renderer-pets-card-agents.js";
+import {
   collectSidebarThreads,
   installRendererTopTabs,
-  isUnreadOrActiveSessionStatus,
   resolveShortHostLabel,
 } from "./renderer-top-tabs.js";
 import {
-  PETS_OPEN_THREAD_REQUEST_STORAGE_KEY,
   readPetsHarnessCatalog,
   writePetsHarnessCatalog,
-  writePetsRemoteThreads,
-  type PetsOpenThreadRequest,
+  writePetsThreadAgents,
 } from "./renderer-avatar-overlay.js";
+import {
+  writePetsRemoteProjects,
+  type PetsRemoteProject,
+} from "./renderer-pets-quick-chat-target.js";
+import {
+  collectSidebarRemoteProjects,
+  readRemoteHostGlobeColors,
+} from "./renderer-sidebar-remote-projects.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -1059,7 +1068,6 @@ export function installRendererBindingProbe(
           }
           if (changed) {
             topTabs.refresh();
-            syncPetsRemoteThreads();
           }
         })
         .catch(() => {
@@ -1112,28 +1120,51 @@ export function installRendererBindingProbe(
     const plugin = pluginForHost(hostId, agent);
     return { agent, ...(plugin ? { plugin } : {}) };
   };
-  const syncPetsRemoteThreads = (): void => {
+  const petsCardAgents = createPetsCardAgentResolver({
+    getClient: modelClientForHost,
+    onResolved: () => syncPetsCatalog(),
+  });
+  const syncPetsCatalog = (): void => {
     try {
-      const snaps = collectSidebarThreads(document, resolveThreadAgent);
-      for (const [k, i] of snaps) {
-        if (i.status === "running" || i.status === "waiting") acknowledgedFailedKeys.delete(k);
+      // The Pet lists sessions natively; it only needs each external thread's Agent for its icon.
+      const threadAgents: Record<string, string> = {};
+      for (const { hostId, threadId, agent } of collectSidebarThreads(
+        document,
+        resolveThreadAgent,
+      ).values()) {
+        if (agent && agent !== "codex") threadAgents[`${hostId}:${threadId}`] = agent;
       }
-      const remotes = [...snaps.values()]
-        .filter(
-          (i) =>
-            (i.hostId !== "local" || i.agent !== "codex") &&
-            isUnreadOrActiveSessionStatus(
-              i.status,
-              `${i.hostId}:${i.threadId}`,
-              acknowledgedFailedKeys,
-            ),
-        )
-        .slice(0, 12)
-        .map((i) => {
-          const hostLabel = resolveHostLabel(i.hostId);
-          return { ...i, ...(hostLabel ? { hostLabel } : {}) };
-        });
-      writePetsRemoteThreads(remotes, window.localStorage);
+      Object.assign(
+        threadAgents,
+        petsCardAgents.resolve(readPetsCardThreads(window.localStorage), threadAgents),
+      );
+      writePetsThreadAgents(threadAgents, window.localStorage);
+      // Pet Quick Chat can start in a remote project with any Agent installed on its host.
+      const globeColors = readRemoteHostGlobeColors(document);
+      writePetsRemoteProjects(
+        collectSidebarRemoteProjects(document).map(
+          ({ hostDisplayName, ...project }): PetsRemoteProject => {
+            const state = harnessAvailabilityByHost.get(project.hostId);
+            if (!state?.plugins && !state?.request && state?.retryTimer == null)
+              void refreshHarnessAvailabilityForHost(project.hostId);
+            return {
+              ...project,
+              hostLabel: resolveHostLabel(project.hostId) ?? (hostDisplayName || project.hostId),
+              hostColor: globeColors.get(project.hostId) ?? null,
+              agents: [
+                "codex",
+                ...(state?.plugins ?? EMPTY_PLUGINS)
+                  .filter(({ id }) => {
+                    const status = state?.availability[id];
+                    return status === undefined || status === "checking" || status === "ready";
+                  })
+                  .map(({ id }) => id),
+              ],
+            };
+          },
+        ),
+        window.localStorage,
+      );
       const pluginsById = new Map<string, HarnessPluginDescriptor>();
       let hasResolvedHostDirectory = false;
       for (const [hostId, s] of harnessAvailabilityByHost) {
@@ -1168,47 +1199,20 @@ export function installRendererBindingProbe(
     window,
     tree: sidebarThreadTree,
     getLocale: () => settingsLifecycle.locale,
-    getActiveThread: () => {
-      for (const mounted of mountedByComposer.values()) {
-        if (!isMountedComposer(mounted.composer)) continue;
-        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
-        const hostId = mounted.hostId ?? activeModelHostId(mounted.composer) ?? "local";
-        if (threadId) return { hostId, threadId };
-      }
-      return null;
-    },
     getThreadAgent: resolveThreadAgent,
     getHostLabel: resolveHostLabel,
     acknowledgedFailedKeys,
-    onChange: syncPetsRemoteThreads,
+    onChange: syncPetsCatalog,
   });
-  const onPetsOpenRequestStorage = (event: StorageEvent): void => {
-    if (event.key !== PETS_OPEN_THREAD_REQUEST_STORAGE_KEY || !event.newValue) return;
-    try {
-      const parsed: unknown = JSON.parse(event.newValue);
-      if (typeof parsed !== "object" || parsed === null) return;
-      const { hostId, threadId } = parsed as Partial<PetsOpenThreadRequest>;
-      const validThreadId = hostThreadIdSchema.safeParse(threadId);
-      if (typeof hostId === "string" && hostId.length > 0 && validThreadId.success) {
-        try {
-          window.focus?.();
-        } catch {
-          // Ignore focus errors
-        }
-        void openRendererThread(validThreadId.data, { hostId }).catch(() => undefined);
-      }
-    } catch {
-      // Ignore invalid payloads
-    }
+  const onPetsCardThreads = (event: StorageEvent): void => {
+    if (event.key === PETS_CARD_THREADS_STORAGE_KEY) syncPetsCatalog();
   };
-  window.addEventListener("storage", onPetsOpenRequestStorage);
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
     reason: "installing",
     modelUpdates: 0,
     hook: null,
   };
-  syncPetsRemoteThreads();
   const codexAccountsForHost = (hostId: string | null): RendererCodexAccountState | null => {
     if (!hostId) return null;
     const client = modelClientForHost(hostId);
@@ -2880,7 +2884,6 @@ export function installRendererBindingProbe(
           sidebarAgentIcons.refresh();
           sidebarThreadTree.refresh();
           topTabs.refresh();
-          syncPetsRemoteThreads();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -3701,7 +3704,6 @@ export function installRendererBindingProbe(
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
       topTabs.refresh();
-      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3787,6 +3789,7 @@ export function installRendererBindingProbe(
   window.addEventListener("codexhost:draft-workspace", onDraftWorkspace);
   window.addEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
   window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("storage", onPetsCardThreads);
   delegationMention = installRendererDelegationMention(document, {
     readSkills: (editor) => skillLibrary.read(editor),
     onClose: () => skillLibrary.close(),
@@ -3960,7 +3963,6 @@ export function installRendererBindingProbe(
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
       topTabs.refresh();
-      syncPetsRemoteThreads();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -4014,7 +4016,6 @@ export function installRendererBindingProbe(
       sidebarStash = null;
       sidebarOverlay.dispose();
       topTabs.dispose();
-      window.removeEventListener("storage", onPetsOpenRequestStorage);
       sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();
@@ -4025,6 +4026,7 @@ export function installRendererBindingProbe(
       window.removeEventListener("codexhost:draft-prewarm-policy-changed", onHostRouteChange);
       window.removeEventListener("codexhost:draft-workspace", onDraftWorkspace);
       window.removeEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
+      window.removeEventListener("storage", onPetsCardThreads);
       window.removeEventListener("focus", onWindowFocus);
       for (const state of harnessAvailabilityByHost.values()) {
         state.requestGeneration += 1;

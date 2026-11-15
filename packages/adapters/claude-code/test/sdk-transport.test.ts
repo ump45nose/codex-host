@@ -1103,6 +1103,21 @@ describe("ClaudeSdkTransport process environment", () => {
     await other.transport.close();
   });
 
+  it("enables Claude Code task tools unless the user already chose a value", async () => {
+    const enabled = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {});
+    await enabled.transport.start();
+    expect(options(enabled).env?.CLAUDE_CODE_ENABLE_TODO_TOOLS).toBe("1");
+    expect(options(enabled).env).not.toHaveProperty("CLAUDE_CODE_ENABLE_TASKS");
+    await enabled.transport.close();
+
+    const userChoice = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {
+      CLAUDE_CODE_ENABLE_TODO_TOOLS: "0",
+    });
+    await userChoice.transport.start();
+    expect(options(userChoice).env?.CLAUDE_CODE_ENABLE_TODO_TOOLS).toBe("0");
+    await userChoice.transport.close();
+  });
+
   it("adds the Host Node runtime to the Claude process PATH", async () => {
     const value = fixture("create", "default", harnessThinkingOptionIdSchema.parse("auto"), {
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -3040,6 +3055,51 @@ describe("ClaudeSdkTransport Ultracode", () => {
     expect(value.onFault).toHaveBeenCalledWith(
       new Error("Claude Code kept Ultracode on after it was cleared"),
     );
+    await value.transport.close();
+  });
+
+  it("restores the previous Thinking when a Model switch into Ultracode is not honored", async () => {
+    const value = fixture("create", "default", harnessThinkingOptionIdSchema.parse("high"));
+    await value.transport.start();
+    value.fakeQuery.getSettings
+      .mockResolvedValueOnce({
+        applied: { ultracode: false, ultracodeRequested: true, ultracodeAvailable: false },
+        effective: { enableWorkflows: true },
+      })
+      .mockResolvedValueOnce({ applied: { ultracode: false } });
+
+    await expect(value.transport.setModel("opus", ultracode)).rejects.toMatchObject({
+      name: "ClaudeUltracodeUnavailableError",
+    });
+    expect(value.fakeQuery.setModel.mock.calls).toEqual([["opus"], [undefined]]);
+    // The restored selection is read back as off.
+    expect(value.fakeQuery.getSettings).toHaveBeenCalledTimes(2);
+    expect(value.onFault).not.toHaveBeenCalled();
+    await value.transport.setThinkingOption(harnessThinkingOptionIdSchema.parse("medium"));
+    expect(value.fakeQuery.applyFlagSettings.mock.calls).toEqual([
+      [enter],
+      [{ alwaysThinkingEnabled: true, effortLevel: "high", ultracode: false }],
+      [{ alwaysThinkingEnabled: true, effortLevel: "medium" }],
+    ]);
+    await value.transport.close();
+  });
+
+  it("switches Thinking with the Model and restores the Model when that fails", async () => {
+    const value = fixture("create", "default", harnessThinkingOptionIdSchema.parse("xhigh"));
+    await value.transport.start();
+    const auto = harnessThinkingOptionIdSchema.parse("auto");
+
+    value.fakeQuery.applyFlagSettings.mockRejectedValueOnce(new Error("flag write failed"));
+    await expect(value.transport.setModel("gemini", auto)).rejects.toThrow("flag write failed");
+    expect(value.fakeQuery.setModel.mock.calls).toEqual([["gemini"], [undefined]]);
+
+    await value.transport.setModel("gemini", auto);
+    await value.transport.setModel("gemini", auto);
+    expect(value.fakeQuery.applyFlagSettings.mock.calls).toEqual([
+      [{ alwaysThinkingEnabled: true, effortLevel: null }],
+      [{ alwaysThinkingEnabled: true, effortLevel: null }],
+    ]);
+    expect(value.onFault).not.toHaveBeenCalled();
     await value.transport.close();
   });
 

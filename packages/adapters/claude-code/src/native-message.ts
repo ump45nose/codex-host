@@ -3,6 +3,7 @@ import { claudeUsageRecord, isClaudeModelRequest } from "./claude-usage.js";
 import { jsonValueSchema } from "@codexhost/shared-contracts";
 
 import { parseClaudeNativeFileChange } from "./file-change.js";
+import { isClaudeTaskTool } from "./task-tracker.js";
 import type {
   ClaudePlanLimitEvent,
   ClaudeTransportFailureKind,
@@ -642,7 +643,12 @@ export class ClaudeNativeTurnAccumulator {
   #consumeSegmentLevel(message: Record<string, unknown>, events: ClaudeNativeEvent[]): void {
     if (message.type !== "system") return;
     if (message.subtype === "init") {
-      events.push({ type: "segment.started" });
+      const mcpServers = Array.isArray(message.mcp_servers)
+        ? message.mcp_servers.flatMap((server) =>
+            isRecord(server) && typeof server.name === "string" ? [server.name] : [],
+          )
+        : undefined;
+      events.push({ type: "segment.started", ...(mcpServers ? { mcpServers } : {}) });
       return;
     }
     if (message.subtype !== "background_tasks_changed" || !Array.isArray(message.tasks)) return;
@@ -1009,10 +1015,9 @@ export class ClaudeNativeTurnAccumulator {
       const nativeResult =
         resultBlocks.length === 1 ? (message.tool_use_result ?? message.toolUseResult) : undefined;
       const outputText = resultText(block.content, nativeResult);
-      const structuredResult =
-        tool.name === "TaskCreate" || tool.name === "TaskUpdate" || tool.name === "TaskList"
-          ? jsonValueSchema.safeParse(nativeResult)
-          : null;
+      const structuredResult = isClaudeTaskTool(tool.name)
+        ? jsonValueSchema.safeParse(nativeResult)
+        : null;
       if (tool.workflow) {
         const status = isRecord(nativeResult) ? nativeResult.status : undefined;
         const taskId = isRecord(nativeResult)

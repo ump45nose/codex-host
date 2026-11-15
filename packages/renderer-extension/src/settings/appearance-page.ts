@@ -21,7 +21,9 @@ import {
 } from "../renderer-sidebar-overlay.js";
 import {
   readTopTabsEnabledPreference,
+  readTopTabsTwoRowsPreference,
   setTopTabsEnabledPreference,
+  setTopTabsTwoRowsPreference,
   subscribeTopTabsPreference,
 } from "../renderer-top-tabs.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
@@ -30,6 +32,14 @@ import { mountDelegationCapacityControls } from "./delegation-capacity-controls.
 import { mountIdleReleaseControls } from "./idle-release-controls.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import {
+  PETS_STACK_MAX_HEIGHT_MAX_PX,
+  PETS_STACK_MAX_HEIGHT_MIN_PX,
+  PETS_STACK_MAX_HEIGHT_STORAGE_KEY,
+  readPetsStackMaxHeightPreference,
+  writePetsStackMaxHeightPreference,
+} from "../renderer-avatar-overlay.js";
+import {
+  createNumberField,
   createPreferenceGroup,
   createPreferenceItem,
   createPreferenceSelect,
@@ -150,15 +160,77 @@ export function createAppearanceSettingsPage(
         controlId: topTabsId,
       });
       const topTabsToggle = createPreferenceSwitch(document, topTabsId, topTabsRow.description.id);
-      topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
       topTabsToggle.addEventListener("change", () => {
         setTopTabsEnabledPreference(ownerWindow, topTabsToggle.checked);
       });
-      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, () => {
-        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
-      });
       topTabsRow.item.append(topTabsToggle);
       sidebar.card.append(topTabsRow.item);
+
+      const topTabsRowsId = preferenceId("top-tabs-two-rows");
+      const topTabsRowsRow = createPreferenceItem(document, {
+        title: messages.topTabsTwoRowsTitle,
+        description: messages.topTabsTwoRowsDescription,
+        controlId: topTabsRowsId,
+      });
+      const topTabsRowsToggle = createPreferenceSwitch(
+        document,
+        topTabsRowsId,
+        topTabsRowsRow.description.id,
+      );
+      topTabsRowsToggle.addEventListener("change", () => {
+        setTopTabsTwoRowsPreference(ownerWindow, topTabsRowsToggle.checked);
+      });
+      topTabsRowsRow.item.append(topTabsRowsToggle);
+      sidebar.card.append(topTabsRowsRow.item);
+      const syncTopTabs = (): void => {
+        topTabsToggle.checked = readTopTabsEnabledPreference(ownerWindow);
+        topTabsRowsToggle.checked = readTopTabsTwoRowsPreference(ownerWindow);
+        topTabsRowsToggle.disabled = !topTabsToggle.checked;
+      };
+      syncTopTabs();
+      const disposeTopTabsPref = subscribeTopTabsPreference(ownerWindow, syncTopTabs);
+
+      const petsHeightId = preferenceId("pets-stack-max-height");
+      const petsHeightRow = createPreferenceItem(document, {
+        title: messages.petsStackMaxHeightTitle,
+        description: messages.petsStackMaxHeightDescription,
+        controlId: petsHeightId,
+      });
+      const { field: petsHeightField, control: petsHeight } = createNumberField(document, {
+        id: petsHeightId,
+        describedBy: petsHeightRow.description.id,
+        unit: "px",
+        min: PETS_STACK_MAX_HEIGHT_MIN_PX,
+        max: PETS_STACK_MAX_HEIGHT_MAX_PX,
+      });
+      petsHeight.step = "20";
+      const readStorage = (): Storage | null => {
+        try {
+          return ownerWindow.localStorage;
+        } catch {
+          return null;
+        }
+      };
+      const syncPetsHeight = (): void => {
+        petsHeight.value = String(readPetsStackMaxHeightPreference(readStorage()));
+      };
+      syncPetsHeight();
+      petsHeight.addEventListener("change", () => {
+        const value = petsHeight.valueAsNumber;
+        if (Number.isFinite(value)) {
+          writePetsStackMaxHeightPreference(
+            Math.min(PETS_STACK_MAX_HEIGHT_MAX_PX, Math.max(PETS_STACK_MAX_HEIGHT_MIN_PX, value)),
+            readStorage(),
+          );
+        }
+        syncPetsHeight();
+      });
+      const onPetsHeightStorage = (event: StorageEvent): void => {
+        if (event.key === PETS_STACK_MAX_HEIGHT_STORAGE_KEY) syncPetsHeight();
+      };
+      ownerWindow.addEventListener("storage", onPetsHeightStorage);
+      petsHeightRow.item.append(petsHeightField);
+      sidebar.card.append(petsHeightRow.item);
 
       context.content.append(heading, description, group, sidebar.group);
       const disposeIdleRelease = mountIdleReleaseControls(
@@ -178,6 +250,7 @@ export function createAppearanceSettingsPage(
         disposeStashPref();
         disposeOverlayMode();
         disposeTopTabsPref();
+        ownerWindow.removeEventListener("storage", onPetsHeightStorage);
         disposeIdleRelease();
         disposeDelegationCapacity();
         disposeUserInstructions();

@@ -327,6 +327,163 @@ describe("Claude history mapping", () => {
     });
   });
 
+  it("replays Claude task tools across Turns into the live Todo plan state", () => {
+    const toolUse = (id: string, name: string, input: unknown) => ({
+      type: "tool_use",
+      id,
+      name,
+      input,
+    });
+    const toolResult = (uuid: string, id: string, result: unknown, isError = false) => ({
+      ...message("user", uuid, [
+        {
+          type: "tool_result",
+          tool_use_id: id,
+          content: "ok",
+          ...(isError ? { is_error: true } : {}),
+        },
+      ]),
+      toolUseResult: result,
+    });
+    const history = [
+      message("user", "user-1", "plan the work"),
+      message("assistant", "create-a", [
+        toolUse("create-1", "TaskCreate", { subject: "Write code", description: "d" }),
+      ]),
+      toolResult("create-a-result", "create-1", { task: { id: "1", subject: "Write code" } }),
+      message("assistant", "create-b", [
+        toolUse("create-2", "TaskCreate", { subject: "Run tests", description: "d" }),
+      ]),
+      toolResult("create-b-result", "create-2", { task: { id: "2", subject: "Run tests" } }),
+      {
+        ...message("assistant", "nested-create", [
+          toolUse("nested-1", "TaskCreate", { subject: "Subagent task", description: "d" }),
+        ]),
+        parent_tool_use_id: "agent-call",
+      },
+      {
+        ...toolResult("nested-result", "nested-1", { task: { id: "9", subject: "Subagent task" } }),
+        parent_tool_use_id: "agent-call",
+      },
+      message("assistant", "answer-1", [{ type: "text", text: "planned" }], "end_turn"),
+      message("user", "user-2", "continue"),
+      message("assistant", "update-a", [
+        toolUse("update-1", "TaskUpdate", { taskId: "1", status: "completed" }),
+      ]),
+      toolResult("update-a-result", "update-1", { success: true, taskId: "1" }),
+      message("assistant", "update-b", [
+        toolUse("update-2", "TaskUpdate", { taskId: "2", status: "deleted" }),
+      ]),
+      toolResult("update-b-result", "update-2", { success: false }, true),
+      message("assistant", "get-a", [toolUse("get-1", "TaskGet", { taskId: "2" })]),
+      toolResult("get-a-result", "get-1", {
+        task: {
+          id: "2",
+          subject: "Run tests",
+          description: "d",
+          status: "in_progress",
+          blocks: [],
+          blockedBy: [],
+        },
+      }),
+    ];
+
+    const snapshot = mapClaudeSnapshot(history, sessionId);
+    const tools = snapshot.turns.map(({ items }) =>
+      items.flatMap(({ item }) =>
+        item.type === "toolExecution"
+          ? [{ toolName: item.toolName, arguments: item.arguments }]
+          : [],
+      ),
+    );
+    const plan = (...todos: [string, string, string][]) => ({
+      todos: todos.map(([id, content, status]) => ({ id, content, status })),
+    });
+    expect(tools).toEqual([
+      [
+        { toolName: "Todo", arguments: plan(["1", "Write code", "pending"]) },
+        {
+          toolName: "Todo",
+          arguments: plan(["1", "Write code", "pending"], ["2", "Run tests", "pending"]),
+        },
+        // Live, Subagent Tools never reach the root Tool lifecycle or its task state.
+        {
+          toolName: "TaskCreate",
+          arguments: { subject: "Subagent task", description: "d" },
+        },
+      ],
+      [
+        {
+          toolName: "Todo",
+          arguments: plan(["1", "Write code", "completed"], ["2", "Run tests", "pending"]),
+        },
+        { toolName: "Todo", arguments: {} },
+        {
+          toolName: "Todo",
+          arguments: plan(["1", "Write code", "completed"], ["2", "Run tests", "in_progress"]),
+        },
+      ],
+    ]);
+  });
+
+  it("restores Claude MCP tools and WebSearch as MCP and web search Items", () => {
+    const history = [
+      message("user", "user-1", "search"),
+      message("assistant", "assistant-1", [
+        { type: "tool_use", id: "mcp-1", name: "mcp__docs__lookup", input: { id: 7 } },
+        { type: "tool_use", id: "search-1", name: "WebSearch", input: { query: "codex" } },
+        { type: "tool_use", id: "mcp-2", name: "mcp__docs__lookup", input: { id: 8 } },
+      ]),
+      message("user", "tool-results", [
+        { type: "tool_result", tool_use_id: "mcp-1", content: "found" },
+        { type: "tool_result", tool_use_id: "search-1", content: "Web search results" },
+        { type: "tool_result", tool_use_id: "mcp-2", content: "missing", is_error: true },
+      ]),
+    ];
+
+    const items = mapClaudeSnapshot(history, sessionId).turns[0]?.items;
+    expect(items).toEqual([
+      {
+        item: {
+          type: "mcpToolCall",
+          itemId: "claude-item-v2-user-1-tool-1",
+          server: "docs",
+          tool: "lookup",
+          arguments: { id: 7 },
+          output: { content: [{ type: "text", text: "found" }] },
+        },
+        outcome: { status: "succeeded" },
+      },
+      {
+        item: {
+          type: "webSearch",
+          itemId: "claude-item-v2-user-1-tool-2",
+          query: "codex",
+          output: { content: [{ type: "text", text: "Web search results" }] },
+        },
+        outcome: { status: "succeeded" },
+      },
+      {
+        item: {
+          type: "mcpToolCall",
+          itemId: "claude-item-v2-user-1-tool-3",
+          server: "docs",
+          tool: "lookup",
+          arguments: { id: 8 },
+          output: { content: [{ type: "text", text: "missing" }] },
+        },
+        outcome: {
+          status: "failed",
+          error: {
+            code: "nativeFailure",
+            message: "mcp__docs__lookup failed",
+            retryable: false,
+          },
+        },
+      },
+    ]);
+  });
+
   it("omits Claude model controls and metadata without hiding other human commands", () => {
     const synthetic = {
       ...message("user", "synthetic", "synthetic prompt"),

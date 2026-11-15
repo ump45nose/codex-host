@@ -98,12 +98,12 @@ interface LockRecord {
 }
 
 function lockOwnerDescription(lock: Partial<LockRecord>): string {
-  const details = [`PID ${String(lock.pid)}`];
+  const details = [
+    `owner PID ${String(lock.pid)}`,
+    `startedAt: ${typeof lock.startedAt === "string" && lock.startedAt ? lock.startedAt : "unknown"}`,
+  ];
   if (typeof lock.role === "string" && lock.role) details.push(lock.role);
-  if (typeof lock.startedAt === "string" && lock.startedAt) {
-    details.push(`started ${lock.startedAt}`);
-  }
-  return details.join(", ");
+  return details.join("; ");
 }
 
 interface ProcessIdentity {

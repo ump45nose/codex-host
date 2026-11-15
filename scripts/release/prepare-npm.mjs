@@ -880,6 +880,7 @@ if (consoleArguments !== null) {
     fail(error.message);
   });
   child.on("exit", (code, signal) => {
+    if (finished) return;
     startupTrace(ready ? "Launcher exited after ready" : "Launcher exited before ready");
     if (!ready) process.stdout.write(launcherOutput);
     if (signal) {

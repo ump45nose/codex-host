@@ -29,8 +29,20 @@ describe("thread watch notice", () => {
     );
   });
 
-  it("round-trips formatted entries", () => {
-    expect(parseThreadWatchNotice(formatThreadWatchNotice(entries))).toEqual(entries);
+  it.each([
+    { value: entries },
+    {
+      value: [
+        {
+          threadId: "quiet",
+          label: "Quiet task",
+          outcome: "stalled" as const,
+          note: "No Harness event observed; the watch continues.",
+        },
+      ],
+    },
+  ])("round-trips formatted entries $value", ({ value }) => {
+    expect(parseThreadWatchNotice(formatThreadWatchNotice(value))).toEqual(value);
   });
 
   it("keeps labels and notes on one parseable line", () => {

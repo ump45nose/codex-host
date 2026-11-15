@@ -1,6 +1,7 @@
 import type { DelegationControlRegistration } from "../src/delegation-types.js";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeHarnessAdapter } from "@codexhost/harness-adapter/testing";
@@ -24,7 +25,6 @@ import { startClientChannelServer } from "../src/client-channel-server.js";
 import { runSharedHostService } from "../src/shared-host-service.js";
 import { sharedHostDesktop } from "../src/shared-host-desktop.js";
 import { prepareLocalCodex } from "../src/native-account-host.js";
-import { ModelPriceCatalog } from "../src/model-prices.js";
 import { readNativeWorkspaceSnapshot } from "../src/native-workspace-snapshot.js";
 import { runHostRuntime } from "../src/run-host-runtime.js";
 import * as supervisors from "../src/remote-listener-supervisor.js";

@@ -604,7 +604,7 @@ describe("DelegationWatchService", () => {
     await vi.advanceTimersByTimeAsync(59_000);
     expect(fake.sent).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(POLL_MS);
-    expect(fake.sent[0]?.message).toContain("watch expired");
+    expect(fake.sent[0]?.message).toContain(": timedOut.");
     expect(fake.sent[0]?.message).not.toContain(": stalled");
   });
 

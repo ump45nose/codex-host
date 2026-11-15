@@ -114,7 +114,7 @@ export function sharedHostDesktop(
         delegateCreates: true,
         diagnose: (error) => streams.diagnosticOutput.write(`Shared Host: ${String(error)}\n`),
       }),
-      ...(delegation ? { sharedDelegation: delegation } : {}),
+      sharedDelegation: options.delegation,
       ...installedHarnessPluginOptions(
         environment,
         false,

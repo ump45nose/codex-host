@@ -154,22 +154,21 @@ const TOOLS: Tool[] = [
         body: {
           harnessId: text(args, "harnessId", true),
           task: text(args, "task", true),
-          ...pick(args, ["taskName", "cwd", "requestId", "refs", "worktree", "base"]),
+          ...pick(args, [
+            "taskName",
+            "cwd",
+            "requestId",
+            "refs",
+            "worktree",
+            "base",
+            "watch",
+            "watchTimeoutMs",
+          ]),
+          ...stallOption(args),
           ...(args.model !== undefined ? { model: { id: text(args, "model") } } : {}),
           ...(args.thinking !== undefined ? { thinkingOptionId: text(args, "thinking") } : {}),
           ...(args.parentThread !== undefined
             ? { parentThreadId: text(args, "parentThread") }
-            : {}),
-          ...(args.watch === true
-            ? {
-                watchTimeoutMs: bounded(
-                  args,
-                  "watchTimeoutMs",
-                  DEFAULT_WATCH_TIMEOUT_MS,
-                  Number.MAX_SAFE_INTEGER,
-                ),
-                ...stallOption(args),
-              }
             : {}),
         },
       };

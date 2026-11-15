@@ -381,6 +381,9 @@ describe("external client MCP endpoint", () => {
       { stallAfterMs: 3_000 },
       { watch: false, stallAfterMs: 3_000 },
       { watch: true, stallAfterMs: 0 },
+      { watch: false, watchTimeoutMs: 1_000 },
+      { watch: true, watchTimeoutMs: 0 },
+      { watch: "invalid" },
     ]) {
       await expect(
         client.callTool({

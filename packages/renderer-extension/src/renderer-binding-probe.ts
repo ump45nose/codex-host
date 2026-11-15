@@ -1434,20 +1434,6 @@ export function installRendererBindingProbe(
   };
 
   let delegationMention: RendererDelegationMentionControl | null = null;
-  /**
-   * Workspace of each Host's current draft, published by the draft prewarm
-   * (the only place Desktop names it). A draft asks the Host for that
-   * workspace's live commands and skills.
-   */
-  const draftWorkspaces = new Map<string, string>();
-  {
-    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
-    if (typeof published === "object" && published !== null) {
-      for (const [hostId, cwd] of Object.entries(published)) {
-        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
-      }
-    }
-  }
   const skillContext = (editor: HTMLElement): RendererSkillContext | null => {
     const composer = composerForElement(editor);
     const mounted = composer ? mountedByComposer.get(composer) : undefined;

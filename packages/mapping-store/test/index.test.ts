@@ -1364,7 +1364,7 @@ describe("mapping-store package", () => {
       expect(lock).toMatchObject({ pid: process.pid, role: "remote app-server listener" });
       await expect(second.initialize()).rejects.toMatchObject({
         code: "STORE_LOCKED",
-        message: `Another codexhost process owns Mapping Store at ${path.resolve(directory)} (PID ${process.pid}, remote app-server listener, started ${lock.startedAt})`,
+        message: `Another codexhost process owns Mapping Store at ${path.resolve(directory)} (owner PID ${process.pid}; startedAt: ${lock.startedAt}; remote app-server listener)`,
       });
     } finally {
       await first.close();
@@ -1378,7 +1378,7 @@ describe("mapping-store package", () => {
     await first.initialize();
     try {
       await expect(second.initialize()).rejects.toThrow(
-        new RegExp(`\\(PID ${process.pid}, started [^,)]+\\)$`, "u"),
+        new RegExp(`\\(owner PID ${process.pid}; startedAt: [^;)]+\\)$`, "u"),
       );
     } finally {
       await first.close();

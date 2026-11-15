@@ -1,4 +1,3 @@
-use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Write};

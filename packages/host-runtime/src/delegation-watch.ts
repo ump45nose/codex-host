@@ -608,20 +608,19 @@ export class DelegationWatchService {
       if (!this.#clientEvents) throw new Error("This Runtime keeps no client events");
       await this.#clientEvents.append(
         client,
-        pending.map((watch) => ({
-          type: "watch" as const,
-          threadId: watch.threadId,
-          outcome: watch.outcome ?? "notFound",
-          deepLink: threadLink(watch.threadId),
-          ...(watch.turnId ? { turnId: watch.turnId } : {}),
-          ...(watch.harnessId ? { harnessId: watch.harnessId } : {}),
-          ...(watch.refs?.length ? { refs: watch.refs } : {}),
-          ...(watch.outcome === "stalled"
-            ? { note: describe(watch) }
-            : watch.restartNote
-              ? { note: watch.restartNote }
-              : {}),
-        })),
+        pending.map((watch) => {
+          const note = watch.outcome === "stalled" ? noticeNote(watch) : watch.restartNote;
+          return {
+            type: "watch" as const,
+            threadId: watch.threadId,
+            outcome: watch.outcome ?? "notFound",
+            deepLink: threadLink(watch.threadId),
+            ...(watch.turnId ? { turnId: watch.turnId } : {}),
+            ...(watch.harnessId ? { harnessId: watch.harnessId } : {}),
+            ...(watch.refs?.length ? { refs: watch.refs } : {}),
+            ...(note ? { note } : {}),
+          };
+        }),
       );
       for (const watch of pending) this.#remove(watch);
     } catch (error) {

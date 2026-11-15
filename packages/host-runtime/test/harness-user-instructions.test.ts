@@ -118,6 +118,7 @@ describe("HarnessUserInstructionsStore", () => {
     const env = {
       HOME: home,
       USERPROFILE: home,
+      CODEX_HOME: path.join(home, ".codex"),
       CODEXHOST_DATA_DIR: path.join(home, ".codexhost"),
     };
     const desktop = createFixture({ environment: env });

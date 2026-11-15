@@ -27,7 +27,7 @@ describe("AppServerHost startup failure", () => {
       const output: string = fixture.diagnosticOutput.read()?.toString() ?? "";
       const lines = output.split("\n").filter((line) => line.length > 0);
       const owner = new RegExp(
-        `Another codexhost process owns Mapping Store at ${mappingStoreDirectory.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&")} \\(PID ${process.pid}, remote app-server listener, started [^)]+\\)$`,
+        `Another codexhost process owns Mapping Store at ${mappingStoreDirectory.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&")} \\(owner PID ${process.pid}; startedAt: [^;)]+; remote app-server listener\\)$`,
         "u",
       );
       expect(lines[0]).toMatch(/^codexhost Host Runtime: Host initialization failed: /u);

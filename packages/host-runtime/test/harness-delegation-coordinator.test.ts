@@ -887,7 +887,7 @@ describe("HarnessDelegationCoordinator", () => {
       expect(document.turns[1]).toEqual(projector.snapshotTurn());
       expect(document.turns[1].items).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "reasoning", summary: ["live reasoning"] }),
+          expect.objectContaining({ type: "reasoning", summary: ["**live reasoning**"] }),
           expect.objectContaining({
             type: "commandExecution",
             command: "ls",
@@ -1073,7 +1073,7 @@ describe("HarnessDelegationCoordinator", () => {
           cwd: path.resolve("/parent-workspace"),
           requestId: "queued-request",
         },
-        title: "Review · claude-desktop",
+        title: "Review",
         taskDigest: expect.any(String),
       });
       expect(result).toEqual({
@@ -1083,7 +1083,7 @@ describe("HarnessDelegationCoordinator", () => {
         status: "queued",
         queue: { position: 2 },
         cwd: path.resolve("/parent-workspace"),
-        title: "Review · claude-desktop",
+        title: "Review",
         parentThreadId: "client:claude-desktop",
         next: expect.any(Object),
       });

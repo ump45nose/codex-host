@@ -104,6 +104,7 @@ describe("DelegationControlRegistry", () => {
       expect(subscriber.send).toHaveBeenCalledWith({
         threadId: "subscriber",
         message: expect.stringContaining(": stalled"),
+        steer: true,
       });
       remove();
       expect(unsubscribe).toHaveBeenCalledOnce();
@@ -224,6 +225,21 @@ describe("DelegationControlRegistry", () => {
     expect(sessionB.start).not.toHaveBeenCalled();
     expect(sessionA.read).toHaveBeenCalledOnce();
     expect(sessionA.send).toHaveBeenCalledOnce();
+  });
+  it("rejects conflicting or non-boolean send options before choosing a session", async () => {
+    const registry = new DelegationControlRegistry();
+    const target = registration("target");
+    registry.register(target);
+    for (const input of [
+      { threadId: "target", message: "adjust", steer: true, interrupt: true },
+      { threadId: "target", message: "adjust", steer: "true" },
+      { threadId: "target", message: "adjust", interrupt: "true" },
+    ])
+      await expect(
+        registry.send(input as unknown as Parameters<typeof registry.send>[0]),
+      ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(target.send).not.toHaveBeenCalled();
+    registry.close();
   });
   it("discovers targets from the active session without inspecting Models", async () => {
     const registry = new DelegationControlRegistry();

@@ -121,12 +121,15 @@ describe("shared Thread pending interactions", () => {
       };
       bridge.start((message) => messages.push(message));
       try {
+        // A catalog walk is what admits the shared Thread: v0.20.0 serves existing
+        // Threads through thread/list instead of announcing them on connect.
+        const walk = bridge.list({});
         await vi.waitFor(() => expect(requests).toHaveLength(1));
         emit({
           id: requestId(at(requests, 0)),
           result: { data: [{ id: "target" }], nextCursor: null },
         });
-        await vi.waitFor(() => expect(messages).toHaveLength(1));
+        await walk;
         messages.length = 0;
         for (const round of [0, 1]) {
           const id = 50 + round;

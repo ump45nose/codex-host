@@ -335,6 +335,7 @@ describe("delegation capacity in the registry", () => {
     expect(registration.send).toHaveBeenCalledWith({
       threadId: PARENT,
       message: expect.stringContaining(`(thread://${queued.threadId}): completed`),
+      steer: true,
     });
   });
 

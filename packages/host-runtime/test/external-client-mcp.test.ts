@@ -139,10 +139,11 @@ describe("external client MCP endpoint", () => {
       ).toMatchObject({ type: "integer", minimum: 1 });
     }
     expect(tools.find((tool) => tool.name === "thread_send")).toMatchObject({
-      description: expect.stringContaining("interrupt=true"),
+      description: expect.stringContaining("steer=true"),
       inputSchema: {
         properties: {
           interrupt: { type: "boolean" },
+          steer: { type: "boolean" },
           watch: { type: "boolean" },
           watchTimeoutMs: { type: "integer", minimum: 1 },
         },

@@ -1,8 +1,8 @@
 import {
   usageMeasurementsSchema,
+  mergeUsageOutputTimings,
   type UsageMeasurementsSnapshot,
 } from "@codexhost/shared-contracts";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -41,6 +41,7 @@ import {
   type StoredDelegationRecordV1,
   type StoredThreadMetadataV1,
   type StoredThreadRecordV1,
+  type StoredThreadSummaryV1,
   type StoredTurnMappingV1,
   type ThreadMetadataPatch,
 } from "./records.js";
@@ -54,6 +55,13 @@ import {
   writeSupersededSessionsFile,
   type StoredSupersededSessionV1,
 } from "./superseded-sessions.js";
+import {
+  createLockFile,
+  currentLockIdentity,
+  lockOwnerIsLive,
+  removeStaleLock,
+  type LockRecord,
+} from "./lock-file.js";
 
 export type MappingStoreErrorCode =
   | "STORE_LOCKED"
@@ -88,27 +96,17 @@ export interface MappingStoreOptions {
   beforeReplace?: (record: StoredThreadRecordV1) => Promise<void> | void;
 }
 
-interface LockRecord {
-  pid: number;
-  instanceId: string;
-  startedAt: string;
-  executablePath?: string;
-  processStartedAt?: string;
-  role?: string;
-}
+// The fork records a diagnostic role in the lock so a contender can name the
+// live owner; upstream's LockRecord (lock-file.ts) does not carry it.
+type LockRecordWithRole = Partial<LockRecord> & { role?: string };
 
-function lockOwnerDescription(lock: Partial<LockRecord>): string {
+function lockOwnerDescription(lock: LockRecordWithRole): string {
   const details = [
     `owner PID ${String(lock.pid)}`,
     `startedAt: ${typeof lock.startedAt === "string" && lock.startedAt ? lock.startedAt : "unknown"}`,
   ];
   if (typeof lock.role === "string" && lock.role) details.push(lock.role);
   return details.join("; ");
-}
-
-interface ProcessIdentity {
-  executablePath: string | null;
-  startedAt: number | null;
 }
 
 function cloneRecord<T>(record: T): T {
@@ -246,118 +244,6 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-function processIdentity(pid: number): ProcessIdentity | null {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    if (systemErrorCode(error) !== "EPERM") return null;
-  }
-
-  if (process.platform !== "win32" && process.platform !== "darwin") {
-    return { executablePath: null, startedAt: null };
-  }
-
-  try {
-    if (process.platform === "darwin") {
-      // PID existence is insufficient after reuse. Query only on lock contention;
-      // lstart has second precision, covered by the existing start-time tolerance.
-      const result = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        env: { ...process.env, LC_ALL: "C" },
-        timeout: 1_000,
-      }).trim();
-      const startedAt = Date.parse(result);
-      return { executablePath: null, startedAt: Number.isFinite(startedAt) ? startedAt : null };
-    }
-    // CIM can expose CreationDate for a reused system PID even when Get-Process cannot
-    // read its Path/StartTime. Serialize UTC explicitly: Windows PowerShell's default
-    // DateTime JSON representation is not an ISO timestamp that Date.parse can read.
-    const query = [
-      "$ErrorActionPreference = 'Stop'",
-      `$process = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${pid}'`,
-      "if ($null -ne $process) { [pscustomobject]@{ " +
-        "Path = $process.ExecutablePath; " +
-        "StartTime = $(if ($null -ne $process.CreationDate) { " +
-        "$process.CreationDate.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) " +
-        "} else { $null }) } | ConvertTo-Json -Compress }",
-    ].join("; ");
-    const result = execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", query],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        windowsHide: true,
-        timeout: 5_000,
-      },
-    ).trim();
-    if (!result) return { executablePath: null, startedAt: null };
-    const parsed = JSON.parse(result) as { Path?: unknown; StartTime?: unknown };
-    const executablePath = typeof parsed.Path === "string" ? parsed.Path : null;
-    const startedAt = typeof parsed.StartTime === "string" ? Date.parse(parsed.StartTime) : NaN;
-    return { executablePath, startedAt: Number.isFinite(startedAt) ? startedAt : null };
-  } catch {
-    // If process metadata cannot be queried, preserve the live-lock failure mode.
-    return { executablePath: null, startedAt: null };
-  }
-}
-
-function normalizeExecutablePath(value: string): string {
-  return process.platform === "win32" ? value.replaceAll("/", "\\").toLowerCase() : value;
-}
-
-function isNodeExecutable(value: string): boolean {
-  const normalized = normalizeExecutablePath(value);
-  return normalized.endsWith("\\node.exe") || normalized.endsWith("/node");
-}
-
-function lockOwnerIsLive(lock: Partial<LockRecord>): boolean {
-  if (typeof lock.pid !== "number") return false;
-  if (lock.pid === process.pid) {
-    if (
-      lock.executablePath &&
-      normalizeExecutablePath(lock.executablePath) !== normalizeExecutablePath(process.execPath)
-    ) {
-      return false;
-    }
-    if (lock.processStartedAt) {
-      const expected = Date.parse(lock.processStartedAt);
-      const actual = Date.now() - process.uptime() * 1_000;
-      if (Number.isFinite(expected) && Math.abs(actual - expected) > 5_000) return false;
-    }
-    return true;
-  }
-  const identity = processIdentity(lock.pid);
-  if (!identity) return false;
-  if (process.platform !== "win32" && process.platform !== "darwin") return true;
-
-  if (identity.executablePath && lock.executablePath) {
-    if (
-      normalizeExecutablePath(identity.executablePath) !==
-      normalizeExecutablePath(lock.executablePath)
-    ) {
-      return false;
-    }
-  } else if (
-    identity.executablePath &&
-    !lock.executablePath &&
-    !isNodeExecutable(identity.executablePath)
-  ) {
-    // Legacy locks have no executable identity. A reused PID owned by a non-Node
-    // process cannot be a live Host Runtime lock.
-    return false;
-  }
-
-  if (lock.processStartedAt && identity.startedAt !== null) {
-    const expected = Date.parse(lock.processStartedAt);
-    if (Number.isFinite(expected) && Math.abs(identity.startedAt - expected) > 5_000) {
-      return false;
-    }
-  }
-  return true;
-}
-
 export class MappingStore {
   readonly #backupsDirectory: string;
   readonly #delegationsDirectory: string;
@@ -384,7 +270,6 @@ export class MappingStore {
   // ponytail: A Store-wide queue caps write concurrency at one; shard only if measured throughput requires it.
   #writeTail: Promise<void> = Promise.resolve();
   #initialized = false;
-  #lockHandle: FileHandle | null = null;
 
   constructor(options: MappingStoreOptions) {
     this.#directory = path.resolve(options.directory);
@@ -557,6 +442,16 @@ export class MappingStore {
   async listThreads(): Promise<StoredThreadRecordV1[]> {
     this.#requireInitialized();
     return [...this.#records.values()].map(cloneRecord);
+  }
+
+  /** Every Thread without Turn mappings, which dominate record size and no catalog reads. */
+  async listThreadSummaries(): Promise<StoredThreadSummaryV1[]> {
+    this.#requireInitialized();
+    return [...this.#records.values()].map((record) => {
+      const summary: Partial<StoredThreadRecordV1> = { ...record };
+      delete summary.turnMappings;
+      return cloneRecord(summary as StoredThreadSummaryV1);
+    });
   }
 
   async getThreadByCreateRequest(createRequestId: string): Promise<StoredThreadRecordV1 | null> {
@@ -877,6 +772,13 @@ export class MappingStore {
         if (value && retained.has(value.turnId) && (!merged[field] || value.at >= merged[field].at))
           merged[field] = value;
       }
+      const outputTimings = mergeUsageOutputTimings(
+        prior && sameJson(prior.nativeSessionRef, expectedNativeSessionRef)
+          ? prior.values.outputTimings
+          : undefined,
+        parsed.outputTimings,
+      ).filter((value) => retained.has(value.turnId));
+      if (outputTimings.length) merged.outputTimings = outputTimings;
       const next = { ...current };
       if (Object.keys(merged).length)
         next.usageMeasurements = { nativeSessionRef: expectedNativeSessionRef, values: merged };
@@ -1120,10 +1022,7 @@ export class MappingStore {
 
   async close(): Promise<void> {
     await this.#writeTail;
-    const handle = this.#lockHandle;
-    this.#lockHandle = null;
     this.#initialized = false;
-    if (handle) await handle.close().catch(() => undefined);
     try {
       const current = JSON.parse(await readFile(this.#lockPath, "utf8")) as Partial<LockRecord>;
       if (current.instanceId === this.#instanceId) await rm(this.#lockPath, { force: true });
@@ -1423,7 +1322,7 @@ export class MappingStore {
       ...metadataNames
         .filter((name) => name.includes(".tmp-"))
         .map((name) => rm(path.join(this.#metadataDirectory, name), { force: true })),
-      // Renamed aside by #acquireLock; nothing reads them back, and they accumulate one per run.
+      // Stale locks renamed aside by older releases are no longer needed.
       ...rootNames
         .filter((name) => name.startsWith(`${path.basename(this.#lockPath)}.stale-`))
         .map((name) => rm(path.join(this.#directory, name), { force: true })),
@@ -1431,29 +1330,27 @@ export class MappingStore {
   }
 
   async #acquireLock(): Promise<void> {
-    const attempt = async (): Promise<FileHandle> => {
-      const handle = await open(this.#lockPath, "wx", constants.S_IRUSR | constants.S_IWUSR);
-      const lock: LockRecord = {
+    const attempt = async (): Promise<void> => {
+      const lock: LockRecord & { role?: string } = {
         pid: process.pid,
         instanceId: this.#instanceId,
         startedAt: this.#now().toISOString(),
         executablePath: process.execPath,
-        processStartedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        ...currentLockIdentity(),
         ...(this.#ownerRole ? { role: this.#ownerRole } : {}),
       };
-      await handle.writeFile(`${JSON.stringify(lock)}\n`, "utf8");
-      await handle.sync();
-      return handle;
+      return createLockFile(this.#lockPath, `${JSON.stringify(lock)}\n`);
     };
     try {
-      this.#lockHandle = await attempt();
+      await attempt();
       return;
     } catch (error) {
       if (systemErrorCode(error) !== "EEXIST") throw error;
     }
     let existing: Partial<LockRecord> = {};
+    const inspected = await readFile(this.#lockPath, "utf8").catch(() => null);
     try {
-      existing = JSON.parse(await readFile(this.#lockPath, "utf8")) as Partial<LockRecord>;
+      existing = JSON.parse(inspected ?? "") as Partial<LockRecord>;
     } catch {
       // An invalid lock cannot prove a live owner and is treated as stale.
     }
@@ -1463,11 +1360,11 @@ export class MappingStore {
         `Another codexhost process owns Mapping Store at ${this.#directory} (${lockOwnerDescription(existing)})`,
       );
     }
-    await rename(this.#lockPath, `${this.#lockPath}.stale-${this.#now().getTime()}`).catch(
-      () => undefined,
-    );
     try {
-      this.#lockHandle = await attempt();
+      if (inspected !== null) {
+        await removeStaleLock(this.#lockPath, inspected);
+      }
+      await attempt();
     } catch (error) {
       throw new MappingStoreError("STORE_LOCKED", "Mapping Store lock could not be acquired", {
         cause: error,

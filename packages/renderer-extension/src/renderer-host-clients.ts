@@ -5,6 +5,7 @@ import type {
 import {
   HARNESS_PREFERENCES_CHANGED_METHOD,
   HARNESS_DISPLAY_CHANGED_METHOD,
+  SKILLS_CHANGED_METHOD,
 } from "@codexhost/shared-contracts";
 import {
   createRendererModelClient,
@@ -89,6 +90,7 @@ export function createRendererHostClients(
                       THREAD_USAGE_UPDATED_METHOD,
                       HARNESS_PREFERENCES_CHANGED_METHOD,
                       HARNESS_DISPLAY_CHANGED_METHOD,
+                      SKILLS_CHANGED_METHOD,
                     ].includes(method),
                   )
                 )
@@ -113,6 +115,7 @@ export function createRendererHostClients(
                       THREAD_USAGE_UPDATED_METHOD,
                       HARNESS_PREFERENCES_CHANGED_METHOD,
                       HARNESS_DISPLAY_CHANGED_METHOD,
+                      SKILLS_CHANGED_METHOD,
                     ].includes(String(message.method)) ||
                     !(typeof methods === "string" ? [methods] : methods).includes(
                       String(message.method),

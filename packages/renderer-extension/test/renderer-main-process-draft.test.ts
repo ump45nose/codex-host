@@ -146,6 +146,7 @@ it.each<RendererAgent>(["claude-code", "antigravity", "deepseek-harness", "pi"])
       );
       expect(input).toEqual({
         ...f.originals[0],
+        // The routed creation names the carrier in config so it cannot consume a native prewarm.
         config: { model: input.collaborationMode.settings.model },
         collaborationMode: {
           mode: "default",

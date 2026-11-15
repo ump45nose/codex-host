@@ -37,7 +37,7 @@ RPC 布局下的 Windows Remote Control 复用已加载模块中的原生 Manage
 
 主进程消费的原生审批、提问及 MCP elicitation 不会作为普通窗口请求广播。适配器订阅这些原生交互事件，按事件中的 Thread 从原生会话读取待处理请求，并通过原生 Manager 展示和回应；安装或重连时读取一次未完成工作的快照以恢复已有交互，不轮询。请求按 Thread 与原生 request ID 去重，读取期间发生的新交互或解决事件会触发一次新快照，旧快照不能重新显示已解决的审批。交互订阅成功后才发布新路由；订阅失败时释放候选 Manager，保留官方服务。
 
-该版本的官方模型目录可能过滤草稿中的外部 transport Model。RPC 路由依据已登记的 `clientThreadId`，在本次 `startConversation` 发出时把官方回退模型替换为外部 carrier（创建参数没有 Model 时同样写入 carrier），保留输入、工作区、Thinking、原生回调及传输参数；不修改原始模式对象。不属于已登记草稿的创建、无法识别的参数和明确指定另一个外部 carrier 的创建保持原样。可识别的外部预热请求一律带上预热标记：请求本身指定了外部 carrier 时保留其 Harness 与 Model，否则使用当前已选择的 carrier；Host 据此把它登记为可丢弃的预热，而不是发布新 Thread。没有外部选择的官方预热及无法识别的 carrier 保持原样。
+该版本的官方模型目录可能过滤草稿中的外部 transport Model。RPC 路由依据已登记的 `clientThreadId`，在本次 `startConversation` 发出时把官方回退模型替换为外部 carrier（创建参数没有 Model 时同样写入 carrier）；明确指定另一个外部 carrier 时沿用该 carrier。可识别的创建 `config` 同时补齐 `model`，使外部创建不消费按工作区匹配的原生预热，即使选择后又发生了预热；调用方已有配置优先，无法识别的配置形状保留原值。输入、工作区、Thinking、原生校验、回调及传输参数保持不变，不修改原始模式对象。不属于已登记草稿的创建和无法识别的创建参数保持原样，官方预热路径不变。可识别的外部预热请求一律带上预热标记：请求本身指定了外部 carrier 时保留其 Harness 与 Model，否则使用当前已选择的 carrier；Host 据此把它登记为可丢弃的预热，而不是发布新 Thread。没有外部选择的官方预热及无法识别的 carrier 保持原样。
 
 RPC 普通外部草稿同时把同一 carrier 写入本次创建的 `config.model`，保留其他配置覆盖。Desktop 26.1103 的主进程预热池按工作目录匹配，不比较 Model；原生准备遇到显式配置会直接创建 Thread，因此该外部提交不会复用官方或其他 Harness 的预热，包括选择后才返回的在途预热。代价是这条 RPC 创建路径使用冷启动；配置只作用于本次创建，不写入官方默认 Model。官方草稿、未登记的创建及原生 Renderer Manager 路径继续使用各自的预热策略。
 

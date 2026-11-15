@@ -12,6 +12,7 @@ import {
   USAGE_STATISTICS_METHOD,
   THREAD_RELATION_LIST_METHOD,
   DELEGATION_CAPACITY_SETTINGS_METHOD,
+  SKILLS_LIST_METHOD,
 } from "@codexhost/shared-contracts";
 import {
   storedSectionPlacementV1Schema,
@@ -189,6 +190,7 @@ export class SharedThreadBridge {
         USAGE_STATISTICS_METHOD,
         THREAD_RELATION_LIST_METHOD,
         DELEGATION_CAPACITY_SETTINGS_METHOD,
+        SKILLS_LIST_METHOD,
       ].some((value) => value === method)
     );
   }

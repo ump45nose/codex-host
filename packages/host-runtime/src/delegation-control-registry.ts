@@ -25,6 +25,8 @@ import {
 import { DelegationWatchService, type ClientEventSink } from "./delegation-watch.js";
 import type { DelegationWatchStore } from "./delegation-watch-store.js";
 import { clientOrigin, originClientName } from "./external-client-origin.js";
+import { interruptAndSend } from "./delegation-interrupt-send.js";
+import { validateThreadExportInput, type ThreadExportInput } from "./delegation-thread-export.js";
 import { mergeRefs, normalizeRefs, type ThreadRefsStore } from "./thread-refs.js";
 
 const REF_CURSOR_PREFIX = "ref:";
@@ -177,21 +179,30 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
     }
     if (await this.#neverStarted({ threadId: input.threadId, view: "result" }))
       throw new DelegationControlError("THREAD_NOT_FOUND", "Thread was never started");
-    return (await this.#registrationForThread(input.threadId)).send(input);
+    if (input.interrupt !== undefined && typeof input.interrupt !== "boolean")
+      throw new DelegationControlError("INVALID_ARGUMENT", "interrupt must be a boolean");
+    const registration = await this.#registrationForThread(input.threadId);
+    if (!input.interrupt) return registration.send(input);
+    const send = { threadId: input.threadId, message: input.message };
+    return this.#watchService.holdNotifications(input.threadId, () =>
+      interruptAndSend(registration, send),
+    );
   }
 
   async cancel(input: Parameters<DelegationControlApi["cancel"]>[0]) {
-    const removed = await this.#capacity.cancel(input.threadId);
-    if (removed) return removed;
-    const finished = await this.#neverStarted({ threadId: input.threadId, view: "result" });
-    if (finished)
-      return {
-        threadId: input.threadId,
-        turnId: null,
-        harnessId: finished.harnessId,
-        cancelled: false,
-      };
-    return (await this.#registrationForThread(input.threadId)).cancel(input);
+    return this.#watchService.cancel(input.threadId, async () => {
+      const removed = await this.#capacity.cancel(input.threadId);
+      if (removed) return removed;
+      const finished = await this.#neverStarted({ threadId: input.threadId, view: "result" });
+      if (finished)
+        return {
+          threadId: input.threadId,
+          turnId: null,
+          harnessId: finished.harnessId,
+          cancelled: false,
+        };
+      return (await this.#registrationForThread(input.threadId)).cancel(input);
+    });
   }
 
   async read(input: ThreadReadInput) {
@@ -226,6 +237,14 @@ export class DelegationControlRegistry implements DelegationControlApi, Delegati
     const queued = (await this.#capacity.read(read)) ?? (await this.#neverStarted(read));
     if (queued) return queued;
     return (await this.#registrationForThread(read.threadId)).read(read);
+  }
+
+  async exportThread(input: ThreadExportInput) {
+    validateThreadExportInput(input);
+    const registration = await this.#registrationForThread(input.threadId);
+    if (!registration.exportThread)
+      throw new DelegationControlError("UNSUPPORTED", "Thread export is unavailable");
+    return registration.exportThread(input);
   }
 
   async wait(input: ThreadWaitInput) {

@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DelegationControlApi, DelegationThreadSnapshot } from "../src/delegation-types.js";
 import { readThreadResultFile } from "../src/thread-result-file.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
+const actualFs = await vi.importActual<typeof FsPromises>("node:fs/promises");
+
 describe("Thread result files", () => {
   let directory: string;
   let workspace: string;
@@ -16,7 +24,8 @@ describe("Thread result files", () => {
   const api = { read } as unknown as DelegationControlApi;
 
   beforeEach(async () => {
-    directory = await mkdtemp(path.join(os.tmpdir(), "result-files-"));
+    vi.mocked(open).mockImplementation(actualFs.open);
+    directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "result-files-")));
     workspace = path.join(directory, "workspace");
     await mkdir(workspace);
     snapshot = {
@@ -27,11 +36,11 @@ describe("Thread result files", () => {
       turn: { turnId: "turn-1", status: "completed" },
       progress: [],
       result: { availability: "available", text: "" },
-      nextCursor: null,
     };
   });
 
   afterEach(async () => {
+    vi.mocked(open).mockReset();
     await rm(directory, { recursive: true, force: true });
   });
 
@@ -75,6 +84,132 @@ describe("Thread result files", () => {
       ).resolves.toMatchObject({ size: 0, data: "", eof: true, nextOffset: 0 });
     }
   });
+
+  it.each([
+    ["plot(1).png", "plot(1).png"],
+    ["plot(1(nested)).png", "plot(1(nested)).png"],
+    ["plot\\(1\\).png", "plot(1).png"],
+    ["plot%281%29.png", "plot(1).png"],
+  ])("exports balanced Markdown destination %s", async (link, filename) => {
+    await writeFile(path.join(workspace, filename), "fixture bytes");
+    snapshot.result.text = `[result](${link})`;
+    await expect(
+      readThreadResultFile(api, { threadId: "task-1", path: filename }),
+    ).resolves.toMatchObject({ data: Buffer.from("fixture bytes").toString("base64") });
+  });
+
+  it.each([
+    ['plot.png "Chart"', "plot.png"],
+    ["plot.png 'Chart'", "plot.png"],
+    ["plot.png (Chart)", "plot.png"],
+    ['<plot (1).png> "Chart"', "plot (1).png"],
+    ["notes.md#usage", "notes.md"],
+    ["100%.md", "100%.md"],
+    ["100%25.md", "100%.md"],
+  ])("exports CommonMark destination %s", async (link, filename) => {
+    await writeFile(path.join(workspace, filename), "fixture bytes");
+    snapshot.result.text = `See [result](${link}).`;
+    await expect(
+      readThreadResultFile(api, { threadId: "task-1", path: filename }),
+    ).resolves.toMatchObject({ data: Buffer.from("fixture bytes").toString("base64") });
+  });
+
+  it.each([
+    ['plot.png\n"Chart"', "plot.png"],
+    ['plot.png\r\n"Chart"', "plot.png"],
+    ['plot.png \n  "Chart"\n', "plot.png"],
+    ['plot.png\r\n"Chart"\r\n', "plot.png"],
+    ["plot.png\n", "plot.png"],
+    ['plot.png "Two\nlines"', "plot.png"],
+    ["notes.md#section/subsection", "notes.md"],
+    ["notes.md#one#two", "notes.md"],
+  ])("exports CommonMark destination split across lines or anchored %j", async (link, filename) => {
+    await writeFile(path.join(workspace, filename), "fixture bytes");
+    snapshot.result.text = `See [result](${link}).`;
+    await expect(
+      readThreadResultFile(api, { threadId: "task-1", path: filename }),
+    ).resolves.toMatchObject({ data: Buffer.from("fixture bytes").toString("base64") });
+  });
+
+  it.each(["plot%281%29.png", "100%25.md", "notes%23topic.md"])(
+    "does not authorize the literal spelling of encoded destination %s",
+    async (link) => {
+      const decoded = decodeURIComponent(link);
+      await writeFile(path.join(workspace, link), "unlinked bytes");
+      await writeFile(path.join(workspace, decoded), "linked bytes");
+      snapshot.result.text = `[result](${link})`;
+      await expect(
+        readThreadResultFile(api, { threadId: "task-1", path: link }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        readThreadResultFile(api, { threadId: "task-1", path: decoded }),
+      ).resolves.toMatchObject({ data: Buffer.from("linked bytes").toString("base64") });
+    },
+  );
+
+  it.each([
+    'plot.png\n\n"Chart"',
+    'plot.png\r\n\r\n"Chart"',
+    'plot.png\n \t\n"Chart"',
+    'plot.png "Chart"\n\n',
+    'plot.png "Two\n\nparagraphs"',
+    'plot.png "Two\\\n\nparagraphs"',
+  ])("does not authorize a link broken by a blank line %j", async (link) => {
+    await writeFile(path.join(workspace, "plot.png"), "fixture bytes");
+    snapshot.result.text = `[result](${link})`;
+    await expect(
+      readThreadResultFile(api, { threadId: "task-1", path: "plot.png" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it.each(['plot.png "Chart', "plot.png Chart", "../plot.png#top", '../plot.png "Chart"'])(
+    "does not authorize an unterminated title or an outside destination %s",
+    async (link) => {
+      await writeFile(path.join(workspace, "plot.png"), "fixture bytes");
+      snapshot.result.text = `[result](${link})`;
+      await expect(
+        readThreadResultFile(api, { threadId: "task-1", path: "plot.png" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
+
+  it.each(["plot(1.png", "https://example.test/plot(1).png", "../plot(1).png"])(
+    "does not authorize malformed, remote or outside destination %s",
+    async (link) => {
+      await writeFile(path.join(workspace, "plot(1).png"), "fixture bytes");
+      snapshot.result.text = `[result](${link})`;
+      await expect(
+        readThreadResultFile(api, { threadId: "task-1", path: "plot(1).png" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
+
+  it.each([false, true])(
+    "rejects a parent swapped before open, even if restored afterwards: %s",
+    async (restore) => {
+      const parent = path.join(workspace, "outputs");
+      const saved = path.join(workspace, "saved");
+      const outside = path.join(directory, "outside");
+      await mkdir(parent);
+      await mkdir(outside);
+      await writeFile(path.join(parent, "result.txt"), "inside fixture");
+      await writeFile(path.join(outside, "result.txt"), "outside fixture");
+      snapshot.result.text = "[result](outputs/result.txt)";
+      vi.mocked(open).mockImplementationOnce(async (...args) => {
+        await rename(parent, saved);
+        await symlink(outside, parent, process.platform === "win32" ? "junction" : "dir");
+        const handle = await actualFs.open(...args);
+        if (restore) {
+          await rm(parent);
+          await rename(saved, parent);
+        }
+        return handle;
+      });
+      await expect(
+        readThreadResultFile(api, { threadId: "task-1", path: "outputs/result.txt" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
 
   it("rejects unlinked files and links outside the workspace", async () => {
     await writeFile(path.join(directory, "private.txt"), "private");

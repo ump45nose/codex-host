@@ -1,6 +1,5 @@
 import type { DelegationCliCommand } from "./delegation-cli-help.js";
 import {
-  DelegationControlError,
   type DelegationStartResult,
   type DelegationThreadListResult,
   type DelegationThreadSnapshot,
@@ -17,7 +16,7 @@ function targetLink(identifier: string): string {
   return originClientName(identifier) !== undefined ? identifier : threadLink(identifier);
 }
 
-export type DelegationCliFormat = "json" | "compact";
+export type DelegationCliFormat = "json" | "compact" | "text";
 
 function threadLink(threadId: string): string {
   return `codex://threads/${threadId}`;
@@ -72,21 +71,20 @@ function snapshotOutput(
     ...(snapshot.timedOut !== undefined ? { timedOut: snapshot.timedOut } : {}),
   };
   if (view === "messages") {
-    if (typeof snapshot.hasMore !== "boolean") {
-      throw new DelegationControlError(
-        "INTERNAL_ERROR",
-        "Compact message pagination requires an updated Host Runtime; use --format json with this Runtime.",
-      );
-    }
     return {
       ...common,
-      messages: (snapshot.messages ?? []).map(({ role, phase, text }) => ({
-        role,
-        ...(phase ? { phase } : {}),
-        text,
+      totalTurns: snapshot.totalTurns,
+      from: snapshot.from,
+      to: snapshot.to,
+      turns: (snapshot.turns ?? []).map(({ turnNumber, status, messages }) => ({
+        turnNumber,
+        status,
+        messages: messages.map(({ role, phase, text }) => ({
+          role,
+          ...(phase ? { phase } : {}),
+          text,
+        })),
       })),
-      hasMore: snapshot.hasMore,
-      nextCursor: snapshot.nextCursor,
       ...(snapshot.result.message ? { error: snapshot.result.message } : {}),
     };
   }
@@ -109,6 +107,7 @@ export function compactDelegationOutput(
     case "host info":
     case "project list":
     case "thread file":
+    case "thread export":
     case "harness list":
       return body;
     case "harness inspect":
@@ -122,6 +121,7 @@ export function compactDelegationOutput(
         status: result.status,
         ...(result.queue ? { queuePosition: result.queue.position } : {}),
         ...(result.cwd ? { cwd: result.cwd } : {}),
+        ...(result.worktree ? { worktree: result.worktree } : {}),
         ...(result.parentThreadId
           ? {
               parent: targetLink(result.parentThreadId),
@@ -140,6 +140,7 @@ export function compactDelegationOutput(
         thread: threadLink(result.threadId),
         harnessId: result.harnessId,
         status: result.status,
+        ...watchOutput(result.watch),
       };
     }
     case "thread cancel": {
@@ -168,13 +169,26 @@ export function compactDelegationOutput(
       const result = body as ThreadWatchListResult;
       return {
         watches: result.watches.map(
-          ({ threadId, notifyThreadId, state, outcome, reason, stallAfterMs }) => ({
+          ({
+            threadId,
+            notifyThreadId,
+            state,
+            outcome,
+            reason,
+            stallAfterMs,
+            taskName,
+            threadStatus,
+            watchedForMs,
+          }) => ({
             thread: threadLink(threadId),
             notify: targetLink(notifyThreadId),
             state,
             ...(outcome ? { outcome } : {}),
             ...(reason ? { reason } : {}),
             ...(stallAfterMs !== undefined ? { stallAfterMs } : {}),
+            ...(taskName ? { taskName } : {}),
+            ...(threadStatus ? { threadStatus } : {}),
+            ...(watchedForMs !== undefined ? { watchedForMs } : {}),
           }),
         ),
       };

@@ -1,4 +1,3 @@
-#[cfg(target_os = "windows")]
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -117,7 +116,7 @@ pub(super) fn host_runtime_node_candidates(
     npm_node: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut nodes = Vec::new();
-    if let Some(npm_node) = npm_node.filter(|path| !path.as_os_str().is_empty()) {
+    if let Some(npm_node) = npm_node.filter(|path| path.is_file()) {
         nodes.push(npm_node.to_path_buf());
     }
     if !nodes.iter().any(|node| node == options_node) {
@@ -132,10 +131,19 @@ pub(super) fn wait_for_host_chain(
     npm_node: Option<&Path>,
     timeout: Duration,
 ) -> Result<bool, Box<dyn Error>> {
-    let host_nodes = host_runtime_node_candidates(&options.node, npm_node);
+    let nodes = host_runtime_node_candidates(&options.node, npm_node);
+    wait_for_host_chain_with_nodes(desktop, options, &nodes, timeout)
+}
+
+pub(super) fn wait_for_host_chain_with_nodes(
+    desktop: &ProcessSnapshot,
+    options: &ResolvedLaunchOptions,
+    nodes: &[PathBuf],
+    timeout: Duration,
+) -> Result<bool, Box<dyn Error>> {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        for node in &host_nodes {
+        for node in nodes {
             if descendant_executable_pair_exists(desktop, &options.shim, node)? {
                 return Ok(true);
             }
@@ -407,6 +415,124 @@ mod tests {
     }
 
     #[test]
+    fn npm_node_path_widens_host_runtime_node_candidates() {
+        let default_node = PathBuf::from("/bin/sleep");
+        assert_eq!(
+            host_runtime_node_candidates(&default_node, None),
+            vec![default_node.clone()]
+        );
+        // A missing npm Node must not widen the accepted set.
+        assert_eq!(
+            host_runtime_node_candidates(
+                &default_node,
+                Some(Path::new("/nonexistent/codexhost-npm-node"))
+            ),
+            vec![default_node.clone()]
+        );
+        // An npm Node identical to the default adds nothing.
+        assert_eq!(
+            host_runtime_node_candidates(&default_node, Some(&default_node)),
+            vec![default_node.clone()]
+        );
+        // Any existing file is sufficient; avoid a shared, writable temp fixture.
+        let npm_node = env::current_exe().expect("current test executable");
+        assert_eq!(
+            host_runtime_node_candidates(&default_node, Some(&npm_node)),
+            vec![npm_node, default_node]
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn host_chain_accepts_the_npm_runtime_node_instead_of_the_default_node() {
+        use codexhost_platform::{process_snapshot, spawn_supervised};
+        use std::process::{Command, Stdio};
+
+        let shell = Path::new("/bin/bash").canonicalize().unwrap();
+        let sleep = Path::new("/bin/sleep").canonicalize().unwrap();
+        let mut command = Command::new(&shell);
+        command
+            .args([
+                "-c",
+                "\"$1\" -c '\"$1\" 30 & wait' fixture \"$2\" & wait",
+                "fixture",
+            ])
+            .arg(&shell)
+            .arg(&sleep)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut root = spawn_supervised(&mut command).unwrap();
+        let snapshot = process_snapshot(root.id()).unwrap();
+        // An npm launch resolves `options.node` to the Desktop cua_node while
+        // the Shim actually runs the Host Runtime on the npm Node; the cua_node
+        // under Desktop only appears later with unrelated MCP helpers.
+        let options = ResolvedLaunchOptions {
+            shim: shell.clone(),
+            node: Path::new("/bin/cat").to_path_buf(),
+            host_runtime: sleep.clone(),
+            desktop_controller: sleep.clone(),
+            renderer_extension: sleep,
+            pi: None,
+        };
+        let not_ready = wait_for_host_chain_with_nodes(
+            &snapshot,
+            &options,
+            std::slice::from_ref(&options.node),
+            Duration::from_millis(200),
+        )
+        .unwrap();
+        root.force_terminate().unwrap();
+        root.wait().unwrap();
+        assert!(
+            !not_ready,
+            "waiting only for the cua_node must not become ready"
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn host_chain_becomes_ready_once_the_npm_node_pair_exists() {
+        use codexhost_platform::{process_snapshot, spawn_supervised};
+        use std::process::{Command, Stdio};
+
+        let shell = Path::new("/bin/bash").canonicalize().unwrap();
+        let sleep = Path::new("/bin/sleep").canonicalize().unwrap();
+        let mut command = Command::new(&shell);
+        command
+            .args([
+                "-c",
+                "\"$1\" -c '\"$1\" 30 & wait' fixture \"$2\" & wait",
+                "fixture",
+            ])
+            .arg(&shell)
+            .arg(&sleep)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut root = spawn_supervised(&mut command).unwrap();
+        let snapshot = process_snapshot(root.id()).unwrap();
+        let options = ResolvedLaunchOptions {
+            shim: shell,
+            node: Path::new("/bin/cat").to_path_buf(),
+            host_runtime: sleep.clone(),
+            desktop_controller: sleep.clone(),
+            renderer_extension: sleep.clone(),
+            pi: None,
+        };
+        let nodes = host_runtime_node_candidates(&options.node, Some(&sleep));
+        let ready =
+            wait_for_host_chain_with_nodes(&snapshot, &options, &nodes, Duration::from_secs(2))
+                .unwrap();
+        root.force_terminate().unwrap();
+        root.wait().unwrap();
+        assert!(
+            ready,
+            "the Shim-selected npm Node must satisfy Host chain readiness"
+        );
+    }
+
+    #[test]
     fn recorded_launcher_requires_an_inspectable_matching_executable() {
         let expected = env::current_exe()
             .expect("current executable")
@@ -459,7 +585,7 @@ mod tests {
     fn host_runtime_node_candidates_prefer_npm_node_without_dropping_options_node() {
         let options_node =
             PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node");
-        let npm_node = PathBuf::from("/opt/homebrew/Cellar/node/26.13.0_1/bin/node");
+        let npm_node = env::current_exe().expect("current executable");
 
         assert_eq!(
             host_runtime_node_candidates(&options_node, Some(&npm_node)),

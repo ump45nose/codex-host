@@ -280,7 +280,7 @@ function creation(
           input: [[{ type: "text", text: "hello" }]],
           collaborationMode: { mode: "default", settings: { model, reasoning_effort: "high" } },
           cwd: "/work",
-          ...(config ? { config } : {}),
+          ...(config === undefined ? {} : { config }),
         },
         options,
       ],
@@ -637,56 +637,79 @@ it("applies an external draft's carrier only to that draft's creation call", asy
   }
 });
 
-it.each(["local", "remote-ssh:other", "remote-control:legacy"])(
-  "keeps an external creation off %s's official prewarm after asynchronous preparation",
+// Native prepareConversation (Desktop 26.1106): with otherwise eligible inputs,
+// a nonempty explicit config prevents consuming the cwd-keyed prewarm pool.
+async function consumeCreationPrewarm(input: Record<string, unknown>, consume: () => string) {
+  await Promise.resolve();
+  const config = input.config;
+  return config == null || Object.keys(config).length === 0 ? consume() : null;
+}
+
+it.each(["local", "remote-ssh:isolated", "remote-control:legacy"])(
+  "does not consume a late official prewarm for an external draft on %s",
   async (hostId) => {
-    const fixture = setup({ hosts: hostId === "local" ? ["local"] : ["local", hostId] });
+    const fixture = setup({ hosts: [hostId] });
     const routing = await install(fixture);
     try {
       const policy = policyOf(routing.forHost(hostId));
       policy.select(carrier, "client-new-thread:external");
-      // Model Desktop 26.1103's native admission: per-start config disables reuse.
-      // Clearing on selection cannot prevent this official prewarm arriving later.
-      const preparing = Promise.withResolvers<undefined>();
-      const consume = vi.fn(() => ({ thread: { id: "official-prewarm" }, model: "gpt-6.1-sol" }));
-      const create = vi.fn((model: string) => ({ thread: { id: "external-thread" }, model }));
-      const start = async (message: unknown[]) => {
-        const args = (message[1] as unknown[])[3] as [
-          {
-            config?: Record<string, unknown>;
-            collaborationMode: { settings: { model: string } };
+      expect(fixture.rpc.clearPrewarmedThreads).toHaveBeenCalledOnce();
+      for (const config of [
+        undefined,
+        {},
+        { model_reasoning_effort: "low" },
+        { model: "explicit", custom: { keep: true } },
+      ]) {
+        // A native prewarm can arrive after selection cleared the previous pool.
+        fixture.post(creation("prewarmConversation", "official", {}));
+        const consume = vi.fn(() => "official-thread");
+        const message = creation("startConversation", "official", {
+          clientThreadId: "client-new-thread:external",
+        });
+        const input = ((message[1] as unknown[])[3] as Record<string, unknown>[])[0];
+        if (!input) throw new Error("Missing creation input");
+        if (config !== undefined) input.config = config;
+        Object.assign(input, {
+          workspaceRoots: ["/work"],
+          permissionsConfig: { approvalPolicy: "on-request", sandboxPolicy: { type: "readOnly" } },
+          baseInstructions: null,
+          defaultFeatureOverrides: {},
+        });
+        const original = structuredClone(message);
+        fixture.post(message);
+        const routed = (
+          ((fixture.sent.at(-1) as unknown[])[1] as unknown[])[3] as Record<string, unknown>[]
+        )[0];
+        if (!routed) throw new Error("Missing routed creation input");
+        expect(await consumeCreationPrewarm(routed, consume)).not.toBe("official-thread");
+        expect(consume).not.toHaveBeenCalled();
+        expect(routed.config).toEqual({ ...config, model: carrier });
+        expect(routed).toEqual({
+          ...input,
+          config: { ...config, model: carrier },
+          collaborationMode: {
+            mode: "default",
+            settings: { model: carrier, reasoning_effort: "high" },
           },
-        ];
-        await preparing.promise;
-        return !args[0].config || Object.keys(args[0].config).length === 0
-          ? consume()
-          : create(args[0].collaborationMode.settings.model);
-      };
-      const request = creation("startConversation", "gpt-6.1-sol", {
-        clientThreadId: "client-new-thread:external",
-      });
-      fixture.post(request);
-      const external = start(fixture.sent.at(-1) as unknown[]);
-      // Another draft's selection must not change an already-dispatched creation.
-      policy.select("codexhost/pi-native", "client-new-thread:other");
-      const officialRequest = creation("startConversation", "gpt-6.1-sol", {
-        clientThreadId: "client-new-thread:official",
-      });
-      fixture.post(officialRequest);
-      const official = start(fixture.sent.at(-1) as unknown[]);
-      preparing.resolve(undefined);
-      await expect(external).resolves.toEqual({
-        thread: { id: "external-thread" },
-        model: carrier,
-      });
-      await expect(official).resolves.toEqual({
-        thread: { id: "official-prewarm" },
-        model: "gpt-6.1-sol",
-      });
-      expect(create).toHaveBeenCalledExactlyOnceWith(carrier);
-      expect(consume).toHaveBeenCalledOnce();
-      expect(fixture.sent.at(-1)).toBe(officialRequest);
-      expect(((request[1] as unknown[])[3] as unknown[])[0]).not.toHaveProperty("config");
+        });
+        expect(message).toEqual(original);
+      }
+      // An unrelated official draft retains the native warm path and input identity.
+      for (const config of [undefined, {}, { model: "explicit" }]) {
+        const official = creation(
+          "startConversation",
+          "official",
+          { clientThreadId: "client-new-thread:codex" },
+          config,
+        );
+        fixture.post(official);
+        expect(fixture.sent.at(-1)).toBe(official);
+        const input = ((official[1] as unknown[])[3] as Record<string, unknown>[])[0];
+        if (!input) throw new Error("Missing official creation input");
+        expect(await consumeCreationPrewarm(input, () => "official-thread")).toBe(
+          config && Object.keys(config).length ? null : "official-thread",
+        );
+      }
     } finally {
       routing.dispose();
     }
@@ -882,8 +905,21 @@ it("preserves an explicit different external model on a known draft", async () =
     const explicit = creation("startConversation", "codexhost/pi-native", {
       clientThreadId: "client-new-thread:external",
     });
+    const original = structuredClone(explicit);
     fixture.post(explicit);
-    expect(fixture.sent.at(-1)).toBe(explicit);
+    expect(fixture.sent.at(-1)).toEqual(
+      creation(
+        "startConversation",
+        "codexhost/pi-native",
+        { clientThreadId: "client-new-thread:external" },
+        { model: "codexhost/pi-native" },
+      ),
+    );
+    expect(explicit).toEqual(original);
+    const routed = (((fixture.sent.at(-1) as unknown[])[1] as unknown[])[3] as unknown[])[0];
+    expect(
+      await consumeCreationPrewarm(routed as Record<string, unknown>, () => "official-thread"),
+    ).toBeNull();
   } finally {
     routing.dispose();
   }

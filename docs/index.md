@@ -18,6 +18,7 @@
 | [`architecture/harness-plugin-runtime.md`](architecture/harness-plugin-runtime.md) | 当前 Cordis 生命周期、动态目录、插件本地化与额度契约、预装发行及安全边界；修改插件系统时首先阅读。 |
 | [`architecture/harness-plugin-architecture.md`](architecture/harness-plugin-architecture.md) | 插件化目标架构与未完成迁移方案；规划后续解耦时阅读，接口示例不代表当前 API。 |
 | [`architecture/harness-command-integration.md`](architecture/harness-command-integration.md) | Harness 原生命令的 Adapter、Host、Renderer 边界；新增命令能力时阅读。 |
+| [`architecture/skill-library.md`](architecture/skill-library.md) | Host 统一发现全局与项目 Skill 的目录清单、扫描与刷新、`codexhost/skills/list` 接口，以及 Web/Desktop 以带路径文本引用选用 Skill；修改 Skill 发现或选用时阅读。 |
 | [`architecture/harness-executable-discovery.md`](architecture/harness-executable-discovery.md) | Harness CLI 的跨平台发现、连接页安装指引和 DSH 特殊连接范围；修改安装指引、发现或启动逻辑时阅读。 |
 | [`architecture/harness-session-import.md`](architecture/harness-session-import.md) | 原生会话的本地/远程 Host 导入契约、Broker 转发和恢复边界；扩展导入能力时阅读。 |
 | [`architecture/harness-questions.md`](architecture/harness-questions.md) | 外部 Harness 多选提问卡片、原生单选分流、回答归属与生命周期；修改提问交互时阅读。 |
@@ -28,6 +29,7 @@
 | [`architecture/gui-web-shared-state-design.md`](architecture/gui-web-shared-state-design.md) | 共享 Host 的官方 Codex 与外部 Thread 所有权、存储边界、启动发现及生命周期；不提供旧 standalone 迁移。 |
 | [`architecture/external-thread-media.md`](architecture/external-thread-media.md) | 外部 Thread 中本地图片的 Desktop 加载条件、Agent 消息媒体路径改写和用户消息图片附件还原；修改媒体显示或排查图片不显示时阅读。 |
 | [`architecture/delegation-titles.md`](architecture/delegation-titles.md) | 委派子会话标题、子任务显示名、创建快照与重试边界。 |
+| [`architecture/delegation-worktrees.md`](architecture/delegation-worktrees.md) | CLI 与 HTTP/MCP 委派创建独立 Git worktree 的目录、HEAD 基线、返回字段、状态校验与失败保留边界。 |
 | [`architecture/delegation-thread-list.md`](architecture/delegation-thread-list.md) | 委派 CLI 列表的共享 catalog、独立来源分页、查询绑定与活列表一致性边界。 |
 | [`architecture/sidebar-thread-tree.md`](architecture/sidebar-thread-tree.md) | 侧边栏按委派和 Fork 关系缩进父子 Thread 的数据来源、Renderer 绑定与边界。 |
 | [`architecture/sidebar-archive-children.md`](architecture/sidebar-archive-children.md) | 归档父 Thread 时询问或按设置归档其委派和 Fork 子 Thread 的交互、实现与边界。 |
@@ -36,6 +38,7 @@
 | [`architecture/external-clients.md`](architecture/external-clients.md) | 同用户 CLI 自动认证、命名客户端登记、本机监听、客户端来源、Thread 引用、事件日志与 MCP；修改外部接入时阅读。 |
 | [`architecture/nas-bot-integration.md`](architecture/nas-bot-integration.md) | NAS 原生 Grok Bot 执行端、多设备 CLI、来源自动注册与原私聊成品交付。 |
 | [`architecture/local-design-preview.md`](architecture/local-design-preview.md) | `codexhost preview` 在内置浏览器中显示本地 HTML、自动刷新、服务范围与生命周期；修改预览时阅读。 |
+| [`architecture/web-thread-tree.md`](architecture/web-thread-tree.md) | Web 侧栏会话树：委派关系决定的显示父 Thread、Host 树接口、祖先补齐、归档级联、排序与置顶规则；修改侧栏层级或委派显示时阅读。 |
 | [`architecture/official-traffic-ownership.md`](architecture/official-traffic-ownership.md) | Host 只截获自身流量、其余原样转发官方的归属判别与例外；修改请求路由或参数校验时阅读。 |
 | [`architecture/app-server-transport.md`](architecture/app-server-transport.md) | 原生大历史响应的 WebSocket 与 JSONL 传输边界；排查任务加载、消息大小和转发性能时阅读。 |
 | [`architecture/turn-activity-folding.md`](architecture/turn-activity-folding.md) | 回合完成后过程折叠的 Desktop 条件与 `final_answer` 推断规则；修改 Agent 消息阶段投影或排查过程无法收起时阅读。 |

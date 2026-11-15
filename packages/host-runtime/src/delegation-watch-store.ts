@@ -6,7 +6,7 @@ import path from "node:path";
 import type { ThreadWatchEntry, ThreadWatchOutcome } from "./delegation-types.js";
 import { withRemoteAppServerSocketInitializationLock as withFileMutationLock } from "./remote-socket-lock.js";
 
-/** A watch as kept on disk. Holds identifiers, deadlines and reasons only, never Thread content. */
+/** A watch as kept on disk. Holds watch metadata, never Thread messages. */
 export interface PersistedWatch extends ThreadWatchEntry {
   id: string;
   timeoutMs: number;
@@ -17,7 +17,9 @@ export interface PersistedWatch extends ThreadWatchEntry {
   delivering?: boolean;
   /** Why an `interrupted` outcome was decided after a restart, for the notification. */
   restartNote?: string;
-  /** Recorded when an outcome is observed, for client events. */
+  /** Last observed title, used as the notification link label. */
+  title?: string;
+  /** Recorded when the watched Thread stops, for client events. */
   harnessId?: string;
   refs?: string[];
 }
@@ -115,6 +117,7 @@ function parseWatchFile(text: string): WatchFile {
     !optionalNumber(watch.deliveryDeadline) ||
     (watch.delivering !== undefined && typeof watch.delivering !== "boolean") ||
     !optionalString(watch.restartNote) ||
+    !optionalString(watch.title) ||
     !optionalString(watch.harnessId) ||
     (watch.refs !== undefined &&
       (!Array.isArray(watch.refs) || watch.refs.some((ref) => typeof ref !== "string")))

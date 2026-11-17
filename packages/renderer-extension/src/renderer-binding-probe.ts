@@ -996,12 +996,20 @@ export function installRendererBindingProbe(
     locale: () => settingsLifecycle.locale,
   });
   let sidebarStash: RendererSidebarStashHandle | null = null;
+  const sidebarStashListeners = new Set<() => void>();
+  const notifySidebarStashListeners = (): void => {
+    for (const listener of sidebarStashListeners) listener();
+  };
   const mountSidebarStash = (): void => {
     sidebarStash?.dispose();
-    sidebarStash = null;
-    if (!readSidebarStashEnabledPreference(window)) return;
+    sidebarStash = installSidebarStash();
+    sidebarStash?.store.subscribe(notifySidebarStashListeners);
+    notifySidebarStashListeners();
+  };
+  const installSidebarStash = (): RendererSidebarStashHandle | null => {
+    if (!readSidebarStashEnabledPreference(window)) return null;
     try {
-      sidebarStash = installRendererSidebarStash({
+      return installRendererSidebarStash({
         document,
         window,
         getLocale: () => settingsLifecycle.locale,
@@ -1030,7 +1038,7 @@ export function installRendererBindingProbe(
       });
     } catch (error) {
       console.warn("[codexhost-sidebar-stash] install failed", error);
-      sidebarStash = null;
+      return null;
     }
   };
   mountSidebarStash();
@@ -1201,6 +1209,19 @@ export function installRendererBindingProbe(
     getHostLabel: resolveHostLabel,
     acknowledgedFailedKeys,
     onChange: syncPetsCatalog,
+    stash: {
+      available: () => sidebarStash !== null,
+      isStashed: (threadId) => sidebarStash?.store.has(threadId) ?? false,
+      stash: (target) => sidebarStash?.stashThread(target),
+      unstash: (threadId) => {
+        if (sidebarStash?.store.remove(threadId)) sidebarStash.refresh();
+      },
+      setRestoreDate: (target, anchor) => sidebarStash?.openRestoreDate(target, anchor),
+      subscribe: (listener) => {
+        sidebarStashListeners.add(listener);
+        return () => sidebarStashListeners.delete(listener);
+      },
+    },
   });
   const onPetsCardThreads = (event: StorageEvent): void => {
     if (event.key === PETS_CARD_THREADS_STORAGE_KEY) syncPetsCatalog();

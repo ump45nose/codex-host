@@ -48,10 +48,20 @@ export interface InstallRendererSidebarStashOptions {
   logger?: Pick<Console, "info" | "warn" | "debug">;
 }
 
+/** A thread to stash that need not be the open one, e.g. from a top tab. */
+export interface StashThreadTarget {
+  threadId: string;
+  title: string;
+  hostId?: string;
+}
+
 export interface RendererSidebarStashHandle {
   dispose(): void;
   store: StashStore;
   refresh(): void;
+  stashThread(target: StashThreadTarget): void;
+  /** Stashes the thread if needed, then opens the restore-date picker at `anchor`. */
+  openRestoreDate(target: StashThreadTarget, anchor: HTMLElement): void;
 }
 
 type GuardedWindow = Window &
@@ -220,30 +230,39 @@ export function installRendererSidebarStash(
     refresh();
   }
 
-  function stashActive(dueAt?: string | null): void {
+  function activeTarget(): StashThreadTarget | null {
     const threadId = adapter.readActiveThreadId();
     if (!threadId) {
       log.debug?.("[codexhost-sidebar-stash] no active thread to stash");
-      return;
+      return null;
     }
-    const button = adapter.findThreadButton(threadId);
-    const title = adapter.readTitle(button);
-    const pin = adapter.readPinState(threadId) ?? undefined;
+    return { threadId, title: adapter.readTitle(adapter.findThreadButton(threadId)) };
+  }
+
+  function stashThread(target: StashThreadTarget, dueAt?: string | null): boolean {
+    const pin = adapter.readPinState(target.threadId) ?? undefined;
     try {
       store.put({
-        threadId,
-        title,
+        threadId: target.threadId,
+        title: target.title,
         dueAt: dueAt === undefined ? undefined : dueAt,
         pin,
+        ...(target.hostId ? { hostId: target.hostId } : {}),
       });
     } catch (error) {
       if (error instanceof ThreadIdError) {
         log.warn?.("[codexhost-sidebar-stash]", error.message);
-        return;
+        return false;
       }
       throw error;
     }
     refresh();
+    return true;
+  }
+
+  function stashActive(dueAt?: string | null): void {
+    const target = activeTarget();
+    if (target) stashThread(target, dueAt);
   }
 
   function toggleActive(): void {
@@ -268,9 +287,13 @@ export function installRendererSidebarStash(
   }
 
   function openDueForActive(anchor?: HTMLElement): void {
-    const threadId = adapter.readActiveThreadId();
-    if (!threadId) return;
-    if (!store.has(threadId)) stashActive(null);
+    const target = activeTarget();
+    if (target) openDueFor(target, anchor);
+  }
+
+  function openDueFor(target: StashThreadTarget, anchor?: HTMLElement): void {
+    const { threadId } = target;
+    if (!store.has(threadId) && !stashThread(target, null)) return;
     const item = store.get(threadId);
     popoverClose?.();
     const handle = openDuePopover({
@@ -443,6 +466,8 @@ export function installRendererSidebarStash(
   const handle: RendererSidebarStashHandle = {
     store,
     refresh,
+    stashThread: (target) => void stashThread(target),
+    openRestoreDate: (target, anchor) => openDueFor(target, anchor),
     dispose() {
       if (disposed) return;
       disposed = true;

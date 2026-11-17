@@ -144,6 +144,7 @@ import {
   threadRelationListParamsSchema,
   THREAD_RELATION_LIST_METHOD,
   threadOwnershipListResultSchema,
+  THREAD_OWNERSHIP_LIST_MAX_LENGTH,
   threadSteeringInspectParamsSchema,
   threadSteeringInspectResultSchema,
   threadSteeringContextSchema,
@@ -3194,7 +3195,7 @@ export class AppServerHost {
     };
     const decoded = decodeThreadListRequest(request);
     if (!decoded) throw new Error("Delegation thread/list request could not be decoded");
-    const records = await this.#repository.list();
+    const { records } = await this.#localThreadCatalog();
     const result = await aggregateThreadList({
       query: decoded,
       records,
@@ -3251,13 +3252,7 @@ export class AppServerHost {
       const result = await readThreadCatalog({
         includeArchived: parsed.data.includeArchived ?? false,
         ...(parsed.data.officialCursor ? { officialCursor: parsed.data.officialCursor } : {}),
-        readLocal: async () => {
-          const [records, placements] = await Promise.all([
-            this.#repository.list(),
-            this.#repository.listSectionPlacements(),
-          ]);
-          return { records, placements };
-        },
+        readLocal: () => this.#localThreadCatalog(),
         ...(this.#options.sharedThreads ? { sharedThreads: this.#options.sharedThreads } : {}),
         runtimeFor: (id) => this.#listRuntimeState(id),
         ...(this.#options.externalOnly
@@ -3287,8 +3282,8 @@ export class AppServerHost {
     const timing = new ThreadListTiming();
     let ok = false;
     try {
-      const [records, placements] = await timing.measure("store", () =>
-        Promise.all([this.#repository.list(), this.#repository.listSectionPlacements()]),
+      const { records, placements } = await timing.measure("store", () =>
+        this.#localThreadCatalog(),
       );
       timing.counts.mappingRecords = records.length;
       timing.counts.placements = placements.length;
@@ -3360,6 +3355,29 @@ export class AppServerHost {
     return thread ? { running: thread.running } : null;
   }
 
+  async #localThreadCatalog() {
+    const [records, placements] = await Promise.all([
+      this.#repository.list(),
+      this.#repository.listSectionPlacements(),
+    ]);
+    const shared = this.#options.sharedThreads;
+    if (!shared) return { records, placements };
+    // Shared ownership supersedes legacy copies even when the requested list
+    // excludes the canonical Thread (for example after archive or unpin).
+    const ids = [...new Set([...records, ...placements].map((entry) => entry.hostThreadId))];
+    const sharedIds = new Set<string>();
+    for (let offset = 0; offset < ids.length; offset += THREAD_OWNERSHIP_LIST_MAX_LENGTH) {
+      const owners = await shared.ownership(
+        ids.slice(offset, offset + THREAD_OWNERSHIP_LIST_MAX_LENGTH),
+      );
+      for (const id of owners.keys()) sharedIds.add(id);
+    }
+    return {
+      records: records.filter((record) => !sharedIds.has(record.hostThreadId)),
+      placements: placements.filter((placement) => !sharedIds.has(placement.hostThreadId)),
+    };
+  }
+
   /** `section_position` lists merge External section placements into the official order. */
   async #listSectionThreads(
     request: JsonRpcRequest,
@@ -3367,12 +3385,12 @@ export class AppServerHost {
     query: DecodedThreadListRequest,
   ): Promise<void> {
     try {
-      const [records, localPlacements, sharedPlacements, sharedThreads] = await Promise.all([
-        this.#repository.list(),
-        this.#repository.listSectionPlacements(),
+      const [local, sharedPlacements, sharedThreads] = await Promise.all([
+        this.#localThreadCatalog(),
         this.#options.sharedThreads?.placements() ?? [],
         this.#options.sharedThreads?.list(query.params) ?? [],
       ]);
+      const { records, placements: localPlacements } = local;
       const sharedIds = new Set(sharedPlacements.map((p) => p.hostThreadId));
       const placements = [
         ...localPlacements.filter((p) => !sharedIds.has(p.hostThreadId)),

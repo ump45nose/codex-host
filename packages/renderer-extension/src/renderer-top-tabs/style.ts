@@ -43,7 +43,64 @@ export function buildTopTabsCss(): string {
 .codexhost-session-tab-icon :is(svg, img) { width: 14px; height: 14px; display: block; }
 .codexhost-session-tab-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
 .codexhost-session-tab-host { flex-shrink: 0; width: 12px; height: 12px; display: block; }
-.codexhost-session-tab-indicator { flex-shrink: 0; }
+.codexhost-session-tab-status {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.codexhost-session-tab-status[data-status="running"] { background: #3b82f6; animation: codexhost-session-tab-pulse 1.4s ease-in-out infinite; }
+.codexhost-session-tab-status[data-status="waiting"] { background: #f59e0b; }
+.codexhost-session-tab-status[data-status="unread"] { background: #22c55e; }
+.codexhost-session-tab-status[data-status="failed"] { background: #ef4444; }
+@keyframes codexhost-session-tab-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .codexhost-session-tab-status[data-status="running"] { animation: none; }
+}
+.codexhost-session-tab-stash {
+  display: none;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-inline-end: -4px;
+  border-radius: 5px;
+  color: var(--color-token-text-secondary);
+}
+.codexhost-session-tab-stash svg { width: 13px; height: 13px; display: block; }
+.codexhost-session-tab:is(:hover, :focus-within) .codexhost-session-tab-stash { display: inline-flex; }
+.codexhost-session-tab:is(:hover, :focus-within):has(> .codexhost-session-tab-stash) > .codexhost-session-tab-status { display: none; }
+.codexhost-session-tab-stash:hover { background: var(--color-token-interactive-bg-secondary-selected); color: var(--color-token-foreground); }
+[data-codexhost-top-tab-context-menu] {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--color-token-menu-border, var(--color-token-dropdown-border));
+  border-radius: 10px;
+  background: var(--color-token-menu-background, var(--color-token-dropdown-background));
+  color: var(--color-token-menu-foreground, var(--color-token-foreground));
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
+  font-size: var(--text-xs, 13px);
+}
+[data-codexhost-top-tab-context-menu] button {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+[data-codexhost-top-tab-context-menu] button:hover {
+  background: var(--color-token-menu-selection-background, var(--color-token-list-hover-background));
+  color: var(--color-token-menu-selection-foreground, var(--color-token-foreground));
+}
 [data-codexhost-top-tabs-menu] {
   position: absolute;
   top: calc(100% + 2px);

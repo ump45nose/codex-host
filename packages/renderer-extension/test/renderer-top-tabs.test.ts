@@ -100,12 +100,19 @@ describe("installRendererTopTabs", () => {
     expect(tabs()).toEqual(["local:run", "remote-ssh-discovered:mac-work:done"]);
   });
 
-  it("clones the native indicator glyph and opens the thread through its native row", () => {
-    const { row } = setup([{ id: "run", indicator: "working" }]);
+  it("marks each status with a colored dot and opens the thread through its native row", () => {
+    const { row } = setup([
+      { id: "run", indicator: "working" },
+      { id: "ask", indicator: "input" },
+      { id: "done", indicator: "unread" },
+      { id: "err", indicator: "error" },
+    ]);
+    const dots = [...document.querySelectorAll(`[${topTabs.TOP_TAB_ATTRIBUTE}]`)].map((tab) =>
+      tab.querySelector(".codexhost-session-tab-status")?.getAttribute("data-status"),
+    );
+    expect(dots).toEqual(["running", "waiting", "unread", "failed"]);
     const tab = find(`[${topTabs.TOP_TAB_ATTRIBUTE}="local:run"]`);
-    expect(
-      tab.querySelector(".codexhost-session-tab-indicator [data-loading-indicator]"),
-    ).not.toBeNull();
+    expect(tab.title).toBe("Title run · Running");
     const click = vi.fn();
     row("run").addEventListener("click", click);
     tab.click();

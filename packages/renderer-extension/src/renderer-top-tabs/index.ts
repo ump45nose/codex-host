@@ -21,6 +21,14 @@ import {
   readTopTabsTwoRowsPreference,
   subscribeTopTabsPreference,
 } from "./preference.js";
+import {
+  closeTabContextMenu,
+  createStashedSessionFilter,
+  createTabStashControl,
+  openTabContextMenu,
+  type TopTabsStash,
+  type TopTabsStashTarget,
+} from "./stash.js";
 import { ensureTopTabsStyles } from "./style.js";
 
 export const TOP_TABS_ROOT_ATTRIBUTE = "data-codexhost-top-tabs";
@@ -50,9 +58,6 @@ const NATIVE_INDICATOR_STATUS: Readonly<Record<string, TopTabStatus>> = {
 const NATIVE_INDICATOR_ATTRIBUTE = "data-sidebar-indicator";
 const NATIVE_SELECTED_ATTRIBUTE = "data-app-action-sidebar-thread-selected";
 const NATIVE_TITLE_ATTRIBUTE = "data-app-action-sidebar-thread-title";
-/** The trailing status glyph (spinner, dot) inside a native sidebar row. */
-const NATIVE_INDICATOR_GLYPH_SELECTOR =
-  '[data-hover-card-open-immediately] > span:has([data-loading-indicator], [role="status"], .rounded-full)';
 const SIDEBAR_MIRROR_ATTRIBUTE = "data-codexhost-sidebar-thread-mirror";
 const SIDEBAR_SCROLL_SELECTOR = "[data-app-action-sidebar-scroll]";
 const ACTIVE_PAGE_ATTRIBUTE = "data-app-shell-active-page";
@@ -81,6 +86,8 @@ export interface InstallRendererTopTabsOptions {
   readonly getHostLabel?: (hostId: string) => string | null;
   readonly acknowledgedFailedKeys?: Set<string>;
   readonly onChange?: () => void;
+  /** Stashed sessions leave the strip; tabs offer a stash button and right-click menu. */
+  readonly stash?: TopTabsStash;
 }
 
 export interface RendererTopTabsHandle {
@@ -120,6 +127,25 @@ export function isUnreadOrActiveSessionStatus(
   return status === "failed" && !acknowledgedFailedKeys.has(key);
 }
 
+const STATUS_LABELS: Readonly<Record<"zh" | "en", Readonly<Record<TopTabStatus, string>>>> = {
+  zh: { running: "运行中", waiting: "等你处理", unread: "已完成", failed: "失败", idle: "" },
+  en: { running: "Running", waiting: "Needs you", unread: "Done", failed: "Failed", idle: "" },
+};
+
+export function topTabStatusLabel(status: TopTabStatus, locale: string): string {
+  return STATUS_LABELS[locale.startsWith("zh") ? "zh" : "en"][status];
+}
+
+/** One colored dot per status; idle sessions have none. */
+function createStatusDot(doc: Document, status: TopTabStatus): HTMLElement | null {
+  if (status === "idle") return null;
+  const dot = doc.createElement("span");
+  dot.className = "codexhost-session-tab-status";
+  dot.setAttribute("data-status", status);
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+
 export function rollupTopTabStatus(statuses: Iterable<TopTabStatus>): TopTabStatus {
   let best: TopTabStatus = "idle";
   for (const status of statuses) {
@@ -157,7 +183,13 @@ export function collectSidebarThreads(
     const threadId = hostId ? resolveThreadIdFromRow(row) : null;
     if (!hostId || !threadId) continue;
     const key = `${hostId}:${threadId}`;
-    if (map.has(key)) continue;
+    const existing = map.get(key);
+    if (existing) {
+      // A thread can have several rows (e.g. Pinned and its project); only one is selected.
+      if (!existing.active && row.getAttribute(NATIVE_SELECTED_ATTRIBUTE) === "true")
+        map.set(key, { ...existing, active: true });
+      continue;
+    }
     const rowAgent = (row
       .querySelector<HTMLElement>(`[${SIDEBAR_AGENT_ICON_ATTRIBUTE}]`)
       ?.getAttribute(SIDEBAR_AGENT_ICON_ATTRIBUTE)
@@ -234,6 +266,7 @@ export function installRendererTopTabs(
   let menuOpen = false;
   /** `null` until the first collection, so stale Pet data from a previous run is replaced. */
   let lastSyncSignature: string | null = null;
+  const isHiddenByStash = createStashedSessionFilter(options.stash);
 
   const rootKeyOf = (snapshot: SidebarThreadSnapshot): string =>
     `${snapshot.hostId}:${options.tree?.rootThread?.(snapshot.hostId, snapshot.threadId) ?? snapshot.threadId}`;
@@ -292,6 +325,7 @@ export function installRendererTopTabs(
     const items: StripItem[] = [];
     const globeColors = readRemoteHostGlobeColors(doc);
     for (const [key, group] of groups) {
+      if (isHiddenByStash(key, group.root.threadId, group.status)) continue;
       const visible =
         viewedKey === key ||
         isUnreadOrActiveSessionStatus(group.status, key, acknowledgedFailedKeys);
@@ -321,7 +355,10 @@ export function installRendererTopTabs(
     tab.setAttribute(TOP_TAB_ATTRIBUTE, item.key);
     tab.setAttribute("data-status", item.status);
     tab.setAttribute("aria-selected", item.active ? "true" : "false");
-    tab.title = item.hostLabel ? `${snapshot.title} · ${item.hostLabel}` : snapshot.title;
+    const locale = options.getLocale?.() ?? "en-US";
+    tab.title = [snapshot.title, item.hostLabel, topTabStatusLabel(item.status, locale)]
+      .filter(Boolean)
+      .join(" · ");
 
     const icon = doc.createElement("span");
     icon.className = "codexhost-session-tab-icon";
@@ -336,18 +373,27 @@ export function installRendererTopTabs(
     if (item.hostColor !== undefined)
       tab.appendChild(createRemoteHostGlobe(doc, item.hostColor, "codexhost-session-tab-host"));
 
-    const glyph = snapshot.rowElement.querySelector(NATIVE_INDICATOR_GLYPH_SELECTOR);
-    if (glyph) {
-      const indicator = glyph.cloneNode(true) as HTMLElement;
-      indicator.classList.add("codexhost-session-tab-indicator");
-      tab.appendChild(indicator);
-    }
+    const dot = createStatusDot(doc, item.status);
+    if (dot) tab.appendChild(dot);
 
     tab.addEventListener("click", (event) => {
       event.preventDefault();
       if (menuOpen) setMenuOpen(false);
       snapshot.rowElement.click();
     });
+    const stash = options.stash;
+    if (stash?.available()) {
+      const target: TopTabsStashTarget = {
+        hostId: snapshot.hostId,
+        threadId: snapshot.threadId,
+        title: snapshot.title,
+      };
+      if (!inMenu) tab.appendChild(createTabStashControl(doc, target, stash, locale));
+      tab.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openTabContextMenu({ doc, event, anchor: tab, target, stash, locale });
+      });
+    }
     return tab;
   };
 
@@ -370,6 +416,8 @@ export function installRendererTopTabs(
       ? `另外 ${overflow.length} 个会话`
       : `${overflow.length} more sessions`;
     more.textContent = `+${overflow.length}`;
+    const dot = createStatusDot(doc, rollupTopTabStatus(overflow.map((item) => item.status)));
+    if (dot) more.appendChild(dot);
     more.addEventListener("click", (event) => {
       event.preventDefault();
       setMenuOpen(!menuOpen);
@@ -407,6 +455,7 @@ export function installRendererTopTabs(
     const signature = JSON.stringify([
       locale,
       rows,
+      options.stash?.available() ?? false,
       menuOpen,
       overflow.length,
       items.map(({ key, snapshot, status, active, hostColor }) => [
@@ -416,7 +465,6 @@ export function installRendererTopTabs(
         active,
         hostColor,
         iconSignature(snapshot.agent, snapshot.plugin),
-        snapshot.rowElement.getAttribute(NATIVE_INDICATOR_ATTRIBUTE),
       ]),
     ]);
     if (signature === lastSignature) return;
@@ -466,6 +514,7 @@ export function installRendererTopTabs(
     ],
   });
   const unsubscribePreference = subscribeTopTabsPreference(win, scheduleRender);
+  const unsubscribeStash = options.stash?.subscribe(scheduleRender);
   const onPointerDown = (event: Event): void => {
     const target = event.target;
     if (
@@ -497,6 +546,8 @@ export function installRendererTopTabs(
       if (pendingTimer !== null) win.clearTimeout(pendingTimer);
       observer.disconnect();
       unsubscribePreference();
+      unsubscribeStash?.();
+      closeTabContextMenu(doc);
       doc.removeEventListener("pointerdown", onPointerDown, true);
       doc.removeEventListener("keydown", onKeyDown, true);
       for (const el of doc.querySelectorAll(`[${TOP_TABS_ROOT_ATTRIBUTE}]`)) el.remove();

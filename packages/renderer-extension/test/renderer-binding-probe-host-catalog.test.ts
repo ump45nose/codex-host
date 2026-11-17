@@ -135,7 +135,13 @@ vi.mock("../src/renderer-sidebar-overlay/index.js", () => ({
 
 vi.mock("../src/renderer-sidebar-stash.js", async (importOriginal) => ({
   ...(await importOriginal<typeof RendererSidebarStash>()),
-  installRendererSidebarStash: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererSidebarStash: () => ({
+    refresh: vi.fn(),
+    dispose: vi.fn(),
+    store: { subscribe: vi.fn(() => () => undefined), has: () => false, remove: () => false },
+    stashThread: vi.fn(),
+    openRestoreDate: vi.fn(),
+  }),
 }));
 
 vi.mock("../src/renderer-top-tabs.js", async (importOriginal) => ({

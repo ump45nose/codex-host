@@ -48,3 +48,4 @@ d9d06cf222b98c970acf9d49d7de8ddc4add6b92 # feat/claude-code-model-efforts; per-m
 6186f9f862051719be30a0c5e52395e5632006b5 # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
 42286d0d7fea0c5b049d90c1a199826516530ced # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
 8cddd1aaec9806afccbf970ae7d9e396a2320490 # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
+feat/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit

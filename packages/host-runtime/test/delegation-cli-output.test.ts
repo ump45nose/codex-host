@@ -85,6 +85,7 @@ describe("compact delegation output", () => {
           {
             ref: { id: "opaque-a" },
             label: "Provider / Model A",
+            fastModel: { id: "opaque-a-fast" },
             supportedThinkingOptionIds: ["high"],
           },
           { ref: { id: "opaque-b" }, label: "Provider / Model B", supportedThinkingOptionIds: [] },
@@ -100,6 +101,7 @@ describe("compact delegation output", () => {
       status: "ready",
       models: [
         { id: "opaque-a", label: "Provider / Model A", thinking: ["high"] },
+        { id: "opaque-a-fast", label: "Provider / Model A (Fast)", thinking: ["high"] },
         { id: "opaque-b", label: "Provider / Model B", thinking: [] },
       ],
       defaultModel: "opaque-a",

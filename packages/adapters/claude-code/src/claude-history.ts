@@ -398,9 +398,10 @@ function isCheckpointCandidate(message: ClaudeHistoryMessage): boolean {
 export function mapClaudeSnapshot(
   values: unknown[],
   sessionId: string,
+  mcpServers?: readonly string[],
   tasks = new ClaudeTaskTracker(),
 ): HostThreadSnapshot {
-  return mapClaudeSnapshotWithCheckpointIds(values, sessionId, tasks).snapshot;
+  return mapClaudeSnapshotWithCheckpointIds(values, sessionId, mcpServers, tasks).snapshot;
 }
 
 /**
@@ -412,6 +413,7 @@ export function mapClaudeSnapshot(
 export function mapClaudeSnapshotWithCheckpointIds(
   values: unknown[],
   sessionId: string,
+  mcpServers?: readonly string[],
   tasks = new ClaudeTaskTracker(),
 ): { snapshot: HostThreadSnapshot; turnCheckpointIds: string[][] } {
   const messages = conversationMessages(values, sessionId);
@@ -630,7 +632,7 @@ export function mapClaudeSnapshotWithCheckpointIds(
             continue;
           }
           items.push({
-            item: historyToolItem(itemId, block.name, block.input, output),
+            item: historyToolItem(itemId, block.name, block.input, output, mcpServers),
             outcome: toolOutcome,
           });
         }
@@ -648,12 +650,14 @@ function historyToolItem(
   toolName: string,
   input: unknown,
   output: string | undefined,
+  mcpServers?: readonly string[],
 ): ClaudeToolItem {
   const argumentsResult = jsonValueSchema.safeParse(input);
   const item = claudeToolItem(
     itemId,
     toolName,
     argumentsResult.success ? argumentsResult.data : null,
+    mcpServers,
   );
   return output ? { ...item, output: { content: [{ type: "text", text: output }] } } : item;
 }

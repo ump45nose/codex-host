@@ -77,6 +77,8 @@
 
 公共契约新增 `HostMcpToolCallItem`（server、tool、arguments、output）与 `HostWebSearchItem`（query），Protocol Core 投影为 Codex app-server 的 `mcpToolCall` 与 `webSearch`；两者均在随 Codex Desktop 附带的 codex-cli 0.167.0-alpha.4.1 生成的 `ThreadItem` 中，Desktop 渲染层有对应分支。Web 把这两类 Item 转回 `server__tool` 与 `web_search` 工具行。
 
+公共契约新增 `HostMcpToolCallItem`（server、tool、arguments、output）与 `HostWebSearchItem`（query），Protocol Core 投影为 Codex app-server 的 `mcpToolCall` 与 `webSearch`；两者均在随 Codex Desktop 附带的 codex-cli 0.167.0-alpha.4.1 生成的 `ThreadItem` 中，Desktop 渲染层有对应分支。Web 把这两类 Item 转回 `server__tool` 与 `web_search` 工具行。
+
 ## 验证记录
 
 | 层次 | 命令或方式 | 结果 |

@@ -2847,6 +2847,103 @@ describe("Claude Code HarnessAdapter", () => {
     }
   });
 
+  it("confirms persisted queued input by its source identity", async () => {
+    const { adapter, transports, history } = fixture();
+    const session = await openSession(adapter);
+    try {
+      await session.execute(textTurn("queued-history"));
+      const transport = transports[0];
+      if (!transport) throw new Error("Fake Claude transport was not created");
+      const sent = transport.turns[0];
+      if (!sent) throw new Error("Fake Claude Turn was not submitted");
+      transport.event({ type: "message.completed", messageId: "answer", checkpointId: "answer" });
+      transport.finish({ status: "succeeded" });
+      await Promise.resolve();
+      history.push(
+        {
+          type: "user",
+          uuid: "root-input",
+          session_id: transport.sessionId,
+          message: { role: "user", content: "original request" },
+        },
+        queuedCommand(
+          "queued-attachment",
+          sent.userMessageId,
+          "queued-history",
+          transport.sessionId,
+        ),
+        {
+          type: "assistant",
+          uuid: "answer",
+          session_id: transport.sessionId,
+          message: { role: "assistant", content: "done" },
+        },
+      );
+      await expect(session.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: {
+          turns: [
+            {
+              items: expect.arrayContaining([
+                {
+                  item: {
+                    type: "userMessage",
+                    itemId: "queued-attachment",
+                    input: [{ type: "text", text: "queued-history" }],
+                  },
+                  outcome: { status: "succeeded" },
+                },
+              ]),
+            },
+          ],
+        },
+      });
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it("separates history read failures from malformed queued input", async () => {
+    const { adapter, dependencies, transports, history } = fixture();
+    const session = await openSession(adapter);
+    try {
+      await session.execute(textTurn("malformed-queued-history"));
+      const transport = transports[0];
+      if (!transport) throw new Error("Fake Claude transport was not created");
+      transport.event({ type: "message.completed", messageId: "answer", checkpointId: "answer" });
+      transport.finish({ status: "succeeded" });
+      await Promise.resolve();
+      vi.mocked(dependencies.readSessionMessages).mockRejectedValueOnce(
+        new Error("synthetic read failure"),
+      );
+      await expect(session.readSnapshot()).resolves.toMatchObject({
+        ok: false,
+        error: { code: "nativeFailure", retryable: true },
+      });
+      history.push(
+        {
+          type: "user",
+          uuid: "root-input",
+          session_id: transport.sessionId,
+          message: { role: "user", content: "original request" },
+        },
+        queuedCommand("queued-attachment", "", "queued-history", transport.sessionId),
+        {
+          type: "assistant",
+          uuid: "answer",
+          session_id: transport.sessionId,
+          message: { role: "assistant", content: "done" },
+        },
+      );
+      await expect(session.readSnapshot()).resolves.toMatchObject({
+        ok: false,
+        error: { code: "protocolError", retryable: false },
+      });
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("projects automatic Compaction and defers Usage refresh until Turn completion", async () => {
     const { adapter, transports } = fixture();
     const session = await openSession(adapter);
@@ -6140,6 +6237,49 @@ describe("Claude Code HarnessAdapter", () => {
       expect.objectContaining({ thinkingOptionId: "high" }),
     );
     await session.close();
+  });
+
+  it("publishes catalog Thinking options even when the selected option stays valid", async () => {
+    const { adapter, dependencies } = fixture();
+    dependencies.createInspector = () => ({
+      close: async () => undefined,
+      inspect: async () => ({
+        canSelectModel: true,
+        canSelectPermissionMode: true,
+        models: [
+          {
+            value: "default",
+            displayName: "Default",
+            supportsThinkingOff: false,
+            supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+          },
+        ],
+      }),
+    });
+    const session = await openSession(adapter);
+    const iterator = session.outputs[Symbol.asyncIterator]();
+    await session.execute({
+      type: "thinking.select",
+      thinkingOptionId: harnessThinkingOptionIdSchema.parse("high"),
+    });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: "session.state.changed",
+      state: {
+        effectiveThinkingOptionId: "high",
+        availableThinkingOptions: expect.arrayContaining([expect.objectContaining({ id: "off" })]),
+      },
+    });
+
+    await adapter.inspect({ cwd: "/synthetic" });
+    await session.close(); // A missing update fails immediately instead of waiting for a timeout.
+    const optionIds = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"];
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: "session.state.changed",
+      state: {
+        effectiveThinkingOptionId: "high",
+        availableThinkingOptions: optionIds.map((id) => ({ id })),
+      },
+    });
   });
 
   it("dynamically switches Thinking on an Idle Query", async () => {

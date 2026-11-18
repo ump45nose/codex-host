@@ -1,0 +1,42 @@
+# Feature revisions merged onto each upstream release by scripts/vincent-release.sh.
+# Format: <fork branch or full commit SHA>   # source branch / upstream PR / note
+# Order matters. Each v21 branch extends the previous branch from upstream v0.21.0.
+# Entries already present in the upstream tag are unnecessary.
+v21/renderer-inspector-script-cache # fix/renderer-inspector-script-cache; local: bound V8 inspector script cache (memory leak); no PR yet
+v21/harness-user-instructions # feat/external-cli-codex-user-instructions; PR #741
+v21/dsh-user-instructions # codex/fix-dsh-user-instructions; sync dsh user instructions to the correct home
+v21/sidebar-archive-thread-children # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
+v21/sidebar-sticky-mirrors # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses
+v21/sidebar-pinned-child # feat/renderer-sidebar-thread-nesting; PR #709 tip: retain and deduplicate pinned child Threads
+v21/sidebar-stash # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension
+v21/remote-client-access # feat/remote-client-access; PR #785 base (remote access, tailnet, Funnel, webhook, OAuth, console)
+v21/nas-bot-integration # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
+v21/thread-watch-stall # feat/thread-watch-stall; PR #784 base
+v21/remote-client-hardening # pr-785: tighten remote client OAuth, Funnel teardown, webhook delivery, and cross-process OAuth locks
+v21/delegation-capacity # feat/delegation-capacity; PR #784 queue top-level delegations beyond a local running limit; includes headless delegation regression fixture
+v21/delegation-capacity-hardening # pr-784: release queued claims on rewrite failure, route capacity settings, and serialize record adoption
+v21/local-design-preview # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
+v21/claude-desktop-entrypoint # feat/claude-desktop-entrypoint; Claude Desktop opt-in entrypoint
+v21/remote-install-preserve-data-dir # fix/remote-install-preserve-data-dir; keep recorded shared data directory across SSH repair
+v21/remote-ssh-share-local-data # fix/remote-ssh-share-local-data; PR #584 --share-local-data and SSH repair dataDirectory inheritance
+v21/cursor-side-chat-edit # fix/cursor-side-chat-edit; PR #576
+v21/cursor-fast-selection # codex/upstream-cursor-fast; expose native Fast models and confirm live selections (replaces fe1cffb2)
+v21/independent-native-provider-quota # fix/independent-native-provider-quota; PR #470
+v21/macos-nested-codex-cli # fix/macos-nested-codex-cli; PR #396
+v21/project-picker-default-dir # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
+v21/fork-release-channel # product update channel: ump45nose/codex-host release checks and tarball meta dependencies
+v21/replay-integration # fix/replay-integration; align integrated Host routing and attachment registration
+v21/local-preview-npm-forwarding # feat/local-design-preview; forward preview command in npm wrapper
+v21/project-deduplication # fix/projects-and-shared-remote-threads; deduplicate projects and align settings localization
+v21/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-threads; PR #791 + b2415e4c + f23459f4 + bd7d4ea7 + e337f6c6 shared external Thread Runtime base
+v21/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
+v21/bot-model-selection # feat/bot-model-selection (0d084ae17); Bot model and thinking effort selection
+v21/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
+v21/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view
+v21/claude-code-todo-tools # feat/claude-code-todo-tools; Claude Code task tools -> plan panel, history and reopen replay
+v21/claude-code-model-efforts # feat/claude-code-model-efforts; per-model thinking options from Claude Code ModelInfo
+v21/reasoning-summary-parts # feat/reasoning-summary-parts; rolling Reasoning preview as titled summary parts
+v21/claude-code-image-input # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
+v21/tool-item-details # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
+v21/shared-archived-thread-revival # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
+v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit

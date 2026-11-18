@@ -33,9 +33,9 @@
 
 ## 发现与派发
 
-`devices` 读取各 Host 的环境、Harness 清单和自动项目发现；支持 `--query` 和 `--refresh true`，Host 快照缓存 60 秒。项目描述视为不可信数据。工具安装与 Harness 清单不能证明账号已登录；认证错误如实报告，由用户指定的设备、Harness 保持不变。
+`devices` 读取各 Host 的环境、Harness 清单和自动项目发现；支持 `--query`、`--harness` 和 `--refresh true`，Host 快照缓存 60 秒。传入 `--harness <id>` 时一并返回该 Harness 在各设备上的 `harnessInspection`（实时模型 ID、展示名、默认模型与思考强度选项）。项目描述视为不可信数据。工具安装与 Harness 清单不能证明账号已登录；认证错误如实报告，由用户指定的设备、Harness、模型与思考强度保持不变。
 
-`task start --bot ID --device ID --task TEXT --request-id ID [--cwd PATH] [--harness ID]` 默认使用原生 Codex，省略模型和思考参数。已有项目使用真实 cwd；新任务未给 cwd 时，在 Host 返回的默认任务工作区创建独立目录。
+`task start --bot ID --device ID --task TEXT --request-id ID [--cwd PATH] [--harness ID] [--model ID] [--thinking ID]` 未指定时默认使用原生 Codex 与对应 Harness 的默认模型和思考强度。已有项目使用真实 cwd；新任务未给 cwd 时，在 Host 返回的默认任务工作区创建独立目录。
 
 每台设备为来源 Bot 建立独立本机客户端，配置直达该 Bot 的 webhook。客户端按账号、Bot 和实际 Host 数据目录隔离；已有任务保留创建时的数据目录和客户端，更新设备配置不会将旧任务切换到其他 Host。派发前保存 requestId 与设备关联，获得 Thread 后保存再登记 watch，避免完成通知先于关联记录到达。启动结果不明时只在原设备按来源引用对账，不重新执行。续问、取消与取文件使用保存的设备及 Thread。
 

@@ -71,7 +71,7 @@ describe("task associations and delivery", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it("keeps a stable request on its original device and never sends model overrides", async () => {
+  it("keeps a stable request on its original device and omits model overrides when not specified", async () => {
     const first = await startTask(config, context, "source", request);
     config.devices[0].dataDir = "/host/replacement";
     const repeated = await startTask(config, context, "source", request);
@@ -86,6 +86,49 @@ describe("task associations and delivery", () => {
     expect(starts[0][1]).not.toContain("--thinking");
     await expect(
       startTask(config, context, "source", { ...request, task: "different" }),
+    ).rejects.toMatchObject({ code: "REQUEST_CONFLICT" });
+  });
+
+  it("forwards explicit model and thinking selections, enforces request idempotency, and clears deterministic start rejections", async () => {
+    const explicit = {
+      ...request,
+      requestId: "request-model",
+      harness: "antigravity",
+      model: "gemini-4-argon",
+      thinking: "high",
+    };
+    transport.invoke.mockRejectedValueOnce(
+      Object.assign(new Error("Model is unavailable for the target Harness"), {
+        code: "INVALID_ARGUMENT",
+        details: { validModelIds: ["gemini-4-argon"] },
+      }),
+    );
+    await expect(
+      startTask(config, context, "source", { ...explicit, model: "wrong-model" }),
+    ).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      details: { validModelIds: ["gemini-4-argon"] },
+    });
+    const first = await startTask(config, context, "source", explicit);
+    const repeated = await startTask(config, context, "source", explicit);
+    expect(repeated.taskId).toBe(first.taskId);
+    const starts = transport.invoke.mock.calls.filter(([, args]) => args[0] === "delegate");
+    expect(starts).toHaveLength(2);
+    expect(starts[1][1]).toEqual(
+      expect.arrayContaining([
+        "--harness",
+        "antigravity",
+        "--model",
+        "gemini-4-argon",
+        "--thinking",
+        "high",
+      ]),
+    );
+    await expect(
+      startTask(config, context, "source", { ...explicit, model: "other-model" }),
+    ).rejects.toMatchObject({ code: "REQUEST_CONFLICT" });
+    await expect(
+      startTask(config, context, "source", { ...explicit, thinking: "low" }),
     ).rejects.toMatchObject({ code: "REQUEST_CONFLICT" });
   });
 

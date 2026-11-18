@@ -40,3 +40,4 @@ v21/claude-code-image-input # feat/claude-code-image-input; Desktop image attach
 v21/tool-item-details # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
 v21/shared-archived-thread-revival # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
 v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit
+fix/pet-nas-remote-tasks # Pet lists remote projectless threads (Codex and external Harness); based on v21/vertical-screen-ux-overhaul

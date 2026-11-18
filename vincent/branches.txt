@@ -1,51 +1,42 @@
 # Feature revisions merged onto each upstream release by scripts/vincent-release.sh.
 # Format: <fork branch or full commit SHA>   # source branch / upstream PR / note
-# Order matters. Stable release inputs pin reviewed revisions; advance them explicitly.
+# Order matters. Each v21 branch extends the previous branch from upstream v0.21.0.
 # Entries already present in the upstream tag are unnecessary.
-f685f44caf5c4926994f4460b635e124231e06df # fix/renderer-inspector-script-cache; local: bound V8 inspector script cache (memory leak); no PR yet
-clean/antigravity-recovered-native-error # fix/antigravity-recovered-native-error; PR #737 + f06fe9fd Session closed ordering
-clean/antigravity-thinking-projection # fix/antigravity-thinking-projection; PR #739 + 1a1a8e23 streamed reply ordering
-clean/harness-user-instructions # feat/external-cli-codex-user-instructions; PR #741
-clean/dsh-user-instructions # codex/fix-dsh-user-instructions; sync dsh user instructions to the correct home
-clean/sidebar-archive-thread-children # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
-clean/sidebar-sticky-mirrors # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses
-clean/sidebar-pinned-child # feat/renderer-sidebar-thread-nesting; PR #709 tip: retain and deduplicate pinned child Threads
-clean/sidebar-stash # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension
-clean/remote-client-access # feat/remote-client-access; PR #785 base (remote access, tailnet, Funnel, webhook, OAuth, console)
-clean/headless-delegation-fixture # codex/nas-mcp-rollout; PR #788 regression fixture
-clean/task-result-files # codex/task-result-files; PR #792 (authenticated MCP transfer of final result files)
-clean/multi-device-routing # codex/multi-device-routing; PR #799 (device environment and project discovery)
-clean/nas-bot-integration # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
-clean/thread-watch-stall # feat/thread-watch-stall; PR #784 base
-clean/remote-client-hardening # pr-785: tighten remote client OAuth, Funnel teardown, webhook delivery, and cross-process OAuth locks
-clean/delegation-capacity # feat/delegation-capacity; PR #784 queue top-level delegations beyond a local running limit
-clean/delegation-capacity-hardening # pr-784: release queued claims on rewrite failure, route capacity settings, and serialize record adoption
-clean/local-design-preview # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
-2658648a112c4427d8d405f669f8bdc5642b14fc # feat/claude-desktop-entrypoint; Claude Desktop opt-in entrypoint
-clean/remote-install-preserve-data-dir # fix/remote-install-preserve-data-dir; keep recorded shared data directory across SSH repair
-clean/remote-ssh-share-local-data # fix/remote-ssh-share-local-data; PR #584 --share-local-data and SSH repair dataDirectory inheritance
-a4a19b6b484da988da8028f1281b4fc13843a198 # fix/cursor-side-chat-edit; PR #576
-clean/cursor-fast-selection # codex/upstream-cursor-fast; expose native Fast models and confirm live selections (replaces fe1cffb2)
-clean/independent-native-provider-quota # fix/independent-native-provider-quota; PR #470
-clean/macos-nested-codex-cli # fix/macos-nested-codex-cli; PR #396
-clean/mapping-store-lock-coordination # fix/mapping-store-lock-coordination; PR #766 + 460da47f MappingStore isolation recovery
-clean/host-chain-npm-node # fix/host-chain-npm-node; PR #752 (Fixes #749 npm Host chain ready)
-clean/console-shutdown-on-exit # fix/console-shutdown-on-exit; PR #753 (Fixes #750 stale console on 4399)
-clean/harness-subagent-codex-items # feat/harness-subagent-codex-items; PR #768
-clean/project-picker-default-dir # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
-clean/remote-external-prewarm # codex/remote-external-prewarm; PR #805 (Fixes #804 external RPC drafts consuming official prewarms)
-clean/fork-release-channel # product update channel: ump45nose/codex-host release checks and tarball meta dependencies
-clean/replay-integration # fix/replay-integration; align integrated Host routing and attachment registration
-clean/local-preview-npm-forwarding # feat/local-design-preview; forward preview command in npm wrapper
-clean/project-deduplication # fix/projects-and-shared-remote-threads; deduplicate projects and align settings localization
-clean/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-threads; PR #791 + b2415e4c + f23459f4 + bd7d4ea7 + e337f6c6 shared external Thread Runtime base
-clean/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
-fix/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
-feat/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view
-30d0633e64e675fc58b16f564f9ad03a0018a2ff # feat/claude-code-todo-tools; Claude Code task tools -> plan panel, history and reopen replay
-d9d06cf222b98c970acf9d49d7de8ddc4add6b92 # feat/claude-code-model-efforts; per-model thinking options from Claude Code ModelInfo
-58b2fdc7333ca8355967605f518a813f5f284cb9 # feat/reasoning-summary-parts; rolling Reasoning preview as titled summary parts
-6186f9f862051719be30a0c5e52395e5632006b5 # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
-42286d0d7fea0c5b049d90c1a199826516530ced # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
-8cddd1aaec9806afccbf970ae7d9e396a2320490 # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
-feat/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit
+v21/renderer-inspector-script-cache # fix/renderer-inspector-script-cache; local: bound V8 inspector script cache (memory leak); no PR yet
+v21/harness-user-instructions # feat/external-cli-codex-user-instructions; PR #741
+v21/dsh-user-instructions # codex/fix-dsh-user-instructions; sync dsh user instructions to the correct home
+v21/sidebar-archive-thread-children # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
+v21/sidebar-sticky-mirrors # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses
+v21/sidebar-pinned-child # feat/renderer-sidebar-thread-nesting; PR #709 tip: retain and deduplicate pinned child Threads
+v21/sidebar-stash # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension
+v21/remote-client-access # feat/remote-client-access; PR #785 base (remote access, tailnet, Funnel, webhook, OAuth, console)
+v21/nas-bot-integration # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
+v21/thread-watch-stall # feat/thread-watch-stall; PR #784 base
+v21/remote-client-hardening # pr-785: tighten remote client OAuth, Funnel teardown, webhook delivery, and cross-process OAuth locks
+v21/delegation-capacity # feat/delegation-capacity; PR #784 queue top-level delegations beyond a local running limit; includes headless delegation regression fixture
+v21/delegation-capacity-hardening # pr-784: release queued claims on rewrite failure, route capacity settings, and serialize record adoption
+v21/local-design-preview # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
+v21/claude-desktop-entrypoint # feat/claude-desktop-entrypoint; Claude Desktop opt-in entrypoint
+v21/remote-install-preserve-data-dir # fix/remote-install-preserve-data-dir; keep recorded shared data directory across SSH repair
+v21/remote-ssh-share-local-data # fix/remote-ssh-share-local-data; PR #584 --share-local-data and SSH repair dataDirectory inheritance
+v21/cursor-side-chat-edit # fix/cursor-side-chat-edit; PR #576
+v21/cursor-fast-selection # codex/upstream-cursor-fast; expose native Fast models and confirm live selections (replaces fe1cffb2)
+v21/independent-native-provider-quota # fix/independent-native-provider-quota; PR #470
+v21/macos-nested-codex-cli # fix/macos-nested-codex-cli; PR #396
+v21/project-picker-default-dir # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
+v21/fork-release-channel # product update channel: ump45nose/codex-host release checks and tarball meta dependencies
+v21/replay-integration # fix/replay-integration; align integrated Host routing and attachment registration
+v21/local-preview-npm-forwarding # feat/local-design-preview; forward preview command in npm wrapper
+v21/project-deduplication # fix/projects-and-shared-remote-threads; deduplicate projects and align settings localization
+v21/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-threads; PR #791 + b2415e4c + f23459f4 + bd7d4ea7 + e337f6c6 shared external Thread Runtime base
+v21/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
+v21/bot-model-selection # feat/bot-model-selection (0d084ae17); Bot model and thinking effort selection
+v21/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
+v21/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view
+v21/claude-code-todo-tools # feat/claude-code-todo-tools; Claude Code task tools -> plan panel, history and reopen replay
+v21/claude-code-model-efforts # feat/claude-code-model-efforts; per-model thinking options from Claude Code ModelInfo
+v21/reasoning-summary-parts # feat/reasoning-summary-parts; rolling Reasoning preview as titled summary parts
+v21/claude-code-image-input # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
+v21/tool-item-details # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
+v21/shared-archived-thread-revival # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
+v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit

@@ -42,3 +42,4 @@ v21/shared-archived-thread-revival # fix/shared-archived-thread-revival; ignore 
 v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit
 fix/pet-nas-remote-tasks # Pet lists remote projectless threads (Codex and external Harness); based on v21/vertical-screen-ux-overhaul
 fix/shared-thread-pin # invalidate SharedThreadBridge list cache on section moves and route shared beforeThreadId
+fix/agy-acp-wakeup-and-watch-delivery # preserve agy ACP background wakeups, avoid session/close on shutdown, retry busy watch delivery, nudge watch on turn idle

@@ -48,6 +48,18 @@ export async function connectSharedThreads(
 }
 
 const SHARED_LIST_REUSE_MS = 5_000;
+const LIST_MUTATING_METHODS = new Set([
+  "thread/archive",
+  "thread/delete",
+  "thread/fork",
+  "thread/metadata/update",
+  "thread/name/set",
+  "thread/revert",
+  "thread/rollback",
+  "thread/section/move",
+  "thread/start",
+  "thread/unarchive",
+]);
 
 /** A GUI keeps its native Codex connection and forwards only shared external Threads. */
 export class SharedThreadBridge {
@@ -202,10 +214,21 @@ export class SharedThreadBridge {
         this.#known.has(params.threadId) ||
         (await this.ownership([params.threadId])).has(params.threadId);
     }
+    if (
+      !shared &&
+      request.method === "thread/section/move" &&
+      typeof params.beforeThreadId === "string"
+    ) {
+      shared =
+        this.#known.has(params.beforeThreadId) ||
+        (await this.ownership([params.beforeThreadId])).has(params.beforeThreadId);
+    }
     if (!shared) return null;
     const peer = await this.#connect();
     if (!peer) throw new Error("Shared Thread Host is disconnected");
-    return { ...(await peer.request(request.method, params)), id: request.id };
+    const reply = await peer.request(request.method, params);
+    if (LIST_MUTATING_METHODS.has(request.method)) this.#invalidateLists();
+    return { ...reply, id: request.id };
   }
 
   async #rows(peer: SharedThreadPeer, params: JsonObject): Promise<JsonObject[]> {
@@ -235,13 +258,18 @@ export class SharedThreadBridge {
 
   /** Every shared row of one query; the caller's own cursor and page size do not apply. */
   async list(params: JsonObject): Promise<readonly JsonObject[]> {
+    const isSectionList = params.sortKey === "section_position";
     const query: JsonObject = { ...params };
     delete query.cursor;
     delete query.limit;
-    if (query.sortKey === "section_position") query.sortKey = "updated_at";
-    const key = JSON.stringify(query);
-    const now = this.options.now ?? Date.now;
+    if (isSectionList) query.sortKey = "updated_at";
     try {
+      if (isSectionList) {
+        const peer = await this.#connect();
+        return peer ? await this.#rows(peer, query) : [];
+      }
+      const key = JSON.stringify(query);
+      const now = this.options.now ?? Date.now;
       const cached = this.#lists.get(key);
       if (
         cached &&

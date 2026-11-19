@@ -264,4 +264,14 @@ it("invalidates cached lists after routing thread/section/move and routes shared
   pinnedIds.delete("ext-1");
   now = 1_000;
   expect(await bridge.list(pinnedQuery)).toEqual([]);
+
+  // Downstream hops receive sectionId with sortKey rewritten to updated_at; they must also bypass cache.
+  pinnedIds.add("ext-1");
+  now = 1_500;
+  expect(await bridge.list({ sectionId: pinnedSectionId, sortKey: "updated_at" })).toEqual([
+    { id: "ext-1", section: { id: pinnedSectionId } },
+  ]);
+  pinnedIds.delete("ext-1");
+  now = 2_000;
+  expect(await bridge.list({ sectionId: pinnedSectionId, sortKey: "updated_at" })).toEqual([]);
 });

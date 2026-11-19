@@ -53,6 +53,36 @@ export async function readNativeSubagentStatus(
   return state.ownership === "matched" ? state.status : null;
 }
 
+export interface NativeConversationActivity {
+  running: boolean;
+  notFullyIdle: boolean;
+}
+
+export async function readNativeConversationActivity(
+  home: string,
+  conversationId: string,
+): Promise<NativeConversationActivity | null> {
+  const { DatabaseSync } = await import("node:sqlite");
+  let db;
+  try {
+    db = new DatabaseSync(nativeConversationSummariesDbPath(home), { readOnly: true });
+    const row = db
+      .prepare(
+        "SELECT status, not_fully_idle FROM conversation_summaries WHERE conversation_id = ?",
+      )
+      .get(conversationId) as { status?: unknown; not_fully_idle?: unknown } | undefined;
+    if (!row) return null;
+    return {
+      running: row.status === "CASCADE_RUN_STATUS_RUNNING",
+      notFullyIdle: Boolean(row.not_fully_idle),
+    };
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 export interface AntigravitySubagentOptions {
   parentId(): string | undefined;
   home: string;

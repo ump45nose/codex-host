@@ -347,6 +347,13 @@ export class AntigravityToolTracker {
       : undefined;
   }
 
+  hasPendingTools(): boolean {
+    for (const state of this.#tools.values()) {
+      if (!state.snapshot) return true;
+    }
+    return false;
+  }
+
   handleToolEvent(event: ToolEvent): void {
     let state = this.#tools.get(event.toolCallId);
     if (state?.snapshot) return;

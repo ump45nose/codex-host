@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeHarnessAdapter } from "@codexhost/harness-adapter/testing";
 import { MappingStore } from "@codexhost/mapping-store";
-import { harnessIdSchema } from "@codexhost/shared-contracts";
+import { harnessIdSchema, hostThreadIdSchema } from "@codexhost/shared-contracts";
 import type { JsonObject } from "@codexhost/protocol-core";
 import { AppServerHost } from "../src/app-server-host.js";
 import { SharedThreadOwner } from "../src/shared-thread-owner.js";
@@ -530,6 +530,146 @@ describe("shared external Threads", () => {
     ).toMatchObject({ result: { threads: [{ threadId, owner: "external", harnessId: "pi" }] } });
     expect(await desktop.mappingStore.listThreads()).toEqual([]);
     expect(await rpc(desktop, 23, "model/list", {})).toHaveProperty("result");
+  });
+
+  it("merges downstream shared-host placements when an externalOnly host answers codexhost/shared-threads/placements", async () => {
+    const pinnedSection = {
+      id: "01984de2-8f74-7c91-a3b2-5c5e937cf318",
+      name: "Pinned",
+      appearance: null,
+    };
+    const downstreamDir = mkdtempSync(path.join(tmpdir(), "shared-placements-downstream-"));
+    const downstreamOwner = new SharedThreadOwner();
+    const threadId = (value: string) => hostThreadIdSchema.parse(value);
+    const seedThread = async (store: MappingStore, hostThreadId: string) => {
+      await store.createProvisional({
+        hostThreadId: threadId(hostThreadId),
+        createRequestId: `req-${hostThreadId}`,
+        harnessId: harnessIdSchema.parse("pi"),
+        cwd: "/synthetic",
+        title: hostThreadId,
+        transportModelId: "codexhost/plugin-v1@test",
+        ephemeral: false,
+        historyMode: "paginated",
+      });
+    };
+    const downstreamStore = new MappingStore({ directory: downstreamDir });
+    await downstreamStore.initialize();
+    await seedThread(downstreamStore, "shared-1");
+    await seedThread(downstreamStore, "override-1");
+    await downstreamStore.replaceSectionPlacements([
+      {
+        hostThreadId: threadId("shared-1"),
+        section: pinnedSection,
+        enteredAt: "2026-11-19T00:00:01.000Z",
+        beforeThreadId: null,
+      },
+      {
+        hostThreadId: threadId("override-1"),
+        section: pinnedSection,
+        enteredAt: "2026-11-19T00:00:02.000Z",
+        beforeThreadId: "shared-1",
+      },
+    ]);
+    const downstreamHost = new AppServerHost({
+      stockCodexPath: "/unused",
+      arguments: [],
+      externalOnly: true,
+      environment: {
+        HOME: downstreamDir,
+        CODEX_HOME: path.join(downstreamDir, "codex"),
+        CODEXHOST_DATA_DIR: downstreamDir,
+      },
+      desktopInput: downstreamOwner.input,
+      desktopOutput: downstreamOwner.output,
+      diagnosticOutput: new PassThrough(),
+      mappingStore: downstreamStore,
+      externalAdapters: new Map(),
+    });
+    const downstreamRunning = downstreamHost.run();
+
+    const middleDir = mkdtempSync(path.join(tmpdir(), "shared-placements-middle-"));
+    const middleOwner = new SharedThreadOwner();
+    const middleStore = new MappingStore({ directory: middleDir });
+    await middleStore.initialize();
+    await seedThread(middleStore, "local-1");
+    await seedThread(middleStore, "override-1");
+    await middleStore.replaceSectionPlacements([
+      {
+        hostThreadId: threadId("local-1"),
+        section: pinnedSection,
+        enteredAt: "2026-11-19T00:00:00.000Z",
+        beforeThreadId: null,
+      },
+      {
+        hostThreadId: threadId("override-1"),
+        section: pinnedSection,
+        enteredAt: "2026-11-18T00:00:00.000Z",
+        beforeThreadId: null,
+      },
+    ]);
+    const middleBridge = new SharedThreadBridge({
+      connect: async () => downstreamOwner.connect(),
+      delegateCreates: true,
+      diagnose: () => undefined,
+    });
+    const middleHost = new AppServerHost({
+      stockCodexPath: "/unused",
+      arguments: [],
+      externalOnly: true,
+      sharedThreads: middleBridge,
+      environment: {
+        HOME: middleDir,
+        CODEX_HOME: path.join(middleDir, "codex"),
+        CODEXHOST_DATA_DIR: middleDir,
+      },
+      desktopInput: middleOwner.input,
+      desktopOutput: middleOwner.output,
+      diagnosticOutput: new PassThrough(),
+      mappingStore: middleStore,
+      externalAdapters: new Map(),
+    });
+    const middleRunning = middleHost.run();
+
+    cleanup.push(async () => {
+      middleHost.close();
+      await middleRunning;
+      middleOwner.close();
+      middleOwner.output.end();
+      downstreamHost.close();
+      await downstreamRunning;
+      downstreamOwner.close();
+      downstreamOwner.output.end();
+      rmSync(middleDir, { recursive: true, force: true });
+      rmSync(downstreamDir, { recursive: true, force: true });
+    });
+
+    const peer = middleOwner.connect();
+    try {
+      const reply = await peer.request("codexhost/shared-threads/placements", {});
+      expect(reply.result).toEqual([
+        {
+          hostThreadId: "local-1",
+          section: pinnedSection,
+          enteredAt: "2026-11-19T00:00:00.000Z",
+          beforeThreadId: null,
+        },
+        {
+          hostThreadId: "shared-1",
+          section: pinnedSection,
+          enteredAt: "2026-11-19T00:00:01.000Z",
+          beforeThreadId: null,
+        },
+        {
+          hostThreadId: "override-1",
+          section: pinnedSection,
+          enteredAt: "2026-11-19T00:00:02.000Z",
+          beforeThreadId: "shared-1",
+        },
+      ]);
+    } finally {
+      peer.close();
+    }
   });
 
   it.skipIf(process.platform === "win32")(

@@ -258,11 +258,12 @@ export class SharedThreadBridge {
 
   /** Every shared row of one query; the caller's own cursor and page size do not apply. */
   async list(params: JsonObject): Promise<readonly JsonObject[]> {
-    const isSectionList = params.sortKey === "section_position";
+    const isSectionList =
+      params.sortKey === "section_position" || typeof params.sectionId === "string";
     const query: JsonObject = { ...params };
     delete query.cursor;
     delete query.limit;
-    if (isSectionList) query.sortKey = "updated_at";
+    if (query.sortKey === "section_position") query.sortKey = "updated_at";
     try {
       if (isSectionList) {
         const peer = await this.#connect();

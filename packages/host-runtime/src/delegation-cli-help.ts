@@ -13,9 +13,9 @@ Discover projects under this Host's configured roots. Returns live project metad
   "thread file": `codexhost thread file <thread> --path <file> [--offset <n>] [--limit <bytes>] [--revision <revision>] [--format json|compact|text]
 Read a file explicitly linked in the latest final report, inside the Thread workspace. Returns a base64 chunk, revision, nextOffset and eof. Continue with the returned revision; restart if it changes. Maximum chunk size is 1 MiB. Read through the execution Host.`,
   "client add": `codexhost client add <name> [--scope read|dispatch] [--network local,tailnet,public]
-Register an external client: a process the Host did not start, such as a script, a desktop app, or a bot's local agent. Prints the client token once; it is not stored in a readable form and cannot be shown again.
+Register a named external client for HTTP/MCP or a separate CLI identity. Same-user local CLI calls authenticate automatically. Prints the client token once; it is not stored in a readable form and cannot be shown again.
 The client sets CODEXHOST_CLIENT_TOKEN (or CODEXHOST_CLIENT_TOKEN_FILE) and then uses the same delegate, thread and harness commands, or the MCP endpoint, against the external client listener (127.0.0.1:4398 unless CODEXHOST_EXTERNAL_CLIENT_PORT says otherwise).
-Normal same-user CLI calls authenticate automatically; local-cli is reserved. Names use lowercase letters, digits and hyphens.
+Names use lowercase letters, digits and hyphens; local-cli is reserved.
 --scope read allows reading, listing, waiting and events only; dispatch (default) also allows delegate start, thread send, cancel and watch.
 --network lists where the client may connect from: local (127.0.0.1, default), tailnet (this machine's Tailscale address), public (the Tailscale Funnel URL). Turn the tailnet and public listeners on with codexhost client access.`,
   "client set": `codexhost client set <name> [--scope read|dispatch] [--network local,tailnet,public]

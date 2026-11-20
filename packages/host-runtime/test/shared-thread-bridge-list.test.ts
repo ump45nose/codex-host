@@ -181,3 +181,97 @@ it("does not keep a failed walk", async () => {
   shared.failNext(false);
   expect(await bridge.list(query)).toHaveLength(10);
 });
+
+it("invalidates cached lists after routing thread/section/move and routes shared beforeThreadId", async () => {
+  let now = 0;
+  const pinnedSectionId = "01984de2-8f74-7c91-a3b2-5c5e937cf318";
+  const pinnedIds = new Set<string>();
+  const moved: JsonObject[] = [];
+  const listCalls: JsonObject[] = [];
+  const ended = Promise.withResolvers<undefined>();
+  const peer: SharedThreadPeer = {
+    request: async (method, params) => {
+      if (method === "codexhost/thread/ownership/list") {
+        const ids = Array.isArray(params.threadIds) ? params.threadIds : [];
+        return {
+          result: {
+            threads: ids
+              .filter((id): id is string => typeof id === "string")
+              .map((threadId) =>
+                threadId === "ext-1"
+                  ? { threadId, owner: "external", harnessId: "antigravity" }
+                  : { threadId, owner: "codex" },
+              ),
+          },
+        };
+      }
+      if (method === "thread/section/move") {
+        moved.push(params);
+        if (params.threadId === "ext-1") {
+          if (params.sectionId === pinnedSectionId) pinnedIds.add("ext-1");
+          else pinnedIds.delete("ext-1");
+        }
+        return { result: {} };
+      }
+      if (method === "thread/list") {
+        listCalls.push(params);
+        const rows =
+          params.sectionId === pinnedSectionId
+            ? [...pinnedIds].map((id) => ({ id, section: { id: pinnedSectionId } }))
+            : [{ id: "ext-1", section: pinnedIds.has("ext-1") ? { id: pinnedSectionId } : null }];
+        return { result: { data: rows, nextCursor: null } };
+      }
+      return { result: {} };
+    },
+    respond: async () => undefined,
+    subscribe: () => () => undefined,
+    closed: ended.promise,
+    close: () => ended.resolve(undefined),
+  };
+
+  const bridge = bridgeFor(peer, () => now);
+  const pinnedQuery = { sectionId: pinnedSectionId, sortKey: "section_position" };
+
+  // Warm both the catalog list and the Pinned section list caches.
+  expect(await bridge.list(query)).toEqual([{ id: "ext-1", section: null }]);
+  expect(await bridge.list(pinnedQuery)).toEqual([]);
+  listCalls.length = 0;
+
+  // Pinning the shared external thread must invalidate cached lists immediately.
+  expect(
+    await bridge.route({
+      id: 1,
+      method: "thread/section/move",
+      params: { threadId: "ext-1", sectionId: pinnedSectionId, beforeThreadId: null },
+    }),
+  ).toEqual({ id: 1, result: {} });
+  expect(await bridge.list(pinnedQuery)).toEqual([
+    { id: "ext-1", section: { id: pinnedSectionId } },
+  ]);
+  expect(await bridge.list(query)).toEqual([{ id: "ext-1", section: { id: pinnedSectionId } }]);
+
+  // Moving an official thread before a shared external thread must route to the shared peer.
+  expect(
+    await bridge.route({
+      id: 2,
+      method: "thread/section/move",
+      params: { threadId: "official-1", sectionId: pinnedSectionId, beforeThreadId: "ext-1" },
+    }),
+  ).toEqual({ id: 2, result: {} });
+  expect(moved).toHaveLength(2);
+
+  // External pin changes made by another client (e.g. Web UI) must be visible on section_position reads.
+  pinnedIds.delete("ext-1");
+  now = 1_000;
+  expect(await bridge.list(pinnedQuery)).toEqual([]);
+
+  // Downstream hops receive sectionId with sortKey rewritten to updated_at; they must also bypass cache.
+  pinnedIds.add("ext-1");
+  now = 1_500;
+  expect(await bridge.list({ sectionId: pinnedSectionId, sortKey: "updated_at" })).toEqual([
+    { id: "ext-1", section: { id: pinnedSectionId } },
+  ]);
+  pinnedIds.delete("ext-1");
+  now = 2_000;
+  expect(await bridge.list({ sectionId: pinnedSectionId, sortKey: "updated_at" })).toEqual([]);
+});

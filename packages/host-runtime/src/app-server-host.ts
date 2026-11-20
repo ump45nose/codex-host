@@ -1863,9 +1863,18 @@ export class AppServerHost {
       return;
     }
     if (this.#options.externalOnly && request.method === "codexhost/shared-threads/placements") {
+      const [localPlacements, sharedPlacements] = await Promise.all([
+        this.#repository.listSectionPlacements(),
+        this.#options.sharedThreads?.placements() ?? [],
+      ]);
+      const sharedIds = new Set(sharedPlacements.map((p) => p.hostThreadId));
+      const placements = [
+        ...localPlacements.filter((p) => !sharedIds.has(p.hostThreadId)),
+        ...sharedPlacements,
+      ];
       await this.#writer.json(
         rpcEnvelope(request, {
-          result: jsonValueSchema.parse(await this.#repository.listSectionPlacements()),
+          result: jsonValueSchema.parse(placements),
         }),
       );
       return;

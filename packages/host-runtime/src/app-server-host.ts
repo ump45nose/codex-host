@@ -61,9 +61,7 @@ import {
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
-  THREAD_MANUAL_COMPACTION_STARTED_METHOD,
   delegationCapacitySettingsSchema,
-  idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import { HarnessDisplaySettingsStore } from "./harness-display-settings.js";
 import { isModelPriceOverridesMethod } from "./model-price-overrides-file.js";

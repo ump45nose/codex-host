@@ -59,11 +59,13 @@ function session() {
         thread.status === "running"
           ? { availability: "pending" as const }
           : { availability: "available" as const, text: "done" },
-      nextCursor: null,
     };
   };
-  const registration: DelegationControlRegistration = {
+  const registration = {
     listHarnesses: async () => ({ harnesses: ["codex", "pi"] }),
+    answer: async () => {
+      throw new Error("not used");
+    },
     inspect: async () => {
       throw new Error("not used");
     },
@@ -128,7 +130,7 @@ function session() {
       })),
       nextCursor: null,
     })),
-  };
+  } satisfies DelegationControlRegistration;
   const finish = (threadId: string, status: DelegationThreadStatus = "completed") => {
     const thread = threads.get(threadId);
     if (thread) thread.status = status;

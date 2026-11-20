@@ -44,3 +44,4 @@ fix/pet-nas-remote-tasks # Pet lists remote projectless threads (Codex and exter
 fix/shared-thread-pin # invalidate SharedThreadBridge list cache on section moves and route shared beforeThreadId
 fix/agy-acp-wakeup-and-watch-delivery # preserve agy ACP background wakeups, avoid session/close on shutdown, retry busy watch delivery, nudge watch on turn idle
 fix/drop-claude-desktop-entrypoint # revert the Claude Desktop entrypoint opt-in (account risk-control); based on v21/claude-desktop-entrypoint
+fix/shim-local-host-relaunch # upstream 82c1da2f3 cherry-pick; Desktop 26.1117 starts the main app-server via an App server host utility, keep it on the Host Runtime instead of the official CLI

@@ -886,7 +886,7 @@ describe("HarnessDelegationCoordinator", () => {
       expect(document.turns[1]).toEqual(projector.snapshotTurn());
       expect(document.turns[1].items).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "reasoning", summary: ["live reasoning"] }),
+          expect.objectContaining({ type: "reasoning", summary: ["**live reasoning**"] }),
           expect.objectContaining({
             type: "commandExecution",
             command: "ls",

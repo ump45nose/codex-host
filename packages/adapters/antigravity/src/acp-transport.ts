@@ -428,20 +428,17 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     if (
       ["config.update", "mode.update", "commands.update", "session.info", "usage.context"].includes(
         event.type,
-      )
+      ) ||
+      // The wire request bounds foreground updates; the handler may still
+      // be present to let the SDK finish processing earlier callbacks.
+      (this.#promptRequestId === undefined && !this.#opening)
     ) {
       if (this.#sessionHandler) this.#sessionHandler(event);
       else this.#pendingEvents.push(event);
     } else if (this.#active) {
       this.#active.onEvent(event);
     } else if (this.#passive) {
-      // Idle Harness output goes to the passive handler so the adapter can project
-      // it, including as an autonomous Turn; without one it stays Session output.
       this.#passive.onEvent(event);
-    } else if (this.#sessionHandler) {
-      this.#sessionHandler(event);
-    } else {
-      this.#pendingEvents.push(event);
     }
   }
 
@@ -450,19 +447,22 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     invoke: (handler: AntigravityActivePromptHandler) => Promise<T>,
     cancelled: T,
   ): Promise<T> {
-    // An active prompt only gets callbacks the stream admitted in wire order; a
-    // passive handler still receives the callbacks that arrive after it settled.
-    const target = (this.#acceptCallbacks ? this.#active : null) ?? this.#passive;
-    if (!target || this.#closed || !("sessionId" in request)) return cancelled;
-    if (request.sessionId !== this.#sessionId) return cancelled;
-    if (target === this.#active && !this.#acceptedCallbacks.delete(request)) return cancelled;
+    const active = this.#active;
+    if (
+      !active ||
+      !this.#acceptedCallbacks.delete(request) ||
+      !("sessionId" in request) ||
+      request.sessionId !== this.#sessionId ||
+      this.#closed
+    )
+      return cancelled;
     let cancel!: () => void;
     const cancellation = new Promise<T>((resolve) => {
       cancel = () => resolve(cancelled);
     });
     this.#callbacks.add(cancel);
     try {
-      return await Promise.race([invoke(target), cancellation]);
+      return await Promise.race([invoke(active), cancellation]);
     } finally {
       this.#callbacks.delete(cancel);
     }

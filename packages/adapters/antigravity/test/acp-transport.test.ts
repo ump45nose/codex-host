@@ -576,25 +576,6 @@ describe("native ACP stdio transport", () => {
     await value.close();
     expect(stderr.join("")).not.toContain("session-close-sent");
   });
-  it("delivers post-prompt session/update notifications to the passive handler", async () => {
-    const value = transport("passive-wakeup");
-    const passiveEvents: AntigravityAcpEvent[] = [];
-    value.setPassivePromptHandler({
-      onEvent: (event) => passiveEvents.push(event),
-      onPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-      onElicitation: async () => ({ action: "cancel" }),
-    });
-    await open(value);
-    const result = await value.prompt([{ type: "text", text: "go" }], handler());
-    expect(result.stopReason).toBe("end_turn");
-    await vi.waitFor(() =>
-      expect(passiveEvents).toEqual([
-        expect.objectContaining({ type: "tool.update", toolCallId: "bg-1", status: "completed" }),
-        { type: "agent.text", text: "GOT_BG_OK" },
-      ]),
-    );
-    await value.close();
-  });
   it("routes idle agent output without an active prompt to the session handler", async () => {
     const value = transport();
     await open(value);

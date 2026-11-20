@@ -4,8 +4,10 @@ import { Readable, Writable } from "node:stream";
 import {
   ClientSideConnection,
   ndJsonStream,
+  type AnyMessage,
   type Client,
   type InitializeResponse,
+  type JsonRpcId,
 } from "@agentclientprotocol/sdk";
 import { sanitizeDiagnosticTail } from "@codexhost/harness-adapter";
 import { commandInvocation as antigravityInvocation } from "@codexhost/harness-discovery";
@@ -35,7 +37,9 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
   #sessionHandler: AntigravitySessionEventHandler | null = null;
   #passive: AntigravityActivePromptHandler | null = null;
   #active: AntigravityActivePromptHandler | null = null;
+  #promptRequestId: JsonRpcId | undefined;
   #callbacks = new Set<() => void>();
+  #acceptedCallbacks = new WeakSet<object>();
   #acceptCallbacks = false;
   #promptInterrupted: AbortController | null = null;
   #opening: Array<{ sessionId: string; event: AntigravityAcpEvent }> | null = null;
@@ -123,10 +127,21 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
           strategy: { highWaterMark: Infinity },
         }) as ReadableStream<Uint8Array>,
       );
+      const writer = stream.writable.getWriter();
+      stream.writable = new WritableStream<AnyMessage>({
+        write: (message) => {
+          if ("method" in message && message.method === "session/prompt" && "id" in message)
+            this.#promptRequestId = message.id;
+          return writer.write(message);
+        },
+        close: () => writer.close(),
+        abort: (reason) => writer.abort(reason),
+      });
       // agy extends the SDK's tool/permission/form shapes (args, allow_session,
       // and oneOf array items). Dispatch those incoming payloads through the SDK's
       // extension handlers so its standard schemas do not discard native fields.
       const nativeMethods = new Set(["session/request_permission", "elicitation/create"]);
+      const extensionPrefix = "_antigravity/";
       stream.readable = stream.readable.pipeThrough(
         new TransformStream({
           transform: (message, controller) => {
@@ -140,23 +155,44 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
               this.#update(params.sessionId, params.update);
               return;
             }
-            if ("method" in message && nativeMethods.has(message.method))
-              message.method = `_antigravity/${message.method}`;
+            if ("method" in message && typeof message.method === "string") {
+              const method = message.method.startsWith(extensionPrefix)
+                ? message.method.slice(extensionPrefix.length)
+                : message.method;
+              if (nativeMethods.has(method)) {
+                message.method = extensionPrefix + method;
+                // Admit callbacks in wire order even if the SDK dispatches them later.
+                if (
+                  this.#acceptCallbacks &&
+                  "id" in message &&
+                  typeof message.params === "object" &&
+                  message.params !== null
+                )
+                  this.#acceptedCallbacks.add(message.params);
+              }
+            }
+            if (
+              !("method" in message) &&
+              "id" in message &&
+              message.id === this.#promptRequestId &&
+              ("result" in message || "error" in message)
+            ) {
+              // The next update is idle output, even if the SDK has not settled prompt().
+              this.#promptRequestId = undefined;
+              this.#acceptCallbacks = false;
+              this.#active?.onResponse?.();
+            }
             controller.enqueue(message);
           },
         }),
       );
       const onElicitation: NonNullable<Client["unstable_createElicitation"]> = (request) =>
-        this.#callback(
-          "sessionId" in request ? (request.sessionId as string) : undefined,
-          (handler) => handler.onElicitation(request),
-          { action: "cancel" },
-        );
+        this.#callback(request, (handler) => handler.onElicitation(request), { action: "cancel" });
       const client: Client = {
         sessionUpdate: ({ sessionId, update }) =>
           this.#update(sessionId, update as Record<string, unknown>),
         requestPermission: (request) =>
-          this.#callback(request.sessionId, (handler) => handler.onPermission(request), {
+          this.#callback(request, (handler) => handler.onPermission(request), {
             outcome: { outcome: "cancelled" },
           }),
         unstable_createElicitation: onElicitation,
@@ -303,6 +339,7 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
       this.#clearCallbacks();
       this.#acceptCallbacks = false;
       this.#active = null;
+      this.#promptRequestId = undefined;
       this.#promptInterrupted = null;
     }
   }
@@ -322,6 +359,7 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
       new AntigravityTransportError("unavailable", "ACP session closed"),
     );
     this.#active = null;
+    this.#promptRequestId = undefined;
     this.#pendingEvents = [];
     this.#clearCallbacks();
     return sessionId;
@@ -397,17 +435,27 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     } else if (this.#active) {
       this.#active.onEvent(event);
     } else if (this.#passive) {
+      // Idle Harness output goes to the passive handler so the adapter can project
+      // it, including as an autonomous Turn; without one it stays Session output.
       this.#passive.onEvent(event);
+    } else if (this.#sessionHandler) {
+      this.#sessionHandler(event);
+    } else {
+      this.#pendingEvents.push(event);
     }
   }
 
   async #callback<T>(
-    sessionId: string | undefined,
+    request: object,
     invoke: (handler: AntigravityActivePromptHandler) => Promise<T>,
     cancelled: T,
   ): Promise<T> {
+    // An active prompt only gets callbacks the stream admitted in wire order; a
+    // passive handler still receives the callbacks that arrive after it settled.
     const target = (this.#acceptCallbacks ? this.#active : null) ?? this.#passive;
-    if (!target || sessionId !== this.#sessionId || this.#closed) return cancelled;
+    if (!target || this.#closed || !("sessionId" in request)) return cancelled;
+    if (request.sessionId !== this.#sessionId) return cancelled;
+    if (target === this.#active && !this.#acceptedCallbacks.delete(request)) return cancelled;
     let cancel!: () => void;
     const cancellation = new Promise<T>((resolve) => {
       cancel = () => resolve(cancelled);
@@ -421,6 +469,7 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
   }
 
   #clearCallbacks(): void {
+    this.#acceptedCallbacks = new WeakSet();
     for (const cancel of this.#callbacks) cancel();
     this.#callbacks.clear();
   }

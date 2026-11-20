@@ -6,6 +6,9 @@ import {
   isAvatarOverlayLocation,
 } from "./renderer-avatar-overlay.js";
 import { installRendererRpcSteering } from "./renderer-rpc-steering.js";
+import { installDesktopExtensionHost } from "./desktop-extension-host.js";
+
+if (window.top === window) installDesktopExtensionHost();
 
 Object.defineProperty(window, "__codexhostInstallRpcSteeringV1", {
   configurable: true,

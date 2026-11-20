@@ -8,6 +8,11 @@ import {
   type JsonObject,
   type JsonRpcId,
 } from "@codexhost/protocol-core";
+import {
+  THREAD_TREE_WATCH_METHOD,
+  THREAD_TREE_UNWATCH_METHOD,
+  THREAD_TREE_SNAPSHOT_METHOD,
+} from "@codexhost/shared-contracts";
 import type { RemoteAppServerSession, RemoteAppServerSessionStreams } from "./remote-app-server.js";
 import { object, rpcId, StreamThreadPeer, type SharedThreadPeer } from "./shared-thread-peer.js";
 
@@ -36,11 +41,17 @@ export class SharedThreadOwner {
   readonly #prefix = `shared-interaction:${randomUUID()}:`;
   readonly #interactions = new Map<string, PendingSharedInteraction>();
   readonly #clients = new Map<(message: JsonObject) => void, () => void>();
+  readonly #treeClients = new Map<string, (message: JsonObject) => void>();
   #closed = false;
   readonly #receipts = new Map<string, { fingerprint: string; result: Promise<JsonObject> }>();
 
   constructor() {
     this.#peer.subscribe((message) => {
+      if (message.method === THREAD_TREE_SNAPSHOT_METHOD) {
+        const id = object(message.params) ? message.params.subscriptionId : undefined;
+        if (typeof id === "string") this.#treeClients.get(id)?.(message);
+        return;
+      }
       let event = message;
       const params = object(message.params) ? message.params : {};
       if (rpcId(message.id)) {
@@ -156,34 +167,53 @@ export class SharedThreadOwner {
       closed: ended.promise,
       request: async (method, params) => {
         if (closed) throw new Error("Shared Thread client is closed");
-        if (method !== "thread/resume" || typeof params.threadId !== "string") {
-          return this.#request(method, params);
+        if (method === THREAD_TREE_UNWATCH_METHOD) {
+          const id = params.subscriptionId;
+          if (typeof id !== "string" || this.#treeClients.get(id) !== publish)
+            return { result: {} };
+          this.#treeClients.delete(id);
         }
-        // Include live frames queued downstream while the resume is still pending.
-        const delivered = new Set<string>();
-        replayDeliveries.add(delivered);
-        const reply = await this.#request(method, params).catch((error: unknown) => {
-          replayDeliveries.delete(delivered);
-          throw error;
-        });
-        if (reply.error) replayDeliveries.delete(delivered);
-        else {
-          // Response consumers enqueue their JSON-RPC reply before the next event-loop frame.
-          setImmediate(() => {
+        let response: JsonObject;
+        if (method === "thread/resume" && typeof params.threadId === "string") {
+          const threadId = params.threadId;
+          // Include live frames queued downstream while the resume is still pending.
+          const delivered = new Set<string>();
+          replayDeliveries.add(delivered);
+          response = await this.#request(method, params).catch((error: unknown) => {
             replayDeliveries.delete(delivered);
-            if (closed) return;
-            for (const pending of this.#interactions.values()) {
-              if (
-                pending.threadId === params.threadId &&
-                !pending.inFlight &&
-                !delivered.has(pending.id)
-              ) {
-                publish(pending.message, false);
-              }
-            }
+            throw error;
           });
+          if (response.error) replayDeliveries.delete(delivered);
+          else {
+            // Response consumers enqueue their JSON-RPC reply before the next event-loop frame.
+            setImmediate(() => {
+              replayDeliveries.delete(delivered);
+              if (closed) return;
+              for (const pending of this.#interactions.values()) {
+                if (
+                  pending.threadId === threadId &&
+                  !pending.inFlight &&
+                  !delivered.has(pending.id)
+                ) {
+                  publish(pending.message, false);
+                }
+              }
+            });
+          }
+        } else response = await this.#request(method, params);
+        if (
+          method === THREAD_TREE_WATCH_METHOD &&
+          object(response.result) &&
+          typeof response.result.subscriptionId === "string"
+        ) {
+          const id = response.result.subscriptionId;
+          if (closed)
+            void this.#request(THREAD_TREE_UNWATCH_METHOD, { subscriptionId: id }).catch(
+              () => undefined,
+            );
+          else this.#treeClients.set(id, publish);
         }
-        return reply;
+        return response;
       },
       respond: async (message) => {
         if (closed || typeof message.id !== "string") return;
@@ -209,6 +239,14 @@ export class SharedThreadOwner {
         if (closed) return;
         closed = true;
         this.#clients.delete(publish);
+        for (const [id, listener] of this.#treeClients) {
+          if (listener !== publish) continue;
+          this.#treeClients.delete(id);
+          if (!this.#closed)
+            void this.#request(THREAD_TREE_UNWATCH_METHOD, { subscriptionId: id }).catch(
+              () => undefined,
+            );
+        }
         listeners.clear();
         replayDeliveries.clear();
         ended.resolve(undefined);

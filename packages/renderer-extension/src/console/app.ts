@@ -17,6 +17,7 @@ import { ConsoleState } from "./state.js";
 import { createConsoleRemoteConnections } from "./remote-connections.js";
 import { createRendererModelClient } from "../renderer-model-client.js";
 import { createConnectDevicesPage } from "./pages/connect-devices.js";
+import { createExtensionsPage } from "./pages/extensions.js";
 import accountsCss from "../settings/accounts.css";
 import {
   RendererSettingsPageScope,
@@ -97,7 +98,11 @@ function statusCard(
         { className: "console-status-card__meta" },
         [
           version && `codexhost ${version}`,
-          overview?.inspect?.desktop && `Codex ${overview.inspect.desktop.version}`,
+          overview?.inspect?.desktop &&
+            (overview.inspect.desktop.version === "unknown" ||
+            overview.inspect.desktop.version === "0.0.0.0"
+              ? `${messages.desktop} (${messages.versionUnknown})`
+              : `Codex ${overview.inspect.desktop.version}`),
         ]
           .filter(Boolean)
           .join(" · "),
@@ -172,6 +177,7 @@ export function startConsoleApp(document: Document): void {
         createExternalClientsPage(messages, locale),
         hostPage(required(settingsPages, "accounts"), messages, state),
         createConnectDevicesPage(locale),
+        createExtensionsPage(locale),
         hostPage(required(settingsPages, "usage-statistics"), messages, state),
         required(settingsPages, "updates"),
       ],

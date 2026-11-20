@@ -222,6 +222,7 @@ export type {
   RendererConnectionHostSnapshot,
   RendererConnectionSnapshot,
   RendererCodexAccountClient,
+  RendererDesktopExtensionsClient,
   RendererUpdateClient,
 } from "./settings/pages.js";
 export {

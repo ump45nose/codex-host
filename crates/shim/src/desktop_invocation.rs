@@ -55,17 +55,7 @@ pub(crate) fn is_known_non_desktop_caller(_stock_codex_path: &std::path::Path) -
 fn macos_desktop_installation(
     stock_codex_path: &std::path::Path,
 ) -> Option<codexhost_platform::DesktopInstallation> {
-    use codexhost_platform::discover_codex_desktop_from_root;
-
-    // Find the validated Desktop among the CLI's enclosing app bundles; newer
-    // layouts nest the CLI in its own app.
-    stock_codex_path
-        .ancestors()
-        .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
-        .find_map(|bundle| {
-            let installation = discover_codex_desktop_from_root(bundle).ok()?;
-            (installation.executable_codex_cli == stock_codex_path).then_some(installation)
-        })
+    codexhost_platform::discover_codex_desktop_for_cli(stock_codex_path)
 }
 
 #[cfg(target_os = "macos")]

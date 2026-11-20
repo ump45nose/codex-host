@@ -1,3 +1,5 @@
+import { open } from "node:fs/promises";
+import path from "node:path";
 import type {
   HostEvent,
   HostItemSnapshot,
@@ -58,12 +60,62 @@ export interface NativeConversationActivity {
   notFullyIdle: boolean;
 }
 
+const TRANSCRIPT_ACTIVE_STALE_MS = 5 * 60_000;
+const TRANSCRIPT_TAIL_BYTES = 16 * 1024;
+
+async function readTranscriptRunning(
+  home: string,
+  conversationId: string,
+): Promise<boolean | null> {
+  const transcriptPath = path.join(
+    home,
+    ".gemini",
+    "antigravity-cli",
+    "brain",
+    conversationId,
+    ".system_generated",
+    "logs",
+    "transcript.jsonl",
+  );
+  let handle;
+  try {
+    handle = await open(transcriptPath, "r");
+    const info = await handle.stat();
+    if (info.size === 0) return null;
+    if (Date.now() - info.mtimeMs > TRANSCRIPT_ACTIVE_STALE_MS) return false;
+    const length = Math.min(info.size, TRANSCRIPT_TAIL_BYTES);
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, info.size - length);
+    const tail = buffer.subarray(0, bytesRead).toString("utf8");
+    const lines = tail.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]?.trim();
+      if (!line) continue;
+      const entry = JSON.parse(line) as {
+        type?: unknown;
+        status?: unknown;
+        tool_calls?: unknown;
+      };
+      const hasToolCalls = Array.isArray(entry.tool_calls) && entry.tool_calls.length > 0;
+      const isTerminalReply =
+        entry.type === "PLANNER_RESPONSE" && entry.status === "DONE" && !hasToolCalls;
+      return !isTerminalReply;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close();
+  }
+}
+
 export async function readNativeConversationActivity(
   home: string,
   conversationId: string,
 ): Promise<NativeConversationActivity | null> {
   const { DatabaseSync } = await import("node:sqlite");
   let db;
+  let dbActivity: NativeConversationActivity | null = null;
   try {
     db = new DatabaseSync(nativeConversationSummariesDbPath(home), { readOnly: true });
     const row = db
@@ -71,16 +123,23 @@ export async function readNativeConversationActivity(
         "SELECT status, not_fully_idle FROM conversation_summaries WHERE conversation_id = ?",
       )
       .get(conversationId) as { status?: unknown; not_fully_idle?: unknown } | undefined;
-    if (!row) return null;
-    return {
-      running: row.status === "CASCADE_RUN_STATUS_RUNNING",
-      notFullyIdle: Boolean(row.not_fully_idle),
-    };
+    if (row) {
+      dbActivity = {
+        running: row.status === "CASCADE_RUN_STATUS_RUNNING",
+        notFullyIdle: Boolean(row.not_fully_idle),
+      };
+    }
   } catch {
-    return null;
+    dbActivity = null;
   } finally {
     db?.close();
   }
+  const transcriptRunning = await readTranscriptRunning(home, conversationId);
+  if (dbActivity === null && transcriptRunning === null) return null;
+  return {
+    running: Boolean(dbActivity?.running || transcriptRunning),
+    notFullyIdle: Boolean(dbActivity?.notFullyIdle),
+  };
 }
 
 export interface AntigravitySubagentOptions {

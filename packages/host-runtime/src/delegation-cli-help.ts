@@ -60,6 +60,7 @@ Reuse --request-id for an idempotent retry. Identical recent parent/target/task/
 --watch true also registers thread watch on the child with the resolved parent as the notified Thread; the response's watch field reports whether it was registered. --stall-after-ms requires --watch true and enables the optional silence notification described by thread watch.
 --ref records where the work came from, such as an issue URL; repeat it for several. Absolute URIs only, at most 16 per Thread; credentials in a URI are removed. A child inherits its parent Thread's references.
 An external client that omits --parent-thread starts the work as itself (parent client:<name>) and must pass --cwd.
+When the local limit on running delegations is on (Codex Desktop settings; off by default) and reached, or other starts are already waiting, the start is queued: the response still returns at once with the Thread reference, status queued and queue.position (compact: queuePosition). Queued starts begin in order as running top-level Threads finish, including manually opened ones; the queue survives a Host Runtime restart. This applies to every Harness, --harness codex included. Wait and watch timeouts include time spent queued.
 The response confirms cwd and parent. Use its Thread reference with thread read, wait, send, cancel, or watch.`,
   "thread send": `codexhost thread send <thread> (--message <text> | --message-file <path|->) [--interrupt] [--steer true|false] [--watch true|false] [--watch-timeout-ms <n>] [--format json|compact|text]
 Start a new Turn in a writable Thread and return after submission.
@@ -108,7 +109,8 @@ Entries include taskName when known, threadStatus when readable, and watchedForM
 Find existing Threads by workspace, or use --parent to list a Thread's delegated children.
 Workspace listing defaults to the caller process cwd. Default limit 25 (maximum 100), sorted created-desc.
 --parent uses Delegation relationships. --client lists what an external client started without a parent Thread. --ref lists Threads carrying that reference, newest first, across workspaces. An external client lists all workspaces unless --cwd is given. A null nextCursor ends the list.
-Compact output keeps task links, Harness, status, title, and workspace.`,
+Queued Threads lead the first page in queue order, beyond --limit, with status queued and queue.position.
+Compact output keeps task links, Harness, status, queue position, title, and workspace.`,
 } as const;
 
 export type DelegationCliCommand = keyof typeof COMMAND_HELP;
@@ -143,6 +145,7 @@ export const DELEGATION_HELP = `usage:
   codexhost thread list
   codexhost client add|list|set|pair|remove|access|webhook
   codexhost events
+  codexhost preview open|list|show|close
 
 Use <command> --help for its options. Use harness list to discover targets.
 Outside a codexhost session, the CLI reads private cli-credentials.json from the local data directory automatically. The Host and its external listener must be running. No client add or token environment variable is needed; these calls share the local-cli identity. Explicit client credentials override discovery.
@@ -170,7 +173,8 @@ export function delegationCliHelp(arguments_: readonly string[]): string | undef
       group === "project" ||
       group === "harness" ||
       group === "thread" ||
-      group === "client"
+      group === "client" ||
+      group === "preview"
     ) {
       const usages = Object.entries(COMMAND_HELP)
         .filter(([name]) => name.startsWith(`${group} `))

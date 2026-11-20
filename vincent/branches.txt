@@ -1,49 +1,41 @@
-# Feature revisions merged onto each upstream release by scripts/vincent-release.sh.
-# Format: <fork branch or full commit SHA>   # source branch / upstream PR / note
-# Order matters. Each v21 branch extends the previous branch from upstream v0.21.0.
-# Entries already present in the upstream tag are unnecessary.
-v21/renderer-inspector-script-cache # fix/renderer-inspector-script-cache; local: bound V8 inspector script cache (memory leak); no PR yet
-v21/harness-user-instructions # feat/external-cli-codex-user-instructions; PR #741
-v21/dsh-user-instructions # codex/fix-dsh-user-instructions; sync dsh user instructions to the correct home
-v21/sidebar-archive-thread-children # feat/renderer-archive-thread-children; PR #717 (contains PR #709 sidebar nesting)
-v21/sidebar-sticky-mirrors # fix/sidebar-sticky-mirrors; local: retain sidebar mirrors when Recents collapses
-v21/sidebar-pinned-child # feat/renderer-sidebar-thread-nesting; PR #709 tip: retain and deduplicate pinned child Threads
-v21/sidebar-stash # feat/renderer-sidebar-stash; local: sidebar 收纳箱 (stash) renderer extension
-v21/remote-client-access # feat/remote-client-access; PR #785 base (remote access, tailnet, Funnel, webhook, OAuth, console)
-v21/nas-bot-integration # codex/nas-bot-integration; PR #799 generic CLI; NAS native Bot entry, source receipts and multi-device delegation
-v21/thread-watch-stall # feat/thread-watch-stall; PR #784 base
-v21/remote-client-hardening # pr-785: tighten remote client OAuth, Funnel teardown, webhook delivery, and cross-process OAuth locks
-v21/delegation-capacity # feat/delegation-capacity; PR #784 queue top-level delegations beyond a local running limit; includes headless delegation regression fixture
-v21/delegation-capacity-hardening # pr-784: release queued claims on rewrite failure, route capacity settings, and serialize record adoption
-v21/local-design-preview # feat/local-design-preview; PR #728 (contains PR #725 openspec docs)
-v21/claude-desktop-entrypoint # feat/claude-desktop-entrypoint; Claude Desktop opt-in entrypoint
-v21/remote-install-preserve-data-dir # fix/remote-install-preserve-data-dir; keep recorded shared data directory across SSH repair
-v21/remote-ssh-share-local-data # fix/remote-ssh-share-local-data; PR #584 --share-local-data and SSH repair dataDirectory inheritance
-v21/cursor-side-chat-edit # fix/cursor-side-chat-edit; PR #576
-v21/cursor-fast-selection # codex/upstream-cursor-fast; expose native Fast models and confirm live selections (replaces fe1cffb2)
-v21/independent-native-provider-quota # fix/independent-native-provider-quota; PR #470
-v21/macos-nested-codex-cli # fix/macos-nested-codex-cli; PR #396
-v21/project-picker-default-dir # feat/project-picker-default-dir; local: default project picker directory to ~/Developer/Repos/Personal
-v21/fork-release-channel # product update channel: ump45nose/codex-host release checks and tarball meta dependencies
-v21/replay-integration # fix/replay-integration; align integrated Host routing and attachment registration
-v21/local-preview-npm-forwarding # feat/local-design-preview; forward preview command in npm wrapper
-v21/project-deduplication # fix/projects-and-shared-remote-threads; deduplicate projects and align settings localization
-v21/shared-remote-threads-and-delegation # fix/projects-and-shared-remote-threads; PR #791 + b2415e4c + f23459f4 + bd7d4ea7 + e337f6c6 shared external Thread Runtime base
-v21/external-side-chat # fix/external-side-chat; preserve external Side Chat context and settle open Turns on Session fault
-v21/bot-model-selection # feat/bot-model-selection (0d084ae17); Bot model and thinking effort selection
-v21/shared-host-single-lock-and-resume # shared Host /v1/external single-lock bridge, history cursor object reopen, and post-resume interaction replay
-v21/vertical-screen-ux-overhaul # replaces 07250b6f + 52501bac vertical-screen sidebar overlay, top capsule tabs, and avatar companion view
-v21/claude-code-todo-tools # feat/claude-code-todo-tools; Claude Code task tools -> plan panel, history and reopen replay
-v21/claude-code-model-efforts # feat/claude-code-model-efforts; per-model thinking options from Claude Code ModelInfo
-v21/reasoning-summary-parts # feat/reasoning-summary-parts; rolling Reasoning preview as titled summary parts
-v21/claude-code-image-input # feat/claude-code-image-input; Desktop image attachments as Claude image blocks
-v21/tool-item-details # feat/tool-item-details; Claude MCP tools and web searches as native Codex items (rr-cache resolves conflicts with todo-tools)
-v21/shared-archived-thread-revival # fix/shared-archived-thread-revival; ignore legacy records and pins owned by shared Host
-v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacPro/MacAir) and audit
-fix/pet-nas-remote-tasks # Pet lists remote projectless threads (Codex and external Harness); based on v21/vertical-screen-ux-overhaul
-fix/shared-thread-pin # invalidate SharedThreadBridge list cache on section moves and route shared beforeThreadId
-fix/agy-acp-wakeup-and-watch-delivery # preserve agy ACP background wakeups, avoid session/close on shutdown, retry busy watch delivery, nudge watch on turn idle
-fix/drop-claude-desktop-entrypoint # revert the Claude Desktop entrypoint opt-in (account risk-control); based on v21/claude-desktop-entrypoint
-fix/shim-local-host-relaunch # upstream 82c1da2f3 cherry-pick; Desktop 26.1117 starts the main app-server via an App server host utility, keep it on the Host Runtime instead of the official CLI
-fix/desktop-mcp-session-reap-v0.22 # fix/desktop-mcp-session-reap on v0.22.0; upstream PR #981: reap browser MCP sessions abandoned without DELETE
-fix/macos-descriptor-mode # fix(launcher): create desktop-runtime-v1.json with mode 0600 on macOS so Web remote discovery accepts it
+# Feature branches merged onto each upstream release by scripts/vincent-release.sh.
+# Format: <fork branch or full commit SHA>   # upstream PR / plugin-bound / Bot-bound / fork infrastructure; base
+# Each line holds only its own change, cut from upstream v0.22.0 or from the one branch named as its base.
+# Delete a line when upstream releases its PR; plugin- and Bot-bound lines go when their replacements pass acceptance.
+thin/sidebar-archive-thread-children # stays until upstream #947 (own #709/#717 closed): nest child Threads in the sidebar, archive children with parent
+thin/sidebar-sticky-mirrors # stays until upstream #947; base thin/sidebar-archive-thread-children: keep sidebar mirrors when Recents collapses
+thin/sidebar-pinned-child # stays until upstream #947; base thin/sidebar-sticky-mirrors: keep and deduplicate pinned child Threads
+thin/sidebar-stash # plugin-bound; base thin/sidebar-archive-thread-children (shared Sidebar settings group): sidebar stash (收纳箱)
+thin/remote-client-access # PR #785: scoped remote clients, tailnet/Funnel, OAuth, webhook delivery, console page
+thin/nas-bot-integration # Bot-bound; base thin/remote-client-access (its webhook reconfigure fix is also in PR #785): NAS Bot entry, receipts, multi-device delegation
+thin/thread-watch-stall # PR #783: notify watched Threads when Harness activity stalls
+thin/remote-client-hardening # PR #785; base thin/remote-client-access: OAuth, Funnel teardown, webhook delivery, cross-process locks
+thin/delegation-capacity # PR #784; base thin/thread-watch-stall: queue top-level delegations beyond a local running limit
+thin/delegation-capacity-hardening # PR #784; base thin/delegation-capacity: release claims on rewrite failure, route settings, serialize adoption
+thin/local-design-preview # fork infrastructure (own #728 closed; removed at the switch to official): codexhost preview in the built-in browser
+thin/local-preview-npm-forwarding # fork infrastructure; base thin/local-design-preview: forward the preview command in the npm wrapper
+thin/cursor-side-chat-edit # PR #576: revert External Threads to earlier native Fork Checkpoints
+thin/cursor-fast-selection # PR #782: Cursor native Fast models and live selection confirmation
+thin/independent-native-provider-quota # PR #470: custom provider inference independent of Codex quota (fork copy keeps the continuation UI dropped from the narrowed PR)
+thin/macos-nested-codex-cli # PR #396: discover the official CLI across nested macOS Desktop bundles
+thin/project-picker-default-dir # plugin-bound: default project picker directory to ~/Developer/Repos/Personal
+thin/fork-release-channel # fork infrastructure: update checks and npm meta package against ump45nose/codex-host releases
+thin/project-deduplication # plugin-bound; base thin/project-picker-default-dir: deduplicate projects, scope refresh by account
+thin/delegation-catalog-parent # PR #970: route a shared parent Thread to the Harness catalog
+thin/windows-socket-lock-rename # PR #971: retry replacing the remote socket lock record on Windows
+thin/settings-hide-desktop-envs # PR #972: keep Desktop-internal environments out of the connection list
+thin/settle-turns-after-session-fault # PR #969 (fork copy predates the PR's review changes): settle open Turns when a Session faults
+thin/bot-model-selection # Bot-bound (its delegate inspect Fast-model part is PR #986); base thin/nas-bot-integration: Bot model and thinking selection
+thin/shared-host-single-lock-and-resume # PR #987 (item-anchor cursor); the replay-after-resume part is fork-only until a Desktop repro shows it is needed
+thin/vertical-screen-ux-overhaul # plugin-bound; base thin/sidebar-stash: vertical-screen sidebar overlay, top tabs (with stash entry), Pet avatar view
+thin/external-thread-turn-recency # PR #973: advance External Thread updatedAt when a Turn starts or ends
+thin/claude-code-todo-tools # PR #976 (fork copy predates the PR's review changes): Claude Code task tools -> plan panel and history replay
+thin/reasoning-summary-parts # PR #967: Reasoning previews as titled summary parts
+thin/shared-archived-thread-revival # PR #988: hide local copies of Threads the shared Host owns
+thin/codexhost-partial-swap # fork infrastructure: vincent-release.sh deploy/patch/audit
+thin/pet-nas-remote-tasks # plugin-bound; base thin/vertical-screen-ux-overhaul: Pet lists remote projectless Threads
+thin/shared-thread-pin # PR #989 (list cache invalidation); shared beforeThreadId routing and downstream placement merge are fork-only
+fix/agy-acp-wakeup-and-watch-delivery # PR #974 (busy watch delivery) + PR #975 (no session/close); autonomous-turn part waits on upstream issue #991
+thin/shim-local-host-relaunch # upstream 82c1da2f3 (on upstream main after v0.22.0): keep the App server host utility on the Host Runtime
+fix/desktop-mcp-session-reap-v0.22 # PR #981: reap browser MCP sessions abandoned without DELETE
+fix/macos-descriptor-mode # no upstream PR yet: create desktop-runtime-v1.json with mode 0600 on macOS

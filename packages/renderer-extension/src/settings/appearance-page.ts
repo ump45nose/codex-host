@@ -46,7 +46,6 @@ import {
   createPreferenceSwitch,
   preferenceId,
 } from "./preference-ui.js";
-import { mountUserInstructionsControls } from "./user-instructions-controls.js";
 
 export function createAppearanceSettingsPage(
   messages: RendererSettingsMessages,
@@ -239,11 +238,6 @@ export function createAppearanceSettingsPage(
         getLoadedSessionsClient,
       );
       const disposeDelegationCapacity = mountDelegationCapacityControls(context, messages);
-      const disposeUserInstructions = mountUserInstructionsControls(
-        context,
-        messages,
-        getLoadedSessionsClient,
-      );
       return () => {
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeArchiveChildren();
@@ -253,7 +247,6 @@ export function createAppearanceSettingsPage(
         ownerWindow.removeEventListener("storage", onPetsHeightStorage);
         disposeIdleRelease();
         disposeDelegationCapacity();
-        disposeUserInstructions();
       };
     },
   });

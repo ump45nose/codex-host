@@ -40,14 +40,6 @@ export interface RemoteHostInstallOptions {
   executionSession?: "ssh" | "desktop";
   home?: string;
   installRoot?: string;
-  /** Override for CODEXHOST_DATA_DIR; a leading `~` expands to HOME. */
-  dataDirectory?: string;
-  /**
-   * When true, point CODEXHOST_DATA_DIR at ~/.codexhost (same as local Desktop)
-   * so existing local harness threads and pins appear over Remote SSH.
-   * Ignored when `dataDirectory` is set.
-   */
-  shareLocalData?: boolean;
   profilePath?: string;
   stockCodexPath?: string;
   nodePath?: string;
@@ -70,12 +62,6 @@ interface ResolvedRemoteHostPaths {
   manifestPath: string;
   dataDirectory: string;
   profilePath: string;
-}
-
-function expandHome(value: string, home: string): string {
-  if (value === "~") return home;
-  if (value.startsWith("~/")) return path.join(home, value.slice(2));
-  return value;
 }
 
 function resolvePaths(options: RemoteHostInstallOptions): ResolvedRemoteHostPaths {
@@ -101,22 +87,13 @@ function resolvePaths(options: RemoteHostInstallOptions): ResolvedRemoteHostPath
       ),
   );
   const binDirectory = path.join(installRoot, "bin");
-  if (options.dataDirectory !== undefined && options.shareLocalData) {
-    throw new Error("Pass either dataDirectory or shareLocalData, not both");
-  }
-  const dataDirectory =
-    options.dataDirectory !== undefined
-      ? path.resolve(expandHome(options.dataDirectory, home))
-      : options.shareLocalData
-        ? path.join(home, ".codexhost")
-        : path.join(installRoot, "data");
   return {
     home,
     installRoot,
     binDirectory,
     wrapperPath: path.join(binDirectory, "codex"),
     manifestPath: path.join(installRoot, "manifest.json"),
-    dataDirectory,
+    dataDirectory: path.join(installRoot, "data"),
     profilePath,
   };
 }
@@ -474,20 +451,6 @@ export async function installRemoteHost(
   const shimPath = await executable(options.shimPath, "codexhost Shim");
   const hostRuntimePath = await existingFile(options.hostRuntimePath, "codexhost Host Runtime");
 
-  const dataDirectoryExplicit =
-    options.dataDirectory !== undefined || options.shareLocalData === true;
-  // `remote uninstall` deletes the manifest, and the Desktop repair action runs it before a
-  // bare install. An SSH shell that loaded the managed profile block still exports the
-  // previous choice; keep it instead of silently switching to a different Mapping Store.
-  const inheritedDataDirectory =
-    environment.CODEXHOST_REMOTE_SSH_MANAGED === "1" &&
-    environment.CODEXHOST_DATA_DIR?.trim() &&
-    path.isAbsolute(environment.CODEXHOST_DATA_DIR)
-      ? path.resolve(environment.CODEXHOST_DATA_DIR)
-      : undefined;
-  const dataDirectory = dataDirectoryExplicit
-    ? paths.dataDirectory
-    : (previousManifest?.dataDirectory ?? inheritedDataDirectory ?? paths.dataDirectory);
   const nonempty = (value: string | undefined): string | undefined =>
     value?.trim() ? value : undefined;
   const sharedSelection =
@@ -506,7 +469,7 @@ export async function installRemoteHost(
     throw new Error("Shared Host data directory must be an absolute path");
   }
   const sharedDataDirectory = path.resolve(sharedSelection);
-  if (sharedDataDirectory === path.join(paths.installRoot, "data")) {
+  if (sharedDataDirectory === paths.dataDirectory) {
     throw new Error("Shared Host data directory must differ from the SSH-only data directory");
   }
   let manifest: RemoteHostManifestV1 = {
@@ -517,7 +480,7 @@ export async function installRemoteHost(
     nodePath,
     shimPath,
     hostRuntimePath,
-    dataDirectory,
+    dataDirectory: paths.dataDirectory,
     sharedDataDirectory,
     ...(executionSession === "desktop" ? { executionSession } : {}),
     ...(previousManifest?.profileBackupPath
@@ -535,17 +498,8 @@ export async function installRemoteHost(
       manifest = { ...manifest, profileBackupPath };
       await writeAtomic(profilePath, nextProfile, profileMetadata?.mode ?? 0o600);
     }
-    const createdDataDirectory = await mkdir(manifest.dataDirectory, {
-      recursive: true,
-      mode: 0o700,
-    });
-    // Keep the permissions of an existing shared directory; only tighten ones we own.
-    if (
-      createdDataDirectory !== undefined ||
-      manifest.dataDirectory === path.join(paths.installRoot, "data")
-    ) {
-      await chmod(manifest.dataDirectory, 0o700);
-    }
+    await mkdir(paths.dataDirectory, { recursive: true, mode: 0o700 });
+    await chmod(paths.dataDirectory, 0o700);
     await writeAtomicExecutable(paths.wrapperPath, manifest.shimPath);
     manifest = { ...manifest, entrypointSha256: await fileSha256(paths.wrapperPath) };
     await writeAtomic(paths.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 0o600);

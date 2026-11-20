@@ -40,8 +40,6 @@ export const CONSOLE_HOST_METHODS = Object.freeze([
   "codexhost/harness/display-settings/capabilities",
   "codexhost/harness/display-settings/get",
   "codexhost/harness/display-settings/set",
-  "codexhost/harness/user-instructions-settings/get",
-  "codexhost/harness/user-instructions-settings/set",
   "codexhost/harness/inspect",
   "codexhost/harness/installation",
   "codexhost/harness/installation/start",

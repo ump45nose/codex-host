@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import worker from "../../../registry/desktop-extensions/worker/worker.js";
+import workerModule from "../../../registry/desktop-extensions/worker/worker.js";
+
+// The Worker script is plain JavaScript without declarations; only `fetch` is exercised.
+const worker = workerModule as unknown as {
+  fetch(request: Request, env: Record<string, unknown>): Promise<Response>;
+};
 
 it("counts valid install IDs and returns a CORS-enabled snapshot across KV pages", async () => {
   const storage = new Map([
@@ -28,7 +33,7 @@ it("counts valid install IDs and returns a CORS-enabled snapshot across KV pages
     },
   };
   const request = (path: string, method = "GET") =>
-    worker.default.fetch(new Request(`https://stats.example${path}`, { method }), env);
+    worker.fetch(new Request(`https://stats.example${path}`, { method }), env);
   expect(await (await request("/health")).json()).toEqual({ ok: true });
   expect((await request("/install/sample-1", "OPTIONS")).status).toBe(204);
   for (const id of ["", "Uppercase", "with.dot", "a--b", "a%2Fb", "%ZZ"]) {

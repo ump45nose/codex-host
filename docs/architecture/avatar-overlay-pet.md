@@ -4,6 +4,13 @@ Codex Desktop 的 Pet 窗口（`app://-/index.html?initialRoute=%2Favatar-overla
 
 卡片来自 Codex 主进程按主机维护的会话目录。目录增量同步只重读 `updatedAt` 晚于上次同步的会话，而 Host 的 `thread/status/changed` 只发给运行该 Turn 的连接。因此外部 Harness 会话在 Turn 开始与结束时都会更新 `updatedAt`，其他连接（包括重启后的 Desktop）同步时才能读到当前运行状态。
 
+## 远端无项目会话
+
+- Pet 的候选包括 Remote Host 和远端设备上的无项目会话，原生 Codex 与外部 Harness 使用相同规则。本机无项目会话仍按原生规则过滤；空闲、已读等通知条件也由原生 Pet 决定。
+- 原生 `recentThreads` 不包含远端 `workspaceKind: "projectless"` 会话。仅在 Pet 窗口，`renderer-pets-remote-sessions.ts` 包装已连接远端的该订阅，从同一主机的 `getCachedThreadSearchSnapshot` 补入无项目候选，再订阅原生每条会话的 `listState`。已有候选保持原样并按会话 ID 去重，运行状态、待处理和未读信息直接来自原生行。
+- 候选继续排除原生归档抑制列表、临时会话、附属会话和侧会话。`threadStatuses` 变化触发重新核对缓存，归档抑制变化立即生效；读取失败时保留原生候选。只读现有缓存，不恢复会话、不加载 Harness 历史，也不改写 `projectless-thread-ids` 或项目归属。
+- 此扩展不修改主窗口的会话目录和原生安装文件。连接更换时包装新连接，Pet 扩展卸载时恢复自己包装的连接，并由原生订阅清理流程释放会话订阅。
+
 ## 外部 Harness 卡片图标
 
 - 主窗口在侧栏会话变化时，把外部 Harness 会话写入 `localStorage` 的 `codexhost.pets-thread-agents.v1`（键为 `hostId:threadId`，值为 Agent），并把插件图标写入 `codexhost.pets-harness-catalog.v1`。内容不变时不重写。
@@ -24,7 +31,7 @@ Codex Desktop 的 Pet 窗口（`app://-/index.html?initialRoute=%2Favatar-overla
 
 - 仅在 Quick Chat 处于 `composing` 状态时，在原生 `[data-above-composer-portal]` 中显示胶囊；菜单上半部分选位置（本机或远端项目），下半部分选该位置可用的 Agent。Agent 存入 Pet 自己的 `codexhost.pets-quick-chat-agent.v1`，位置存入 `codexhost.pets-quick-chat-target.v1`，不影响主窗口的新建会话默认值。
 - 主窗口从侧栏远端项目行的原生 `group` prop 读取项目（hostId、projectId、路径、名称），连同主机地球颜色与该主机已安装的 Harness，写入 `codexhost.pets-remote-projects.v1`。
-- Codex 的 Quick Chat 只在本机无项目处新建会话。`desktop-control` 改写同一个 Pet chunk，把新建目标改为先调用 `globalThis.__codexhostQuickChatTarget(clientThreadId)`：选了远端项目时返回原生支持的 `{ type: "remoteProject", hostId, projectId, path, environment: { type: "local" } }`（直接在项目目录运行，不建 worktree），否则沿用原生的本机无项目目标。原生新建流程只对无项目目标把会话与 Quick Chat 的 `clientThreadId` 关联，关联后“正在创建聊天”卡片才会被真实会话替换；改写把这一关联扩展到带 `clientThreadId` 的远端项目目标（原生远端目标不带该字段，行为不变）。远端没有无项目会话，所以远端位置必须选具体项目。所选 Agent 不在该主机上时退回 Codex。
+- Codex 的 Quick Chat 只在本机无项目处新建会话。`desktop-control` 改写同一个 Pet chunk，把新建目标改为先调用 `globalThis.__codexhostQuickChatTarget(clientThreadId)`：选了远端项目时返回原生支持的 `{ type: "remoteProject", hostId, projectId, path, environment: { type: "local" } }`（直接在项目目录运行，不建 worktree），否则沿用原生的本机无项目目标。原生新建流程只对无项目目标把会话与 Quick Chat 的 `clientThreadId` 关联，关联后“正在创建聊天”卡片才会被真实会话替换；改写把这一关联扩展到带 `clientThreadId` 的远端项目目标（原生远端目标不带该字段，行为不变）。Quick Chat 的远端位置必须选具体项目；由主窗口等其他入口创建的远端无项目会话也能进入 Pet 候选。所选 Agent 不在该主机上时退回 Codex。
 - 胶囊与菜单在 `mousedown` 时阻止默认行为，避免编辑器失焦后原生退出 `composing`。
 - 发送时改写 `startConversation` capnweb 帧中的模型为 `encodeHarnessPluginRoute({ harnessId })`；选择 Codex 时不改写。Pet 经同一个 `connect-app-host` 端口访问所有主机，远端会话的帧同样经过这一改写。
 

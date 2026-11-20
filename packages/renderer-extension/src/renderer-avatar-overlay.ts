@@ -17,6 +17,7 @@ import {
 } from "./renderer-pets-quick-chat-target.js";
 import { createRemoteHostGlobe } from "./renderer-sidebar-remote-projects.js";
 import { writePetsCardThreads } from "./renderer-pets-card-agents.js";
+import { installPetsRemoteSessions } from "./renderer-pets-remote-sessions.js";
 
 export const AVATAR_OVERLAY_STYLE_ID = "codexhost-avatar-overlay-styles";
 export const AVATAR_OVERLAY_ROOT_ATTR = "data-codexhost-avatar-overlay";
@@ -506,6 +507,7 @@ export function installRendererAvatarOverlay(
 
   doc.documentElement.setAttribute(AVATAR_OVERLAY_ROOT_ATTR, "true");
   ensureAvatarOverlayStyles(doc);
+  const disposeRemoteSessions = installPetsRemoteSessions(win);
 
   let disposed = false;
   let closeAgentMenu: (() => void) | null = null;
@@ -846,6 +848,7 @@ export function installRendererAvatarOverlay(
         messagePortProto.postMessage = originalPostMessage;
       closeAgentMenu?.();
       disposeTargetHook();
+      disposeRemoteSessions();
       observer.disconnect();
       win.removeEventListener("storage", onStorage);
       doc.documentElement.removeAttribute(AVATAR_OVERLAY_ROOT_ATTR);

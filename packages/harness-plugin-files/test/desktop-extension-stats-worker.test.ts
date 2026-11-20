@@ -28,7 +28,7 @@ it("counts valid install IDs and returns a CORS-enabled snapshot across KV pages
     },
   };
   const request = (path: string, method = "GET") =>
-    worker.fetch(new Request(`https://stats.example${path}`, { method }), env);
+    worker.default.fetch(new Request(`https://stats.example${path}`, { method }), env);
   expect(await (await request("/health")).json()).toEqual({ ok: true });
   expect((await request("/install/sample-1", "OPTIONS")).status).toBe(204);
   for (const id of ["", "Uppercase", "with.dot", "a--b", "a%2Fb", "%ZZ"]) {

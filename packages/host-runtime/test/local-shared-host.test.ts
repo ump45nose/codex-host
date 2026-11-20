@@ -379,7 +379,9 @@ it("projects the shared owner's Turn state without forwarding owner subscription
           },
         };
       if (method === "thread/read")
-        return { result: { thread: { id: params.threadId, status: { type: "notLoaded" } } } };
+        return {
+          result: { thread: { id: params.threadId ?? null, status: { type: "notLoaded" } } },
+        };
       return { result: { data: [], nextCursor: null } };
     });
   try {

@@ -83,11 +83,14 @@ export class SidebarBrowser {
       socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
       return;
     }
+    const direct = this.options.direct;
     this.sockets.handleUpgrade(request, socket, head, (ws) => {
       this.alive.add(ws);
       ws.on("pong", () => this.alive.add(ws));
       if (key === null) {
-        this.options.direct!.attach(ws, credential!, trust.offersSidebarDirect(request));
+        // Admitted above: a same-origin upgrade needs both the direct transport and a credential.
+        if (direct !== undefined && credential !== undefined)
+          direct.attach(ws, credential, trust.offersSidebarDirect(request));
         return;
       }
       const tab = this.tab(key);

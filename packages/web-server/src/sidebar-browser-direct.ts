@@ -265,7 +265,8 @@ export class SidebarDirectSession {
       const peer = (this.peer = { fingerprint, remoteUfrag, pc });
       pc.onDataChannel.subscribe((channel) => this.channel(peer, channel));
     }
-    const peer = this.peer!;
+    const peer = this.peer;
+    if (peer === undefined) throw new Error("Sidebar direct peer is missing");
     const { pc } = peer;
     const iceSummary = new SidebarBrowserIceSummary();
     for (const candidate of media.iceCandidates) iceSummary.received(candidate);
@@ -416,8 +417,9 @@ export class SidebarDirectSession {
     if (
       control?.readyState !== "open" ||
       transport?.state !== "connected" ||
+      !ice ||
       !pair ||
-      !["connected", "completed"].includes(ice!.state)
+      !["connected", "completed"].includes(ice.state)
     )
       return;
     if (pair.local.type === "relay" || pair.remote.type === "relay") {

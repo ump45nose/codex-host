@@ -36,7 +36,7 @@ import {
 import { SidebarBrowser } from "../../packages/web-server/src/sidebar-browser.ts";
 import { DataDir } from "../../packages/web-server/src/store.ts";
 
-const cleanups: (() => void | Promise<unknown>)[] = [];
+const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.reverse()) await cleanup();
   cleanups.length = 0;
@@ -73,7 +73,7 @@ function tempData() {
   return new DataDir(folder);
 }
 
-function direct(iceServers = ["stun:127.0.0.1:9"]) {
+function direct(iceServers: readonly string[] = ["stun:127.0.0.1:9"]) {
   const connections = new CredentialConnections();
   const peers = new SidebarBrowserDirect(tempData(), connections, iceServers);
   cleanups.push(() => peers.close());
@@ -169,8 +169,10 @@ it("trickles before an unresponsive STUN deadline, isolates the retired peer, an
       ).toBeDefined(),
     { timeout: 3_000 },
   );
-  const answer = trace.find((signal) => signal.type === "direct-answer" && signal.attempt === 2)!;
-  const ready = trace.find((signal) => signal.type === "direct-ready" && signal.attempt === 2)!;
+  const answer = trace.find((signal) => signal.type === "direct-answer" && signal.attempt === 2);
+  const ready = trace.find((signal) => signal.type === "direct-ready" && signal.attempt === 2);
+  assert.ok(answer, "Expected the second attempt to answer");
+  assert.ok(ready, "Expected the second attempt to be ready");
   expect(answer.at - started).toBeLessThan(1_000);
   // Stronger than a checking-state assertion: DTLS and SCTP also complete before 3 seconds.
   expect(ready.at - started).toBeLessThan(3_000);
@@ -229,9 +231,9 @@ it("classifies client-ended attempts and logs only aggregated ICE candidate meta
         });
     }
     socket.receive({ type: "direct-close", attempt, reason });
-    const log = JSON.parse(
-      logs.mock.calls.filter(([tag]) => tag === "[direct] attempt").at(-1)![1],
-    );
+    const lastAttempt = logs.mock.calls.filter(([tag]) => tag === "[direct] attempt").at(-1);
+    assert.ok(lastAttempt, "Expected a direct attempt log line");
+    const log = JSON.parse(lastAttempt[1]);
     expect(log).toMatchObject({ attempt, outcome, reason: loggedReason });
     expect(log.candidates.remoteSrflxReceived).toBe(index === 0);
     if (index === 0) {
@@ -333,7 +335,7 @@ function tab() {
     send: async (name: string, args?: { maxWidth: number }) => {
       if (name === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
       if (name === "Page.captureScreenshot" && castWidth > 1000) return { data: "" };
-      if (name === "Page.startScreencast") castWidth = args!.maxWidth;
+      if (name === "Page.startScreencast") castWidth = args?.maxWidth ?? castWidth;
       if (name === "Page.stopScreencast") await stopCast;
       return undefined;
     },
@@ -371,10 +373,10 @@ function tab() {
       return castWidth;
     },
     blockStop() {
-      const { promise, resolve } = Promise.withResolvers<void>();
+      const { promise, resolve } = Promise.withResolvers<undefined>();
       stopCast = promise;
-      cleanups.push(resolve);
-      return resolve;
+      cleanups.push(() => resolve(undefined));
+      return () => resolve(undefined);
     },
     async paint(id: number) {
       cdp.emit("Page.screencastFrame", {
@@ -410,7 +412,9 @@ it("isolates stale bindings and immediately resends the cached 1x frame before a
   viewer.label.receive({ type: "visible", visible: true });
   viewer.label.receive({ type: "navigate", url: "https://example.test/" });
   await vi.waitFor(() => expect(viewer.pictures.length).toBe(1));
-  const old = decodeSidebarBrowserFrameHeader(Uint8Array.from(viewer.pictures[0]!).buffer).sequence;
+  const firstPicture = viewer.pictures[0];
+  assert.ok(firstPicture, "Expected the first painted frame");
+  const old = decodeSidebarBrowserFrameHeader(Uint8Array.from(firstPicture).buffer).sequence;
   viewer.label.receive({ type: "transport", peer: "not-this-viewer", binding: 1 });
   expect(viewer.messages).toContainEqual({ type: "transport", binding: 1, via: "socket" });
   viewer.label.receive({ type: "transport", peer: hello.peer, binding: 2 });
@@ -429,10 +433,12 @@ it("isolates stale bindings and immediately resends the cached 1x frame before a
     via: "direct",
     from: fragments[0]?.sequence,
   });
-  channel.send(encodeSidebarBrowserDirectAck(lastPart()!.sequence));
+  const acked = lastPart();
+  assert.ok(acked, "Expected the last frame part before acknowledging");
+  channel.send(encodeSidebarBrowserDirectAck(acked.sequence));
   await viewer.paint(74);
   await vi.waitFor(() =>
-    expect(fragments.find((fragment) => fragment.sequence > lastPart()!.sequence)).toBeDefined(),
+    expect(fragments.find((fragment) => fragment.sequence > acked.sequence)).toBeDefined(),
   );
   await delay(225); // A slow in-flight frame affects quality once input resumes.
   viewer.label.receive({ type: "wheel", x: 1, y: 1, deltaX: 0, deltaY: 1 });
@@ -446,7 +452,9 @@ it("isolates stale bindings and immediately resends the cached 1x frame before a
   unblock();
   await vi.waitFor(() => expect(viewer.castWidth).toBe(2000));
   peers.close();
-  const [, payload] = logs.mock.calls.find(([tag]) => tag === "[direct] session")!;
+  const sessionLog = logs.mock.calls.find(([tag]) => tag === "[direct] session");
+  assert.ok(sessionLog, "Expected a direct session log line");
+  const [, payload] = sessionLog;
   expect(JSON.parse(payload)).toMatchObject({
     directBytes: fragments.reduce((bytes, part) => bytes + part.payload.length, 0),
     socketBytes: viewer.pictures.slice(1).reduce((bytes, picture) => bytes + picture.length, 0),

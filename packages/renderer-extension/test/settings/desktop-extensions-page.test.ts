@@ -1,5 +1,6 @@
 import type {
   DesktopExtensionMutationResult,
+  DesktopExtensionsCatalogResult,
   DesktopExtensionsListResult,
 } from "@codexhost/shared-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -230,7 +231,7 @@ function descendants(root: FakeElement): FakeElement[] {
   ];
 }
 
-function must<T>(value: T | null | undefined, label = "value"): T {
+function must<T>(value: T | null | undefined, label = "value"): NonNullable<T> {
   if (value === null || value === undefined) throw new Error(`Expected ${label} to be defined`);
   return value;
 }
@@ -478,8 +479,11 @@ describe("Desktop extensions settings page", () => {
     };
     const client: RendererDesktopExtensionsClient = {
       listDesktopExtensions: vi.fn(async () => listWithIcons),
-      listDesktopExtensionCatalog: vi.fn(async () => ({
+      listDesktopExtensionCatalog: vi.fn(async (): Promise<DesktopExtensionsCatalogResult> => ({
+        catalogUrl: "https://example.com/catalog.json",
         source: "remote" as const,
+        fetchedAt: "2026-07-02T00:00:00.000Z",
+        cached: false,
         extensions: [
           {
             id: first.id,
@@ -487,6 +491,7 @@ describe("Desktop extensions settings page", () => {
             description: { en: "Desc", "zh-CN": "描述" },
             version: "1.0.0",
             author: "CodexHost",
+            repository: "https://github.com/BytePioneer-AI/codex-host",
             categories: ["interface"],
             slots: ["sidebar.thread-layout"],
             trustTier: "official",
@@ -500,6 +505,7 @@ describe("Desktop extensions settings page", () => {
             description: { en: "Desc", "zh-CN": "描述" },
             version: "1.0.0",
             author: "Community",
+            repository: "https://github.com/community/nord-dark",
             categories: ["appearance"],
             slots: ["appearance.theme"],
             trustTier: "community",
@@ -559,7 +565,7 @@ describe("Desktop extensions settings page", () => {
 
   it("renders empty-state directory guidance in Chinese and English", async () => {
     const client: RendererDesktopExtensionsClient = {
-      listDesktopExtensions: vi.fn(async () => ({
+      listDesktopExtensions: vi.fn(async (): Promise<DesktopExtensionsListResult> => ({
         configuration: { version: 1, revision: 0, enabled: [] },
         desktopConnected: false,
         diagnostics: [],
@@ -1793,7 +1799,7 @@ describe("Desktop extensions settings page", () => {
   it("shows an unavailable state when the Host does not support Desktop extension RPCs", async () => {
     const mounted = mountPage("en", () => ({
       listDesktopExtensions: vi.fn(async () => {
-        throw new RendererMethodUnavailableError("codexhost/desktop/extensions/list");
+        throw new RendererMethodUnavailableError("codexhost/desktop/extensions/list", undefined);
       }),
     }));
     await vi.waitFor(() =>

@@ -4,6 +4,7 @@ import {
   type DesktopExtensionsCatalogResult,
   type DesktopExtensionsInstallResult,
   type DesktopExtensionsListResult,
+  type DesktopExtensionMutationResult,
   type DesktopExtensionsUninstallResult,
 } from "@codexhost/shared-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -203,7 +204,7 @@ function descendants(root: FakeElement): FakeElement[] {
   ];
 }
 
-function must<T>(value: T | null | undefined, label = "value"): T {
+function must<T>(value: T | null | undefined, label = "value"): NonNullable<T> {
   if (value === null || value === undefined) throw new Error(`Expected ${label} to be defined`);
   return value;
 }
@@ -308,7 +309,9 @@ const CATALOG_THEME: DesktopExtensionCatalogEntry = {
   updatedAt: "2026-07-01T00:00:00.000Z",
 };
 
-function sampleInstalledList(): DesktopExtensionsListResult {
+function sampleInstalledList(
+  overrides: Partial<DesktopExtensionsListResult> = {},
+): DesktopExtensionsListResult {
   return {
     configuration: { version: 1, revision: 3, enabled: ["sidebar-thread-tree"] },
     desktopConnected: true,
@@ -349,6 +352,7 @@ function sampleInstalledList(): DesktopExtensionsListResult {
         },
       },
     ],
+    ...overrides,
   };
 }
 
@@ -1049,8 +1053,8 @@ describe("Desktop extensions marketplace, detail actions, and import modal", () 
             : item,
         ),
       });
-    const disableDesktopExtension = vi.fn(async () => ({
-      state: "saved" as const,
+    const disableDesktopExtension = vi.fn(async (): Promise<DesktopExtensionMutationResult> => ({
+      state: "saved",
       configuration: { version: 1, revision: 4, enabled: [] },
     }));
     const listDesktopExtensionCatalog = vi

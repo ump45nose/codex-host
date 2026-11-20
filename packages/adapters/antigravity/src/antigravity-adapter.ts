@@ -1192,7 +1192,11 @@ export class AntigravitySession implements HarnessSession {
     }
     return { outcome: nextOutcome, nativeTurnRef };
   }
-  async #runTurn(turn: ActiveTurn, command: TurnStartCommand): Promise<void> {
+  async #runTurn(
+    turn: ActiveTurn,
+    command: TurnStartCommand,
+    catalogCommand: boolean,
+  ): Promise<void> {
     let outcome: TurnOutcome;
     let nativeTurnRef: NativeTurnRef | undefined;
     try {

@@ -76,7 +76,9 @@ async function openTab(t: TestContext, frames: () => Frame[] = () => []) {
   viewer.receive({ type: "navigate", url: page.url() });
   await setImmediate();
   const paint = async (id: number, size = 1, session = 0) => {
-    sessions[session]!.emit("Page.screencastFrame", {
+    const socket = sessions[session];
+    assert.ok(socket, "Expected a session socket");
+    socket.emit("Page.screencastFrame", {
       data: Buffer.alloc(size, id).toString("base64"),
       sessionId: 1,
     });

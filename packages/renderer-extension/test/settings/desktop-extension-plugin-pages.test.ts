@@ -24,7 +24,7 @@ import {
 
 const disposables: Array<() => void | Promise<void>> = [];
 
-function must<T>(value: T | null | undefined, label = "value"): T {
+function must<T>(value: T | null | undefined, label = "value"): NonNullable<T> {
   if (value === null || value === undefined) throw new Error(`Expected ${label} to be defined`);
   return value;
 }
@@ -284,11 +284,15 @@ describe("Settings shell dynamic Plugins section and declarative schema form", (
     expect(harness.shell.activePageId).toBe(pluginButton.dataset.pageId);
     expect(harness.contentRoot().textContent).toContain("Custom Studio (zh-CN)");
     expect(mountedContext).not.toBeNull();
-    await expect(must(mountedContext).assets.readDataUrl("hero.png")).resolves.toEqual({
+    await expect(
+      must<DesktopExtensionSettingsPageContext>(mountedContext).assets.readDataUrl("hero.png"),
+    ).resolves.toEqual({
       mimeType: "image/png",
       dataUrl: "data:image/png;base64,hero.png",
     });
-    await expect(must(mountedContext).backend.invoke("ping", { n: 1 })).resolves.toEqual({
+    await expect(
+      must<DesktopExtensionSettingsPageContext>(mountedContext).backend.invoke("ping", { n: 1 }),
+    ).resolves.toEqual({
       id: "aurora.dashboard",
       method: "ping",
       params: { n: 1 },

@@ -2,6 +2,8 @@
 
 Codex Desktop 的 Pet 窗口（`app://-/index.html?initialRoute=%2Favatar-overlay`）自带会话卡片栈：本机与已连接远端的进行中、待处理、未读会话都以原生卡片显示，折叠、展开、滑动关闭和回复均为原生能力。codexhost 不另建会话列表，只做以下几件事。
 
+卡片来自 Codex 主进程按主机维护的会话目录。目录增量同步只重读 `updatedAt` 晚于上次同步的会话，而 Host 的 `thread/status/changed` 只发给运行该 Turn 的连接。因此外部 Harness 会话在 Turn 开始与结束时都会更新 `updatedAt`，其他连接（包括重启后的 Desktop）同步时才能读到当前运行状态。
+
 ## 外部 Harness 卡片图标
 
 - 主窗口在侧栏会话变化时，把外部 Harness 会话写入 `localStorage` 的 `codexhost.pets-thread-agents.v1`（键为 `hostId:threadId`，值为 Agent），并把插件图标写入 `codexhost.pets-harness-catalog.v1`。内容不变时不重写。

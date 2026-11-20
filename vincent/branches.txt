@@ -46,3 +46,4 @@ fix/agy-acp-wakeup-and-watch-delivery # preserve agy ACP background wakeups, avo
 fix/drop-claude-desktop-entrypoint # revert the Claude Desktop entrypoint opt-in (account risk-control); based on v21/claude-desktop-entrypoint
 fix/shim-local-host-relaunch # upstream 82c1da2f3 cherry-pick; Desktop 26.1117 starts the main app-server via an App server host utility, keep it on the Host Runtime instead of the official CLI
 fix/desktop-mcp-session-reap-v0.22 # fix/desktop-mcp-session-reap on v0.22.0; upstream PR #981: reap browser MCP sessions abandoned without DELETE
+fix/macos-descriptor-mode # fix(launcher): create desktop-runtime-v1.json with mode 0600 on macOS so Web remote discovery accepts it

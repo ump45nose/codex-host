@@ -182,6 +182,7 @@ export interface AntigravityAcpTransportLike {
   readonly isClosed: boolean;
   readonly skipPermissions: boolean;
   setSessionEventHandler(handler: AntigravitySessionEventHandler | null): void;
+  setPassivePromptHandler?(handler: AntigravityActivePromptHandler | null): void;
   initialize(): Promise<InitializeResponse>;
   openSession(input: AntigravityOpenAcpSessionInput): Promise<{
     opened: AntigravityAcpSessionOpenResult;

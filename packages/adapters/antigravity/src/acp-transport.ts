@@ -33,6 +33,7 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
   #initializing: Promise<InitializeResponse> | null = null;
   #sessionId: string | null = null;
   #sessionHandler: AntigravitySessionEventHandler | null = null;
+  #passive: AntigravityActivePromptHandler | null = null;
   #active: AntigravityActivePromptHandler | null = null;
   #callbacks = new Set<() => void>();
   #acceptCallbacks = false;
@@ -61,6 +62,10 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
   setSessionEventHandler(handler: AntigravitySessionEventHandler | null): void {
     this.#sessionHandler = handler;
     if (handler) for (const event of this.#pendingEvents.splice(0)) handler(event);
+  }
+
+  setPassivePromptHandler(handler: AntigravityActivePromptHandler | null): void {
+    this.#passive = handler;
   }
 
   initialize(): Promise<InitializeResponse> {
@@ -309,7 +314,7 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     await this.#request(connection.cancel({ sessionId }), "session/cancel");
   }
 
-  async closeSession(): Promise<void> {
+  #clearSessionState(): string | null {
     const sessionId = this.#sessionId;
     this.#sessionId = null;
     this.#acceptCallbacks = false;
@@ -319,6 +324,11 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     this.#active = null;
     this.#pendingEvents = [];
     this.#clearCallbacks();
+    return sessionId;
+  }
+
+  async closeSession(): Promise<void> {
+    const sessionId = this.#clearSessionState();
     if (sessionId && this.#connection)
       await this.#request(
         this.#connection.closeSession({ sessionId }),
@@ -334,14 +344,13 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
   }
 
   async #shutdown(): Promise<void> {
-    try {
-      await this.closeSession();
-    } catch (error) {
-      this.#stderrRaw = `${this.#stderrRaw}\n${this.#error(error).message}`.slice(-32_000);
-    }
+    // End stdin without sending session/close: in agy ACP, session/close
+    // force-cancels any background tasks and subagents owned by the conversation.
+    this.#clearSessionState();
     this.#faultSignal.abort(new AntigravityTransportError("unavailable", "Antigravity ACP closed"));
     this.#opening = null;
     this.#sessionHandler = null;
+    this.#passive = null;
     const child = this.#child;
     if (child && child.exitCode === null && child.signalCode === null && child.pid) {
       const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
@@ -385,7 +394,11 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     ) {
       if (this.#sessionHandler) this.#sessionHandler(event);
       else this.#pendingEvents.push(event);
-    } else this.#active?.onEvent(event);
+    } else if (this.#active) {
+      this.#active.onEvent(event);
+    } else if (this.#passive) {
+      this.#passive.onEvent(event);
+    }
   }
 
   async #callback<T>(
@@ -393,16 +406,15 @@ export class AntigravityAcpTransport implements AntigravityAcpTransportLike {
     invoke: (handler: AntigravityActivePromptHandler) => Promise<T>,
     cancelled: T,
   ): Promise<T> {
-    const active = this.#active;
-    if (!active || !this.#acceptCallbacks || sessionId !== this.#sessionId || this.#closed)
-      return cancelled;
+    const target = (this.#acceptCallbacks ? this.#active : null) ?? this.#passive;
+    if (!target || sessionId !== this.#sessionId || this.#closed) return cancelled;
     let cancel!: () => void;
     const cancellation = new Promise<T>((resolve) => {
       cancel = () => resolve(cancelled);
     });
     this.#callbacks.add(cancel);
     try {
-      return await Promise.race([invoke(active), cancellation]);
+      return await Promise.race([invoke(target), cancellation]);
     } finally {
       this.#callbacks.delete(cancel);
     }

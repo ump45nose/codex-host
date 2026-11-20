@@ -89,6 +89,7 @@ class FakeTransport implements AntigravityAcpTransportLike {
     return this.options.skipPermissions === true;
   }
   eventHandler: AntigravitySessionEventHandler | null = null;
+  passiveHandler: AntigravityActivePromptHandler | null = null;
   queuedSessionEvents: AntigravityAcpEvent[] = [];
   handler?: AntigravityActivePromptHandler;
   parts?: readonly AntigravityPromptInputPart[];
@@ -102,6 +103,9 @@ class FakeTransport implements AntigravityAcpTransportLike {
   setSessionEventHandler(handler: AntigravitySessionEventHandler | null) {
     this.eventHandler = handler;
     if (handler) for (const event of this.queuedSessionEvents.splice(0)) handler(event);
+  }
+  setPassivePromptHandler(handler: AntigravityActivePromptHandler | null) {
+    this.passiveHandler = handler;
   }
   openSession = vi.fn(async (input: AntigravityOpenAcpSessionInput) => {
     this.sessionId = input.sessionId ?? randomUUID();
@@ -1267,4 +1271,198 @@ describe("inspection and errors", () => {
       await adapter.close();
     },
   );
+  it("keeps the Turn active across prompt end_turn while a background tool finishes and wakes up", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agy-bg-turn-"));
+    directories.push(cwd);
+    const { adapter, transports } = fixture({
+      backgroundPollIntervalMs: 10,
+      backgroundSettleMs: 30,
+    });
+    const { session, outputs } = await sessionOf(await adapter.open({ kind: "create", cwd }));
+    const turnId = hostTurnIdSchema.parse(randomUUID());
+    expect(
+      await session.execute({
+        type: "turn.start",
+        turnId,
+        input: [{ type: "text", text: "run background command" }],
+      }),
+    ).toEqual({ ok: true, value: { turnId } });
+    await vi.waitFor(() => expect(transports[0]?.handler).toBeDefined());
+    const transport = transports[0];
+    if (!transport?.handler || !transport.passiveHandler)
+      throw new Error("Missing transport handlers");
+    transport.handler.onEvent({
+      type: "tool.call",
+      toolCallId: "bg-cmd-1",
+      name: "run_command",
+      args: { CommandLine: "sleep 1 && echo BG_OK" },
+      status: "in_progress",
+    });
+    transport.handler.onEvent({ type: "agent.text", text: "waiting" });
+    transport.result.resolve({ stopReason: "end_turn" });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(outputs.some((o) => o.kind === "event" && o.event.type === "turn.completed")).toBe(
+      false,
+    );
+
+    transport.passiveHandler.onEvent({
+      type: "tool.update",
+      toolCallId: "bg-cmd-1",
+      status: "completed",
+      rawOutput: "BG_OK",
+    });
+    transport.passiveHandler.onEvent({ type: "agent.text", text: "GOT_BG_OK" });
+
+    await vi.waitFor(() =>
+      expect(outputs.some((o) => o.kind === "event" && o.event.type === "turn.completed")).toBe(
+        true,
+      ),
+    );
+    expect(
+      outputs.some(
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "agentMessage" &&
+          o.event.snapshot.item.text.includes("GOT_BG_OK"),
+      ),
+    ).toBe(true);
+    await session.close();
+  });
+  it("projects unsolicited wakeup updates while idle as an autonomous Turn", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agy-autonomous-"));
+    directories.push(cwd);
+    const { adapter, transports } = fixture({
+      backgroundPollIntervalMs: 10,
+      backgroundSettleMs: 30,
+    });
+    const { session, outputs } = await sessionOf(await adapter.open({ kind: "create", cwd }));
+    const firstTurnId = hostTurnIdSchema.parse(randomUUID());
+    await session.execute({
+      type: "turn.start",
+      turnId: firstTurnId,
+      input: [{ type: "text", text: "hello" }],
+    });
+    await vi.waitFor(() => expect(transports[0]?.handler).toBeDefined());
+    const transport = transports[0];
+    if (!transport?.handler || !transport.passiveHandler)
+      throw new Error("Missing transport handlers");
+    transport.handler.onEvent({ type: "agent.text", text: "done" });
+    transport.result.resolve({ stopReason: "end_turn" });
+    await vi.waitFor(() =>
+      expect(
+        outputs.some(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "turn.completed" &&
+            o.event.turnId === firstTurnId,
+        ),
+      ).toBe(true),
+    );
+
+    transport.passiveHandler.onEvent({ type: "agent.text", text: "autonomous reply" });
+    await vi.waitFor(() =>
+      expect(
+        outputs.filter((o) => o.kind === "event" && o.event.type === "turn.completed"),
+      ).toHaveLength(2),
+    );
+    expect(
+      outputs.some((o) => o.kind === "event" && o.event.type === "turn.autonomous.started"),
+    ).toBe(true);
+    expect(
+      outputs.some(
+        (o) =>
+          o.kind === "event" &&
+          o.event.type === "item.completed" &&
+          o.event.snapshot.item.type === "agentMessage" &&
+          o.event.snapshot.item.text === "autonomous reply",
+      ),
+    ).toBe(true);
+    await session.close();
+  });
+
+  it("keeps an autonomous Turn open while transcript.jsonl ends on a non-terminal step", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agy-transcript-active-"));
+    const home = await mkdtemp(path.join(os.tmpdir(), "agy-home-"));
+    directories.push(cwd, home);
+    const { adapter, transports } = fixture({
+      environment: { ...process.env, HOME: home },
+      backgroundPollIntervalMs: 10,
+      backgroundSettleMs: 30,
+    });
+    const { session, outputs } = await sessionOf(await adapter.open({ kind: "create", cwd }));
+    const firstTurnId = hostTurnIdSchema.parse(randomUUID());
+    await session.execute({
+      type: "turn.start",
+      turnId: firstTurnId,
+      input: [{ type: "text", text: "hello" }],
+    });
+    await vi.waitFor(() => expect(transports[0]?.handler).toBeDefined());
+    const transport = transports[0];
+    if (!transport?.handler || !transport.passiveHandler)
+      throw new Error("Missing transport handlers");
+    transport.handler.onEvent({ type: "agent.text", text: "done" });
+    transport.result.resolve({ stopReason: "end_turn" });
+    await vi.waitFor(() =>
+      expect(
+        outputs.some(
+          (o) =>
+            o.kind === "event" &&
+            o.event.type === "turn.completed" &&
+            o.event.turnId === firstTurnId,
+        ),
+      ).toBe(true),
+    );
+
+    const nativeId = transport.sessionId;
+    if (!nativeId) throw new Error("Missing nativeSessionId");
+    const logDir = path.join(
+      home,
+      ".gemini",
+      "antigravity-cli",
+      "brain",
+      nativeId,
+      ".system_generated",
+      "logs",
+    );
+    await mkdir(logDir, { recursive: true });
+    const transcriptFile = path.join(logDir, "transcript.jsonl");
+    await writeFile(
+      transcriptFile,
+      JSON.stringify({ step_index: 1, type: "GENERIC", status: "DONE", content: "tool output" }) +
+        "\n",
+    );
+
+    transport.passiveHandler.onEvent({ type: "agent.thought", text: "thinking..." });
+    await new Promise((r) => setTimeout(r, 80));
+    // Must still be inside the single autonomous turn rather than prematurely completing
+    expect(
+      outputs.filter((o) => o.kind === "event" && o.event.type === "turn.completed"),
+    ).toHaveLength(1);
+
+    transport.passiveHandler.onEvent({ type: "agent.text", text: "final answer" });
+    await writeFile(
+      transcriptFile,
+      JSON.stringify({ step_index: 1, type: "GENERIC", status: "DONE", content: "tool output" }) +
+        "\n" +
+        JSON.stringify({
+          step_index: 2,
+          type: "PLANNER_RESPONSE",
+          status: "DONE",
+          tool_calls: [],
+          content: "final answer",
+        }) +
+        "\n",
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        outputs.filter((o) => o.kind === "event" && o.event.type === "turn.completed"),
+      ).toHaveLength(2),
+    );
+    expect(
+      outputs.filter((o) => o.kind === "event" && o.event.type === "turn.autonomous.started"),
+    ).toHaveLength(1);
+    await session.close();
+  });
 });

@@ -53,6 +53,7 @@ import {
   harnessPermissionModeIdSchema,
   hostInteractionIdSchema,
   hostItemIdSchema,
+  hostTurnIdSchema,
   type HarnessCommandCatalog,
   type HarnessModelCatalog,
   type HarnessModelRef,
@@ -73,6 +74,7 @@ import {
   type AntigravityAcpTransportLike,
   type AntigravityAcpTransportOptions,
   type AntigravityPromptInputPart,
+  type AntigravityPromptUsage,
 } from "./acp-types.js";
 import {
   AntigravityToolTracker,
@@ -103,8 +105,13 @@ import { fetchAntigravityQuota, type AntigravityQuotaSnapshot } from "./quota.js
 import { rollbackAntigravityLastTurn } from "./rollback.js";
 import { AntigravitySessionImport } from "./session-import.js";
 import { ANTIGRAVITY_COMMAND_CATALOG, parseAndFormatAntigravityCommand } from "./slash-commands.js";
-import { AntigravitySubagents, readNativeSubagentStatus } from "./subagents.js";
+import {
+  AntigravitySubagents,
+  readNativeConversationActivity,
+  readNativeSubagentStatus,
+} from "./subagents.js";
 import { readSubagentTranscript } from "./subagent-transcript.js";
+import { compactToolName } from "./tool-projection.js";
 import { antigravityHome, createAntigravityUsageStatistics } from "./usage-statistics.js";
 
 const harnessId = harnessIdSchema.parse("antigravity");
@@ -118,7 +125,7 @@ export const antigravitySessionCapabilities: HarnessSessionCapabilities = {
   },
   history: { fork: true, forkAcrossCwd: true, rollbackLastTurn: true },
   subagents: { observe: true, readTranscript: true },
-  autonomousTurns: { observe: false },
+  autonomousTurns: { observe: true },
 };
 export interface AntigravityAdapterOptions {
   command?: string;
@@ -129,6 +136,8 @@ export interface AntigravityAdapterOptions {
   printTimeout?: string;
   toolOutputLimit?: number;
   subagentObservationTimeoutMs?: number;
+  backgroundPollIntervalMs?: number;
+  backgroundSettleMs?: number;
   turnCleanupWaitMs?: number;
   createTransport?: (options: AntigravityAcpTransportOptions) => AntigravityAcpTransportLike;
 }
@@ -276,7 +285,10 @@ interface ActiveTurn {
   ended: boolean;
   promptSubmitted?: boolean;
   firstOutputAtMs?: number;
+  lastActivityAtMs?: number;
   hasToolCalls?: boolean;
+  hasBackgroundTask?: boolean;
+  wakeBackground?: (() => void) | undefined;
   tracker?: AntigravityToolTracker;
   textItem?:
     | {
@@ -444,6 +456,42 @@ export class AntigravitySession implements HarnessSession {
       transport.setSessionEventHandler((event) => {
         if (this.#transport === transport && !this.#closed && !this.#faulted)
           this.#sessionEvent(event);
+      });
+      transport.setPassivePromptHandler?.({
+        onEvent: (event) => {
+          if (this.#transport !== transport || this.#closed || this.#faulted) return;
+          this.#passiveEvent(event);
+        },
+        onPermission: (request) => {
+          const turn = this.#active;
+          if (
+            this.#transport !== transport ||
+            this.#closed ||
+            this.#faulted ||
+            !turn ||
+            turn.cancelled ||
+            turn.ended
+          )
+            return Promise.resolve({ outcome: { outcome: "cancelled" } });
+          turn.hasToolCalls = true;
+          turn.lastActivityAtMs = Date.now();
+          return this.#permission(turn, request);
+        },
+        onElicitation: (request) => {
+          const turn = this.#active;
+          if (
+            this.#transport !== transport ||
+            this.#closed ||
+            this.#faulted ||
+            !turn ||
+            turn.cancelled ||
+            turn.ended
+          )
+            return Promise.resolve({ action: "cancel" });
+          turn.hasToolCalls = true;
+          turn.lastActivityAtMs = Date.now();
+          return this.#question(turn, request);
+        },
       });
       if (this.#requested.model) {
         const applied = await this.#setModelConfig(
@@ -780,8 +828,11 @@ export class AntigravitySession implements HarnessSession {
           if (!turn.cancelled) {
             turn.cancelled = true;
             this.#closeInteractions("cancelled");
+            turn.wakeBackground?.();
             try {
               if (turn.promptSubmitted) await this.#transport?.cancel();
+              else if (this.#transport?.sessionId)
+                await this.#transport.cancel().catch(() => undefined);
             } catch (error) {
               this.handleTransportFault(
                 new AntigravityTransportError(
@@ -866,6 +917,7 @@ export class AntigravitySession implements HarnessSession {
             permissionModeId: command.permissionModeId,
           };
           old.setSessionEventHandler(null);
+          old.setPassivePromptHandler?.(null);
           await old.close();
           this.#transport = undefined;
           try {
@@ -897,6 +949,201 @@ export class AntigravitySession implements HarnessSession {
       this.#configuring = false;
     }
   }
+  #createToolTracker(turn: ActiveTurn): AntigravityToolTracker {
+    return new AntigravityToolTracker({
+      turnId: turn.turnId,
+      cwd: this.#options.cwd,
+      ...(this.#options.adapter.toolOutputLimit !== undefined
+        ? { outputLimit: this.#options.adapter.toolOutputLimit }
+        : {}),
+      parentConfiguration: {
+        ...(this.#state.effectiveModel ? { model: this.#state.effectiveModel.id } : {}),
+        ...(this.#state.effectiveThinkingOptionId
+          ? { reasoningEffort: this.#state.effectiveThinkingOptionId }
+          : {}),
+      },
+      emit: (event) => {
+        if (this.#isCurrent(turn)) this.#emit(event);
+      },
+      onSubagentSpawned: (id, item) => {
+        turn.hasBackgroundTask = true;
+        this.#subagents.track(id, item);
+      },
+    });
+  }
+  #handleTurnEvent(turn: ActiveTurn, event: AntigravityAcpEvent): void {
+    if (!this.#isCurrent(turn) || turn.cancelled) return;
+    if (event.type === "agent.text" || event.type === "agent.thought") {
+      const now = Date.now();
+      turn.firstOutputAtMs ??= now;
+      turn.lastActivityAtMs = now;
+      this.#appendText(
+        turn,
+        event.type === "agent.text" ? "agentMessage" : "reasoning",
+        event.text,
+      );
+    } else if (event.type === "tool.call" || event.type === "tool.update") {
+      const now = Date.now();
+      turn.hasToolCalls = true;
+      turn.firstOutputAtMs ??= now;
+      turn.lastActivityAtMs = now;
+      if (isBackgroundToolEvent(event)) turn.hasBackgroundTask = true;
+      this.#completeText(turn, { status: "succeeded" });
+      turn.tracker?.handleToolEvent(event);
+    } else {
+      this.#sessionEvent(event);
+    }
+  }
+  #passiveEvent(event: AntigravityAcpEvent): void {
+    const active = this.#active;
+    if (active && !active.ended && !active.cancelled) {
+      this.#handleTurnEvent(active, event);
+      return;
+    }
+    if (
+      !active &&
+      (event.type === "agent.text" ||
+        event.type === "agent.thought" ||
+        event.type === "tool.call" ||
+        event.type === "tool.update")
+    ) {
+      this.#startAutonomousTurn(event);
+    }
+  }
+  #startAutonomousTurn(initialEvent: AntigravityAcpEvent): void {
+    const ref = this.nativeRef;
+    if (this.#active || this.#closed || this.#faulted || !ref) return;
+    const turnId = hostTurnIdSchema.parse(randomUUID());
+    const turn: ActiveTurn = {
+      turnId,
+      cancelled: false,
+      ended: false,
+      lastActivityAtMs: Date.now(),
+    };
+    turn.tracker = this.#createToolTracker(turn);
+    this.#active = turn;
+    this.#emit({ type: "turn.autonomous.started", turnId, input: [] });
+    this.#emit({ type: "turn.started", turnId });
+    this.#handleTurnEvent(turn, initialEvent);
+    void this.#runAutonomousTurn(turn, ref);
+  }
+  async #runAutonomousTurn(turn: ActiveTurn, ref: NativeSessionRef): Promise<void> {
+    let outcome: TurnOutcome = { status: "succeeded" };
+    let nativeTurnRef: NativeTurnRef | undefined;
+    try {
+      this.#usage?.beginTurn();
+      await this.#awaitBackgroundCompletion(turn, ref.nativeSessionId);
+      const completedAtMs = Date.now();
+      if (!this.#isCurrent(turn)) return;
+      outcome = turn.cancelled ? { status: "cancelled" } : { status: "succeeded" };
+      const settled = await this.#settleTurnMetadata(turn, ref, outcome, completedAtMs);
+      outcome = settled.outcome;
+      nativeTurnRef = settled.nativeTurnRef;
+    } catch (error) {
+      outcome = turn.cancelled
+        ? { status: "cancelled" }
+        : { status: "failed", error: normalizeAntigravityError(error) };
+    } finally {
+      this.#usage?.endTurn();
+    }
+    if (this.#isCurrent(turn)) this.#finish(turn, outcome, nativeTurnRef);
+  }
+  async #awaitBackgroundCompletion(turn: ActiveTurn, nativeSessionId: string): Promise<void> {
+    const pollMs = this.#options.adapter.backgroundPollIntervalMs ?? 500;
+    const settleMs = this.#options.adapter.backgroundSettleMs ?? 1_500;
+    turn.lastActivityAtMs ??= Date.now();
+    const home = antigravityHome(this.#options.environment);
+    let idleSince: number | null = null;
+    while (this.#isCurrent(turn) && !turn.cancelled && !this.#closed && !this.#faulted) {
+      const hasPendingTools = turn.tracker?.hasPendingTools() ?? false;
+      const hasRunningSubagents = this.#subagents.running;
+      const hasPendingInteractions = this.#pending.size > 0;
+      const activity = await readNativeConversationActivity(home, nativeSessionId);
+      if (!this.#isCurrent(turn) || turn.cancelled || this.#closed || this.#faulted) return;
+      const nativeBusy = activity !== null && (activity.running || activity.notFullyIdle);
+      if (hasPendingTools || hasRunningSubagents || hasPendingInteractions || nativeBusy) {
+        idleSince = null;
+      } else {
+        const now = Date.now();
+        idleSince ??= now;
+        if (now - idleSince >= settleMs && now - (turn.lastActivityAtMs ?? now) >= settleMs) {
+          return;
+        }
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          turn.wakeBackground = undefined;
+          resolve();
+        }, pollMs);
+        timer.unref?.();
+        turn.wakeBackground = () => {
+          clearTimeout(timer);
+          turn.wakeBackground = undefined;
+          resolve();
+        };
+      });
+    }
+  }
+  async #settleTurnMetadata(
+    turn: ActiveTurn,
+    ref: NativeSessionRef,
+    outcome: TurnOutcome,
+    completedAtMs: number,
+    promptUsage?: AntigravityPromptUsage,
+  ): Promise<{ outcome: TurnOutcome; nativeTurnRef: NativeTurnRef | undefined }> {
+    let nextOutcome = outcome;
+    let nativeTurnRef: NativeTurnRef | undefined;
+    const before = this.#turnCount;
+    let count: number;
+    try {
+      count = await readNativeTurnCount(
+        nativeConversationDbPath(ref.nativeSessionId, antigravityHome(this.#options.environment)),
+      );
+    } catch {
+      count = nextOutcome.status === "succeeded" ? before + 1 : before;
+    }
+    if (count > before) {
+      const key = `turn-${count - 1}`;
+      nativeTurnRef = {
+        harnessId,
+        nativeSessionId: ref.nativeSessionId,
+        formatVersion: 1,
+        nativeTurnKey: key,
+      };
+      nextOutcome = { ...nextOutcome, checkpoint: { ...ref, checkpointId: key } };
+      this.#turnCount = count;
+    }
+    await this.#usageWork;
+    if (this.#usage && this.#isCurrent(turn)) {
+      try {
+        const timing = {
+          ...(turn.firstOutputAtMs !== undefined ? { firstOutputAtMs: turn.firstOutputAtMs } : {}),
+          completedAtMs,
+        };
+        const update = await this.#usage.collectNewTranscriptRequests({
+          ...timing,
+          ...(turn.hasToolCalls ? { hasToolCalls: true } : {}),
+          ...(promptUsage ? { promptUsage } : {}),
+          signal: this.#abort.signal,
+        });
+        const recorded = this.#usage.recordTurnPromptUsage({
+          ...(promptUsage ? { usage: promptUsage } : {}),
+          ...timing,
+        });
+        if (!this.#isCurrent(turn)) return { outcome: nextOutcome, nativeTurnRef };
+        for (const request of update.requests) this.#emit({ type: "usage.request", request });
+        this.#emit({ type: "usage.history", complete: recorded.complete });
+        this.#emit({
+          type: "session.usage.changed",
+          usage: recorded.usage,
+          observedForTurnId: turn.turnId,
+        });
+      } catch {
+        if (this.#isCurrent(turn)) this.#emit({ type: "usage.history", complete: false });
+      }
+    }
+    return { outcome: nextOutcome, nativeTurnRef };
+  }
   async #runTurn(turn: ActiveTurn, command: TurnStartCommand): Promise<void> {
     let outcome: TurnOutcome;
     let nativeTurnRef: NativeTurnRef | undefined;
@@ -908,23 +1155,7 @@ export class AntigravitySession implements HarnessSession {
         this.#finish(turn, { status: "cancelled" });
         return;
       }
-      turn.tracker = new AntigravityToolTracker({
-        turnId: turn.turnId,
-        cwd: this.#options.cwd,
-        ...(this.#options.adapter.toolOutputLimit !== undefined
-          ? { outputLimit: this.#options.adapter.toolOutputLimit }
-          : {}),
-        parentConfiguration: {
-          ...(this.#state.effectiveModel ? { model: this.#state.effectiveModel.id } : {}),
-          ...(this.#state.effectiveThinkingOptionId
-            ? { reasoningEffort: this.#state.effectiveThinkingOptionId }
-            : {}),
-        },
-        emit: (event) => {
-          if (this.#isCurrent(turn)) this.#emit(event);
-        },
-        onSubagentSpawned: (id, item) => this.#subagents.track(id, item),
-      });
+      turn.tracker = this.#createToolTracker(turn);
       const transport = this.#transport;
       const ref = this.nativeRef;
       if (!transport || !ref)
@@ -932,22 +1163,7 @@ export class AntigravitySession implements HarnessSession {
       this.#usage?.beginTurn();
       turn.promptSubmitted = true;
       const result = await transport.prompt(promptParts(command), {
-        onEvent: (event) => {
-          if (!this.#isCurrent(turn) || turn.cancelled) return;
-          if (event.type === "agent.text" || event.type === "agent.thought") {
-            turn.firstOutputAtMs ??= Date.now();
-            this.#appendText(
-              turn,
-              event.type === "agent.text" ? "agentMessage" : "reasoning",
-              event.text,
-            );
-          } else if (event.type === "tool.call" || event.type === "tool.update") {
-            turn.hasToolCalls = true;
-            turn.firstOutputAtMs ??= Date.now();
-            this.#completeText(turn, { status: "succeeded" });
-            turn.tracker?.handleToolEvent(event);
-          } else this.#sessionEvent(event);
-        },
+        onEvent: (event) => this.#handleTurnEvent(turn, event),
         onPermission: (request) => {
           turn.hasToolCalls = true;
           return this.#permission(turn, request);
@@ -958,7 +1174,6 @@ export class AntigravitySession implements HarnessSession {
         },
       });
       turn.promptSubmitted = false;
-      const completedAtMs = Date.now();
       if (!this.#isCurrent(turn)) return;
       outcome =
         turn.cancelled || result.stopReason === "cancelled"
@@ -973,57 +1188,25 @@ export class AntigravitySession implements HarnessSession {
                 },
               }
             : { status: "succeeded" };
-      const before = this.#turnCount;
-      let count: number;
-      try {
-        count = await readNativeTurnCount(
-          nativeConversationDbPath(ref.nativeSessionId, antigravityHome(this.#options.environment)),
-        );
-      } catch {
-        count = outcome.status === "succeeded" ? before + 1 : before;
+      if (
+        outcome.status === "succeeded" &&
+        !turn.cancelled &&
+        (turn.tracker.hasPendingTools() || this.#subagents.running || turn.hasBackgroundTask)
+      ) {
+        await this.#awaitBackgroundCompletion(turn, ref.nativeSessionId);
+        if (!this.#isCurrent(turn)) return;
+        if (turn.cancelled) outcome = { status: "cancelled" };
       }
-      if (count > before) {
-        const key = `turn-${count - 1}`;
-        nativeTurnRef = {
-          harnessId,
-          nativeSessionId: ref.nativeSessionId,
-          formatVersion: 1,
-          nativeTurnKey: key,
-        };
-        outcome = { ...outcome, checkpoint: { ...ref, checkpointId: key } };
-        this.#turnCount = count;
-      }
-      await this.#usageWork;
-      if (this.#usage && this.#isCurrent(turn)) {
-        try {
-          const timing = {
-            ...(turn.firstOutputAtMs !== undefined
-              ? { firstOutputAtMs: turn.firstOutputAtMs }
-              : {}),
-            completedAtMs,
-          };
-          const update = await this.#usage.collectNewTranscriptRequests({
-            ...timing,
-            ...(turn.hasToolCalls ? { hasToolCalls: true } : {}),
-            ...(result.usage ? { promptUsage: result.usage } : {}),
-            signal: this.#abort.signal,
-          });
-          const recorded = this.#usage.recordTurnPromptUsage({
-            ...(result.usage ? { usage: result.usage } : {}),
-            ...timing,
-          });
-          if (!this.#isCurrent(turn)) return;
-          for (const request of update.requests) this.#emit({ type: "usage.request", request });
-          this.#emit({ type: "usage.history", complete: recorded.complete });
-          this.#emit({
-            type: "session.usage.changed",
-            usage: recorded.usage,
-            observedForTurnId: turn.turnId,
-          });
-        } catch {
-          if (this.#isCurrent(turn)) this.#emit({ type: "usage.history", complete: false });
-        }
-      }
+      const completedAtMs = Date.now();
+      const settled = await this.#settleTurnMetadata(
+        turn,
+        ref,
+        outcome,
+        completedAtMs,
+        result.usage,
+      );
+      outcome = settled.outcome;
+      nativeTurnRef = settled.nativeTurnRef;
     } catch (error) {
       if (
         error instanceof AntigravityTransportError &&
@@ -1211,11 +1394,13 @@ export class AntigravitySession implements HarnessSession {
     this.#faulted = true;
     this.#abort.abort();
     this.#closeInteractions("cancelled");
+    this.#active?.wakeBackground?.();
     if (this.#active)
       this.#finish(this.#active, { status: "failed", error: normalizeAntigravityError(error) });
     this.#emit({ type: "session.faulted", error: normalizeAntigravityError(error) });
     this.#channel.end();
     this.#subagents.stop();
+    this.#transport?.setPassivePromptHandler?.(null);
     void this.#transport?.close().catch(() => undefined);
   }
   close(): Promise<void> {
@@ -1229,13 +1414,45 @@ export class AntigravitySession implements HarnessSession {
     this.#abort.abort();
     this.#closeInteractions("cancelled");
     const active = this.#active;
+    active?.wakeBackground?.();
     if (active) this.#finish(active, { status: "cancelled", reason: "Session closed" });
     this.#channel.end();
     this.#transport?.setSessionEventHandler(null);
+    this.#transport?.setPassivePromptHandler?.(null);
     if (active) await this.#transport?.cancel().catch(() => undefined);
     await Promise.all([this.#transport?.close(), this.#subagents.close()]);
     this.#options.onClosed(this);
   }
+}
+
+function isBackgroundToolEvent(
+  event: Extract<AntigravityAcpEvent, { type: "tool.call" | "tool.update" }>,
+): boolean {
+  if (event.type === "tool.call" && compactToolName(event.name) === "invokesubagent") return true;
+  const rawOutput =
+    typeof event.rawOutput === "string"
+      ? event.rawOutput
+      : event.rawOutput !== undefined
+        ? JSON.stringify(event.rawOutput)
+        : "";
+  if (rawOutput.includes("Tool is running as a background task")) return true;
+  if (Array.isArray(event.content)) {
+    for (const part of event.content) {
+      if (part && typeof part === "object") {
+        const record = part as Record<string, unknown>;
+        const text =
+          typeof record.text === "string"
+            ? record.text
+            : record.content && typeof record.content === "object"
+              ? (record.content as Record<string, unknown>).text
+              : undefined;
+        if (typeof text === "string" && text.includes("Tool is running as a background task")) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /** Host text input can carry inline image data URIs without changing the public text contract. */

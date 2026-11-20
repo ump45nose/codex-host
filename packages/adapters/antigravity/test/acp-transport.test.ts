@@ -62,6 +62,14 @@ readline.createInterface({input:process.stdin}).on('line', (line) => {
       send({id:'question',method:'elicitation/create',params:{sessionId:'native',toolCallId:'ask',mode:'form',message:'The agent has a question.',requestedSchema:{type:'object',properties:{q1:{type:'array',title:'Colors',items:{type:'string',oneOf:[{const:'1',title:'Red'}]}},q1_other:{type:'string',title:'Other'}}}}});
       if (scenario !== 'prompt-ends') return;
     }
+    if (scenario === 'passive-wakeup') {
+      result(req.id,{stopReason:'end_turn'});
+      setTimeout(() => {
+        update({sessionUpdate:'tool_call_update',toolCallId:'bg-1',status:'completed',rawOutput:'BG_OK'});
+        update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'GOT_BG_OK'}});
+      }, 20);
+      return;
+    }
     update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'wrong'}},'other-session');
     update({sessionUpdate:'tool_call',toolCallId:'ask',name:'ask_question',args:{questions:[{question:'Colors?'}]},status:'in_progress'});
     update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:JSON.stringify(req.params.prompt)}});
@@ -73,6 +81,7 @@ readline.createInterface({input:process.stdin}).on('line', (line) => {
     return;
   }
   if (req.method === 'session/close') {
+    process.stderr.write('session-close-sent\\n');
     update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'late-close-notification'}});
     if (scenario === 'close-stalled') return;
     return result(req.id,{});
@@ -460,5 +469,34 @@ describe("native ACP stdio transport", () => {
     await expect(value.prompt([], handler())).rejects.toThrow("already active");
     await value.close();
     await pending;
+  });
+  it("closes via stdin EOF without sending session/close", async () => {
+    const stderr: string[] = [];
+    const value = transport("ok");
+    await open(value);
+    const child = fixture.children.at(-1);
+    expect(child).toBeDefined();
+    child?.stderr.on("data", (chunk: Buffer) => stderr.push(chunk.toString()));
+    await value.close();
+    expect(stderr.join("")).not.toContain("session-close-sent");
+  });
+  it("delivers post-prompt session/update notifications to the passive handler", async () => {
+    const value = transport("passive-wakeup");
+    const passiveEvents: AntigravityAcpEvent[] = [];
+    value.setPassivePromptHandler({
+      onEvent: (event) => passiveEvents.push(event),
+      onPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      onElicitation: async () => ({ action: "cancel" }),
+    });
+    await open(value);
+    const result = await value.prompt([{ type: "text", text: "go" }], handler());
+    expect(result.stopReason).toBe("end_turn");
+    await vi.waitFor(() =>
+      expect(passiveEvents).toEqual([
+        expect.objectContaining({ type: "tool.update", toolCallId: "bg-1", status: "completed" }),
+        { type: "agent.text", text: "GOT_BG_OK" },
+      ]),
+    );
+    await value.close();
   });
 });

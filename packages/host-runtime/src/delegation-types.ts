@@ -438,6 +438,7 @@ export interface DelegationControlRegistration extends DelegationControlApi {
    */
   adoptQueued?(queued: DelegationQueuedStart): Promise<boolean | undefined>;
   executionHostId?(threadId: string): string | undefined;
+  onThreadIdle?(listener: (threadId: string) => void): () => void;
   canHandleStart(input: DelegationStartInput): boolean | Promise<boolean>;
   ownsThread(threadId: string): boolean | Promise<boolean>;
 }

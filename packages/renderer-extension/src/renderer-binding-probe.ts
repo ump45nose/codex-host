@@ -124,6 +124,30 @@ import {
   subscribeSidebarStashEnabledPreference,
   type RendererSidebarStashHandle,
 } from "./renderer-sidebar-stash.js";
+import { installRendererSidebarOverlay } from "./renderer-sidebar-overlay.js";
+import {
+  createPetsCardAgentResolver,
+  PETS_CARD_THREADS_STORAGE_KEY,
+  readPetsCardThreads,
+} from "./renderer-pets-card-agents.js";
+import {
+  collectSidebarThreads,
+  installRendererTopTabs,
+  resolveShortHostLabel,
+} from "./renderer-top-tabs.js";
+import {
+  readPetsHarnessCatalog,
+  writePetsHarnessCatalog,
+  writePetsThreadAgents,
+} from "./renderer-avatar-overlay.js";
+import {
+  writePetsRemoteProjects,
+  type PetsRemoteProject,
+} from "./renderer-pets-quick-chat-target.js";
+import {
+  collectSidebarRemoteProjects,
+  readRemoteHostGlobeColors,
+} from "./renderer-sidebar-remote-projects.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -974,12 +998,20 @@ export function installRendererBindingProbe(
     locale: () => settingsLifecycle.locale,
   });
   let sidebarStash: RendererSidebarStashHandle | null = null;
+  const sidebarStashListeners = new Set<() => void>();
+  const notifySidebarStashListeners = (): void => {
+    for (const listener of sidebarStashListeners) listener();
+  };
   const mountSidebarStash = (): void => {
     sidebarStash?.dispose();
-    sidebarStash = null;
-    if (!readSidebarStashEnabledPreference(window)) return;
+    sidebarStash = installSidebarStash();
+    sidebarStash?.store.subscribe(notifySidebarStashListeners);
+    notifySidebarStashListeners();
+  };
+  const installSidebarStash = (): RendererSidebarStashHandle | null => {
+    if (!readSidebarStashEnabledPreference(window)) return null;
     try {
-      sidebarStash = installRendererSidebarStash({
+      return installRendererSidebarStash({
         document,
         window,
         getLocale: () => settingsLifecycle.locale,
@@ -1008,18 +1040,49 @@ export function installRendererBindingProbe(
       });
     } catch (error) {
       console.warn("[codexhost-sidebar-stash] install failed", error);
-      sidebarStash = null;
+      return null;
     }
   };
   mountSidebarStash();
   const disposeSidebarStashPreference = subscribeSidebarStashEnabledPreference(window, () => {
     mountSidebarStash();
   });
-  let adapterStatus: RendererAdapterStatus = {
-    state: "installing",
-    reason: "installing",
-    modelUpdates: 0,
-    hook: null,
+  const sidebarOverlay = installRendererSidebarOverlay({
+    document,
+    window,
+    getLocale: () => settingsLifecycle.locale,
+  });
+  const acknowledgedFailedKeys = new Set<string>();
+  const hostLabels = new Map<string, string>();
+  let hostLabelsPending = false;
+  const resolveHostLabel = (hostId: string): string | null => {
+    if (!hostId || hostId === "local") return null;
+    if (!hostLabels.has(hostId) && !hostLabelsPending && !disposed) {
+      hostLabelsPending = true;
+      void remoteConnections.ssh
+        .list()
+        .then((conns) => {
+          hostLabelsPending = false;
+          if (disposed || !Array.isArray(conns)) return;
+          let changed = false;
+          for (const c of conns) {
+            const id = c?.hostId?.trim();
+            const raw = c?.displayName?.trim() || c?.sshAlias?.trim() || c?.sshHost?.trim() || id;
+            const label = id ? resolveShortHostLabel(id, raw) : null;
+            if (id && label && hostLabels.get(id) !== label) {
+              hostLabels.set(id, label);
+              changed = true;
+            }
+          }
+          if (changed) {
+            topTabs.refresh();
+          }
+        })
+        .catch(() => {
+          hostLabelsPending = false;
+        });
+    }
+    return resolveShortHostLabel(hostId, hostLabels.get(hostId));
   };
   const createHostHarnessAvailabilityState = (): HostHarnessAvailabilityState => ({
     plugins: null,
@@ -1051,6 +1114,126 @@ export function installRendererBindingProbe(
         : hostHarnessAvailabilityState("local").plugins?.find(({ id }) => id === agent);
     return compatibleRendererPluginPresentation(plugin, reference);
   }
+  const resolveThreadAgent = (hostId: string, threadId: string, fallback?: RendererAgent) => {
+    const agent =
+      localAgentForSidebarThread({ hostId, threadId, draftId: null }) ?? fallback ?? null;
+    if (!agent) return null;
+    if (agent !== "codex" && hostId !== "durable") {
+      const s = hostHarnessAvailabilityState(hostId);
+      const c = modelClientForHost(hostId);
+      if (c && (s.directoryClient !== c || (!s.plugins && !s.directoryError))) {
+        void refreshHarnessAvailabilityForHost(hostId);
+      }
+    }
+    const plugin = pluginForHost(hostId, agent);
+    return { agent, ...(plugin ? { plugin } : {}) };
+  };
+  const petsCardAgents = createPetsCardAgentResolver({
+    getClient: modelClientForHost,
+    onResolved: () => syncPetsCatalog(),
+  });
+  const syncPetsCatalog = (): void => {
+    try {
+      // The Pet lists sessions natively; it only needs each external thread's Agent for its icon.
+      const threadAgents: Record<string, string> = {};
+      for (const { hostId, threadId, agent } of collectSidebarThreads(
+        document,
+        resolveThreadAgent,
+      ).values()) {
+        if (agent && agent !== "codex") threadAgents[`${hostId}:${threadId}`] = agent;
+      }
+      Object.assign(
+        threadAgents,
+        petsCardAgents.resolve(readPetsCardThreads(window.localStorage), threadAgents),
+      );
+      writePetsThreadAgents(threadAgents, window.localStorage);
+      // Pet Quick Chat can start in a remote project with any Agent installed on its host.
+      const globeColors = readRemoteHostGlobeColors(document);
+      writePetsRemoteProjects(
+        collectSidebarRemoteProjects(document).map(
+          ({ hostDisplayName, ...project }): PetsRemoteProject => {
+            const state = harnessAvailabilityByHost.get(project.hostId);
+            if (!state?.plugins && !state?.request && state?.retryTimer == null)
+              void refreshHarnessAvailabilityForHost(project.hostId);
+            return {
+              ...project,
+              hostLabel: resolveHostLabel(project.hostId) ?? (hostDisplayName || project.hostId),
+              hostColor: globeColors.get(project.hostId) ?? null,
+              agents: [
+                "codex",
+                ...(state?.plugins ?? EMPTY_PLUGINS)
+                  .filter(({ id }) => {
+                    const status = state?.availability[id];
+                    return status === undefined || status === "checking" || status === "ready";
+                  })
+                  .map(({ id }) => id),
+              ],
+            };
+          },
+        ),
+        window.localStorage,
+      );
+      const pluginsById = new Map<string, HarnessPluginDescriptor>();
+      let hasResolvedHostDirectory = false;
+      for (const [hostId, s] of harnessAvailabilityByHost) {
+        if (s.plugins !== null) hasResolvedHostDirectory = true;
+        for (const p of s.plugins ?? EMPTY_PLUGINS) {
+          if (!pluginsById.has(p.id) || hostId === "local") {
+            pluginsById.set(p.id, pluginForHost(hostId, p.id) ?? p);
+          }
+        }
+      }
+      const nextPlugins = [...pluginsById.values()];
+      const existingCatalog =
+        nextPlugins.length === 0 && !hasResolvedHostDirectory
+          ? readPetsHarnessCatalog(window.localStorage)
+          : null;
+      writePetsHarnessCatalog(
+        {
+          enabledAgents: [...enabledAgents],
+          plugins:
+            nextPlugins.length === 0 && existingCatalog?.plugins.length
+              ? existingCatalog.plugins
+              : nextPlugins,
+        },
+        window.localStorage,
+      );
+    } catch {
+      // Ignore storage sync errors
+    }
+  };
+  const topTabs = installRendererTopTabs({
+    document,
+    window,
+    tree: sidebarThreadTree,
+    getLocale: () => settingsLifecycle.locale,
+    getThreadAgent: resolveThreadAgent,
+    getHostLabel: resolveHostLabel,
+    acknowledgedFailedKeys,
+    onChange: syncPetsCatalog,
+    stash: {
+      available: () => sidebarStash !== null,
+      isStashed: (threadId) => sidebarStash?.store.has(threadId) ?? false,
+      stash: (target) => sidebarStash?.stashThread(target),
+      unstash: (threadId) => {
+        if (sidebarStash?.store.remove(threadId)) sidebarStash.refresh();
+      },
+      setRestoreDate: (target, anchor) => sidebarStash?.openRestoreDate(target, anchor),
+      subscribe: (listener) => {
+        sidebarStashListeners.add(listener);
+        return () => sidebarStashListeners.delete(listener);
+      },
+    },
+  });
+  const onPetsCardThreads = (event: StorageEvent): void => {
+    if (event.key === PETS_CARD_THREADS_STORAGE_KEY) syncPetsCatalog();
+  };
+  let adapterStatus: RendererAdapterStatus = {
+    state: "installing",
+    reason: "installing",
+    modelUpdates: 0,
+    hook: null,
+  };
   const codexAccountsForHost = (hostId: string | null): RendererCodexAccountState | null => {
     if (!hostId) return null;
     const client = modelClientForHost(hostId);
@@ -2707,6 +2890,7 @@ export function installRendererBindingProbe(
           controller.setEnabledAgents(enabledAgents);
           sidebarAgentIcons.refresh();
           sidebarThreadTree.refresh();
+          topTabs.refresh();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -3520,6 +3704,7 @@ export function installRendererBindingProbe(
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -3605,6 +3790,7 @@ export function installRendererBindingProbe(
   window.addEventListener("codexhost:draft-workspace", onDraftWorkspace);
   window.addEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
   window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("storage", onPetsCardThreads);
   delegationMention = installRendererDelegationMention(document, {
     readSkills: (editor) => skillLibrary.read(editor),
     onClose: () => skillLibrary.close(),
@@ -3782,6 +3968,7 @@ export function installRendererBindingProbe(
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
       sidebarThreadTree.refresh();
+      topTabs.refresh();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -3833,6 +4020,8 @@ export function installRendererBindingProbe(
       disposeSidebarStashPreference();
       sidebarStash?.dispose();
       sidebarStash = null;
+      sidebarOverlay.dispose();
+      topTabs.dispose();
       sidebarThreadTree.dispose();
       nativeScheduleControls.dispose();
       settingsLifecycle.dispose();
@@ -3843,6 +4032,7 @@ export function installRendererBindingProbe(
       window.removeEventListener("codexhost:draft-prewarm-policy-changed", onHostRouteChange);
       window.removeEventListener("codexhost:draft-workspace", onDraftWorkspace);
       window.removeEventListener("codexhost:renderer-adapter-status", onAdapterStatus);
+      window.removeEventListener("storage", onPetsCardThreads);
       window.removeEventListener("focus", onWindowFocus);
       for (const state of harnessAvailabilityByHost.values()) {
         state.requestGeneration += 1;

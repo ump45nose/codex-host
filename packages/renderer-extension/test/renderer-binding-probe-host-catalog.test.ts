@@ -17,6 +17,8 @@ import type { installRendererSidebarAgentIcons } from "../src/renderer-sidebar-a
 import type { RendererConnectionDiagnostics } from "../src/settings/connections-page.js";
 import type { RendererSessionImportClient } from "../src/settings/session-import-page.js";
 import type * as VersionedRendererAdapter from "../src/versioned-renderer-adapter.js";
+import type * as RendererSidebarStash from "../src/renderer-sidebar-stash.js";
+import type * as RendererTopTabs from "../src/renderer-top-tabs.js";
 
 it("filters Desktop internal environments from connection hosts", async () => {
   installFakeBrowser();
@@ -127,6 +129,26 @@ vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
 
 vi.mock("../src/renderer-sidebar-thread-tree.js", () => ({
   installRendererSidebarThreadTree: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-overlay/index.js", () => ({
+  installRendererSidebarOverlay: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-stash.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererSidebarStash>()),
+  installRendererSidebarStash: () => ({
+    refresh: vi.fn(),
+    dispose: vi.fn(),
+    store: { subscribe: vi.fn(() => () => undefined), has: () => false, remove: () => false },
+    stashThread: vi.fn(),
+    openRestoreDate: vi.fn(),
+  }),
+}));
+
+vi.mock("../src/renderer-top-tabs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof RendererTopTabs>()),
+  installRendererTopTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
 vi.mock("../src/renderer-settings-lifecycle.js", () => ({

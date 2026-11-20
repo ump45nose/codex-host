@@ -260,9 +260,11 @@ export interface DelegationThreadListResult {
 export interface ThreadWatchInput {
   /** Thread observed until it stops. */
   threadId: string;
-  /** Thread that receives the single notification. */
+  /** Thread that receives stop/expiry and any enabled silence notifications. */
   notifyThreadId: string;
   timeoutMs: number;
+  /** Optional silence threshold; omitted disables stalled notifications. */
+  stallAfterMs?: number;
 }
 
 export type ThreadWatchOutcome =
@@ -273,6 +275,8 @@ export type ThreadWatchOutcome =
   | "needsInput"
   /** The Thread was still running when the watch expired. */
   | "timedOut"
+  /** Still running, with no observed Harness event for the configured threshold. */
+  | "stalled"
   /** Reads kept failing, so the state of the Thread is unknown. */
   | "unreadable"
   | "notFound";
@@ -289,6 +293,7 @@ export interface ThreadWatchResult {
   timeoutMs: number;
   /** Present for `alreadyNeedsInput`, so the caller can answer without re-reading. */
   pendingQuestions?: DelegationPendingQuestion[];
+  stallAfterMs?: number;
 }
 
 export interface ThreadWatchEntry {
@@ -309,6 +314,7 @@ export interface ThreadWatchEntry {
   threadStatus?: DelegationThreadStatus;
   /** Elapsed time since registration, including Host downtime. */
   watchedForMs?: number;
+  stallAfterMs?: number;
 }
 
 export interface ThreadWatchListResult {
@@ -340,6 +346,8 @@ export interface DelegationControlApi {
 }
 
 export interface DelegationControlRegistration extends DelegationControlApi {
+  /** Thread and Harness subagent ancestors active in an incoming Harness event. */
+  subscribeActivity?(listener: (threadIds: readonly string[]) => void): () => void;
   executionHostId?(threadId: string): string | undefined;
   canHandleStart(input: DelegationStartInput): boolean | Promise<boolean>;
   ownsThread(threadId: string): boolean | Promise<boolean>;

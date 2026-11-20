@@ -113,6 +113,8 @@ function parseWatchFile(text: string): WatchFile {
     !optionalString(watch.reason) ||
     !Number.isSafeInteger(watch.timeoutMs) ||
     !Number.isFinite(watch.deadline) ||
+    (watch.stallAfterMs !== undefined &&
+      (!Number.isSafeInteger(watch.stallAfterMs) || watch.stallAfterMs <= 0)) ||
     !optionalNumber(watch.deliveryDeadline) ||
     (watch.delivering !== undefined && typeof watch.delivering !== "boolean") ||
     !optionalString(watch.restartNote) ||

@@ -18,11 +18,11 @@ import {
   replayTaskEvent,
 } from "./task.mjs";
 
-export const HELP = `codexhost-bot devices [--query TEXT] [--refresh true|false]
+export const HELP = `codexhost-bot devices [--query TEXT] [--harness ID] [--refresh true|false]
 codexhost-bot origin ensure|status --bot ID
 codexhost-bot origin ack --bot ID --nonce HEX
 codexhost-bot origin cancel --bot ID --request-id ID
-codexhost-bot task start --bot ID --device ID --task TEXT --request-id ID [--cwd PATH] [--harness ID] [--task-name TEXT]
+codexhost-bot task start --bot ID --device ID --task TEXT --request-id ID [--cwd PATH] [--harness ID] [--model ID] [--thinking ID] [--task-name TEXT]
 codexhost-bot task read|cancel --bot ID --task-id ID
 codexhost-bot task send --bot ID --task-id ID --message TEXT
 codexhost-bot task resolve --bot ID --thread ID --event ID
@@ -32,7 +32,7 @@ codexhost-bot task ack --bot ID --task-id ID --receipt NATIVE_RECEIPT [--artifac
 codexhost-bot task replay --bot ID --task-id ID
 
 Set CODEXHOST_BOT_CONFIG to the installed private configuration. Output is JSON; credentials never appear.
-Native Codex is the default; no model or thinking override is sent. A pending origin blocks task start.
+Native Codex and Harness default models are used when --harness, --model or --thinking is omitted. A pending origin blocks task start.
 `;
 
 export async function run(arguments_, environment = process.env) {
@@ -49,7 +49,7 @@ export async function run(arguments_, environment = process.env) {
     options[name] = args[index + 1];
   }
   const commands = {
-    devices: ["--query", "--refresh"],
+    devices: ["--query", "--harness", "--refresh"],
     "origin ensure": ["--bot", "--repair", "--request", "--request-id"],
     "origin cancel": ["--bot", "--request-id"],
     "origin status": ["--bot"],
@@ -61,6 +61,8 @@ export async function run(arguments_, environment = process.env) {
       "--task",
       "--request-id",
       "--harness",
+      "--model",
+      "--thinking",
       "--task-name",
     ],
     "task read": ["--bot", "--task-id"],
@@ -85,6 +87,7 @@ export async function run(arguments_, environment = process.env) {
         fail("INVALID_ARGUMENT", "--refresh must be true or false");
       return devices(config, context.account, {
         query: options["--query"],
+        harness: options["--harness"],
         refresh: options["--refresh"] === "true",
       });
     case "origin ensure":
@@ -108,6 +111,8 @@ export async function run(arguments_, environment = process.env) {
         task: options["--task"],
         requestId: options["--request-id"],
         harness: options["--harness"],
+        model: options["--model"],
+        thinking: options["--thinking"],
         taskName: options["--task-name"],
       });
     case "task read":
@@ -186,7 +191,13 @@ const entry = process.argv[1] && (await realpath(process.argv[1]).catch(() => un
 if (entry && pathToFileURL(entry).href === import.meta.url) {
   main().catch((error) => {
     process.stderr.write(
-      `${JSON.stringify({ error: { code: error.code ?? "INTEGRATION_ERROR", message: error.message } })}\n`,
+      `${JSON.stringify({
+        error: {
+          code: error.code ?? "INTEGRATION_ERROR",
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        },
+      })}\n`,
     );
     process.exitCode = 1;
   });

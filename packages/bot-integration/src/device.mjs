@@ -52,7 +52,10 @@ function execute(command, args, environment, input) {
         reject(
           Object.assign(
             new Error(error?.message ?? "Device command failed or its result is unknown"),
-            { code: error?.code ?? "DEVICE_REQUEST_UNKNOWN" },
+            {
+              code: error?.code ?? "DEVICE_REQUEST_UNKNOWN",
+              ...(error?.details ? { details: error.details } : {}),
+            },
           ),
         );
       }
@@ -229,13 +232,15 @@ export async function ensureClient(config, device, account, botId, webhook, save
   });
 }
 
-export async function devices(config, account, { query, refresh = false } = {}) {
+export async function devices(config, account, { query, harness, refresh = false } = {}) {
+  if (harness !== undefined && !harness.trim())
+    fail("INVALID_ARGUMENT", "--harness must not be empty");
   return {
     devices: await Promise.all(
       config.devices.map(async (device) => {
         try {
           const client = await ensureClient(config, device, account, "inventory");
-          const [environment, harnesses, projects] = await Promise.all([
+          const [environment, harnesses, projects, harnessInspection] = await Promise.all([
             invoke(device, ["host", "info", "--refresh", String(refresh)], client.tokenFile),
             invoke(device, ["harness", "list"], client.tokenFile),
             invoke(
@@ -251,12 +256,38 @@ export async function devices(config, account, { query, refresh = false } = {}) 
               ],
               client.tokenFile,
             ),
+            ...(harness
+              ? [
+                  invoke(
+                    device,
+                    [
+                      "harness",
+                      "inspect",
+                      harness,
+                      "--format",
+                      "compact",
+                      "--refresh",
+                      String(refresh),
+                    ],
+                    client.tokenFile,
+                  ).catch((error) => ({
+                    harnessId: harness,
+                    status: "unavailable",
+                    error: {
+                      code: error.code ?? "DEVICE_ERROR",
+                      message: error.message,
+                      ...(error.details ? { details: error.details } : {}),
+                    },
+                  })),
+                ]
+              : []),
           ]);
           return {
             id: device.id,
             online: true,
             environment,
             ...harnesses,
+            ...(harnessInspection ? { harnessInspection } : {}),
             projects: projects.projects,
             projectScan: {
               observedAt: projects.observedAt,
@@ -271,7 +302,11 @@ export async function devices(config, account, { query, refresh = false } = {}) 
             id: device.id,
             online: error.code === "DEVICE_UNREACHABLE" ? false : null,
             status: "unavailable",
-            error: { code: error.code ?? "DEVICE_ERROR", message: error.message },
+            error: {
+              code: error.code ?? "DEVICE_ERROR",
+              message: error.message,
+              ...(error.details ? { details: error.details } : {}),
+            },
           };
         }
       }),

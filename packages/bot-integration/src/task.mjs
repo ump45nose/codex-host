@@ -44,11 +44,13 @@ export async function startTask(config, context, botId, input) {
     !input.task?.trim() ||
     !input.requestId ||
     input.requestId.length > 128 ||
-    (input.cwd !== undefined && !path.isAbsolute(input.cwd))
+    (input.cwd !== undefined && !path.isAbsolute(input.cwd)) ||
+    (input.model !== undefined && !input.model.trim()) ||
+    (input.thinking !== undefined && !input.thinking.trim())
   )
     fail(
       "TASK_INVALID",
-      "Task text, stable request ID and an absolute workspace when specified are required",
+      "Task text, stable request ID and valid optional workspace, model or thinking are required",
     );
   const configuredDevice = getDevice(config, input.device);
   const id = digest(`${context.account}:${botId}:${input.requestId}`).slice(0, 32);
@@ -78,6 +80,8 @@ export async function startTask(config, context, botId, input) {
     const request = {
       device: device.id,
       harness: input.harness ?? "codex",
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.thinking ? { thinking: input.thinking } : {}),
       cwd,
       task: input.task,
       taskName: input.taskName ?? null,
@@ -119,29 +123,47 @@ export async function startTask(config, context, botId, input) {
     } else if (!task.start) {
       task.startAttemptedAt = new Date().toISOString();
       await saveJson(file, task);
-      task.start = await invoke(
-        device,
-        [
-          "delegate",
-          "start",
-          "--harness",
-          request.harness,
-          "--task",
-          `${request.task}\n\n成品交付约束：本 Thread 的实际工作区是 ${request.cwd}。最终成品必须保存在该目录内，并在最终报告中用 Markdown 链接明确列出；工作区外的文件无法导出。保持项目 git 状态不变时，使用项目现有忽略的成品目录；不要修改忽略规则或已有源码。仅阅读其他项目时，将它作为参考，成品仍写到当前工作区。`,
-          "--cwd",
-          request.cwd,
-          "--request-id",
-          request.requestId,
-          "--ref",
-          task.ref,
-          "--ref",
-          `grokbot://bot/${encodeURIComponent(botId)}`,
-          "--ref",
-          `codexhost://device/${encodeURIComponent(device.id)}`,
-          ...(request.taskName ? ["--task-name", request.taskName] : []),
-        ],
-        client.tokenFile,
-      );
+      try {
+        task.start = await invoke(
+          device,
+          [
+            "delegate",
+            "start",
+            "--harness",
+            request.harness,
+            ...(request.model ? ["--model", request.model] : []),
+            ...(request.thinking ? ["--thinking", request.thinking] : []),
+            "--task",
+            `${request.task}\n\n成品交付约束：本 Thread 的实际工作区是 ${request.cwd}。最终成品必须保存在该目录内，并在最终报告中用 Markdown 链接明确列出；工作区外的文件无法导出。保持项目 git 状态不变时，使用项目现有忽略的成品目录；不要修改忽略规则或已有源码。仅阅读其他项目时，将它作为参考，成品仍写到当前工作区。`,
+            "--cwd",
+            request.cwd,
+            "--request-id",
+            request.requestId,
+            "--ref",
+            task.ref,
+            "--ref",
+            `grokbot://bot/${encodeURIComponent(botId)}`,
+            "--ref",
+            `codexhost://device/${encodeURIComponent(device.id)}`,
+            ...(request.taskName ? ["--task-name", request.taskName] : []),
+          ],
+          client.tokenFile,
+        );
+      } catch (error) {
+        if (
+          [
+            "INVALID_ARGUMENT",
+            "UNAUTHORIZED",
+            "FORBIDDEN",
+            "HARNESS_NOT_FOUND",
+            "DELEGATION_FAILED",
+            "UNSUPPORTED",
+            "DEVICE_UNREACHABLE",
+          ].includes(error.code)
+        )
+          await rm(file, { force: true });
+        throw error;
+      }
     }
     await saveJson(file, task);
     if (!task.start.watch || task.start.watch.state === "notRegistered") {

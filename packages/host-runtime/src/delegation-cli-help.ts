@@ -13,9 +13,9 @@ Discover projects under this Host's configured roots. Returns live project metad
   "thread file": `codexhost thread file <thread> --path <file> [--offset <n>] [--limit <bytes>] [--revision <revision>] [--format json|compact|text]
 Read a file explicitly linked in the latest final report, inside the Thread workspace. Returns a base64 chunk, revision, nextOffset and eof. Continue with the returned revision; restart if it changes. Maximum chunk size is 1 MiB. Read through the execution Host.`,
   "client add": `codexhost client add <name> [--scope read|dispatch] [--network local,tailnet,public]
-Register an external client: a process the Host did not start, such as a script, a desktop app, or a bot's local agent. Prints the client token once; it is not stored in a readable form and cannot be shown again.
+Register a named external client for HTTP/MCP or a separate CLI identity. Same-user local CLI calls authenticate automatically. Prints the client token once; it is not stored in a readable form and cannot be shown again.
 The client sets CODEXHOST_CLIENT_TOKEN (or CODEXHOST_CLIENT_TOKEN_FILE) and then uses the same delegate, thread and harness commands, or the MCP endpoint, against the external client listener (127.0.0.1:4398 unless CODEXHOST_EXTERNAL_CLIENT_PORT says otherwise).
-Normal same-user CLI calls authenticate automatically; local-cli is reserved. Names use lowercase letters, digits and hyphens.
+Names use lowercase letters, digits and hyphens; local-cli is reserved.
 --scope read allows reading, listing, waiting and events only; dispatch (default) also allows delegate start, thread send, cancel and watch.
 --network lists where the client may connect from: local (127.0.0.1, default), tailnet (this machine's Tailscale address), public (the Tailscale Funnel URL). Turn the tailnet and public listeners on with codexhost client access.`,
   "client set": `codexhost client set <name> [--scope read|dispatch] [--network local,tailnet,public]
@@ -35,7 +35,7 @@ Requires Tailscale to be installed and logged in; public also needs MagicDNS, HT
 Push the client's events to a bot as they happen, through a vendor adapter, so the bot is woken instead of polling. Without options, shows the webhook and its delivery state.
 The key comes from --key-file or CODEXHOST_WEBHOOK_KEY, never from the command line, and is never shown. A new webhook starts after the latest event; updating an existing webhook preserves its pending events and retry cursor.
 grok-bot: the Grok Bot (Cursor Automations) webhook trigger URL and its key. Each request carries Idempotency-Key <client>:<event id> and a body under 4 KB with no Thread content; read results with thread read.
-Failures retry with backoff (5 s up to 15 min) for 24 hours; 400, 401 and 403 stop at once as configuration errors. The event log is unaffected either way.`,
+429, 5xx and network failures retry with backoff (5 s up to 15 min) for 24 hours; any other 4xx (for example 400, 401, 403, 404, 408 or 409) stops that event at once as a configuration error. The event log is unaffected either way.`,
   "client list": `codexhost client list
 List registered external clients with their registration time, scope and networks. Tokens are never shown.`,
   "client remove": `codexhost client remove <name>

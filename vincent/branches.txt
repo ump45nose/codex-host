@@ -43,3 +43,4 @@ v21/codexhost-partial-swap # vincent-release.sh patch (partial file swap on MacP
 fix/pet-nas-remote-tasks # Pet lists remote projectless threads (Codex and external Harness); based on v21/vertical-screen-ux-overhaul
 fix/shared-thread-pin # invalidate SharedThreadBridge list cache on section moves and route shared beforeThreadId
 fix/agy-acp-wakeup-and-watch-delivery # preserve agy ACP background wakeups, avoid session/close on shutdown, retry busy watch delivery, nudge watch on turn idle
+fix/drop-claude-desktop-entrypoint # revert the Claude Desktop entrypoint opt-in (account risk-control); based on v21/claude-desktop-entrypoint

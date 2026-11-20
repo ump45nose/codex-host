@@ -65,6 +65,11 @@ import { HarnessDisplaySettingsStore } from "./harness-display-settings.js";
 import { isModelPriceOverridesMethod } from "./model-price-overrides-file.js";
 import { HARNESS_DISPLAY_CHANGED_METHOD } from "@codexhost/shared-contracts";
 import {
+  isSidebarStashLegacyFileMethod,
+  parseSidebarStashLegacyFileParams,
+  readSidebarStashLegacyFile,
+} from "./sidebar-stash-legacy-file.js";
+import {
   rewriteDelegationMentionInput,
   rewriteDelegationMentionText,
 } from "./delegation-mention-rewrite.js";
@@ -1873,6 +1878,16 @@ export class AppServerHost {
       request.method === "codexhost/thread/pins/set"
     ) {
       this.#dispatchDesktopReply(request, () => this.#handleThreadPins(request));
+      return;
+    }
+    if (isSidebarStashLegacyFileMethod(request.method)) {
+      try {
+        parseSidebarStashLegacyFileParams(request.params);
+        const result = await readSidebarStashLegacyFile();
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+      }
       return;
     }
     if (request.method === THREAD_RELATION_LIST_METHOD) {

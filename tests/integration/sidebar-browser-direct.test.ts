@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createSocket } from "node:dgram";
 import { EventEmitter, once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";

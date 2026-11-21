@@ -46,21 +46,28 @@ export class ExternalThreadLifecycle {
     return task;
   }
 
+  /**
+   * Closes a Session at most once per owner, whoever asks first. A failed output
+   * consumer may close a Session a release already owns; both await this close.
+   */
+  close(session: HarnessSession): Promise<void> {
+    const owner = this.#closing.get(session);
+    if (owner) return owner;
+    const closing = Promise.resolve().then(() => session.close());
+    this.#closing.set(session, closing);
+    void closing.catch(() => {
+      // A rejected close may be retried, but never while an earlier close is still pending.
+      // Adapters with a cached terminal failure will keep rejecting: that is not release proof.
+      if (this.#closing.get(session) === closing) this.#closing.delete(session);
+    });
+    return closing;
+  }
+
   /** Call inside the Thread's lifecycle operation. A timeout never cancels the owned close. */
   async release(id: string, session: HarnessSession, output: Promise<void>): Promise<void> {
     // Serialized operations stop at the first failed release: only one blocker per Thread.
     this.#releasing.set(id, { session, output });
-    let closing = this.#closing.get(session);
-    if (!closing) {
-      closing = Promise.resolve().then(() => session.close());
-      this.#closing.set(session, closing);
-      const attempt = closing;
-      void closing.catch(() => {
-        // A rejected close may be retried, but never while an earlier close is still pending.
-        // Adapters with a cached terminal failure will keep rejecting: that is not release proof.
-        if (this.#closing.get(session) === attempt) this.#closing.delete(session);
-      });
-    }
+    const closing = this.close(session);
     let timeout: NodeJS.Timeout | undefined;
     try {
       await Promise.race([

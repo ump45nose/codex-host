@@ -17,6 +17,12 @@ import {
   writeRequest,
 } from "./app-server-host-fixture.js";
 
+/**
+ * The fork's Host projects Reasoning previews as titled summary parts, so a
+ * short untitled Harness text reaches Desktop as one bold paragraph.
+ */
+const titledReasoningSummary = (text: string): string[] => [`**${text}**`];
+
 function itemStarted(message: JsonObject, itemId: string): boolean {
   if (message.method !== "item/started") return false;
   return (message.params as { item?: { id?: string } }).item?.id === itemId;
@@ -410,7 +416,7 @@ describe("Host runtime idle background output on a completed Turn", () => {
           const native = items.find((entry) => entry.id === nativeId);
           expect(native).toMatchObject(
             type === "reasoning"
-              ? { summary: [merged ?? historical] }
+              ? { summary: titledReasoningSummary(merged ?? historical) }
               : { text: merged ?? historical },
           );
           if (type === "reasoning" && historical === "T") {
@@ -581,7 +587,7 @@ describe("Host runtime idle background output on a completed Turn", () => {
         ["answer 2", "A1", "A2"],
       );
       expect(items.filter((item) => item.type === "reasoning").map((item) => item.summary)).toEqual(
-        [["T1"], ["T2"]],
+        [titledReasoningSummary("T1"), titledReasoningSummary("T2")],
       );
       expect(items.filter((item) => String(item.id).startsWith("live-alternating"))).toHaveLength(
         0,
@@ -788,7 +794,7 @@ describe("Host runtime idle background output on a completed Turn", () => {
         "agentMessage",
       ]);
       expect(items[1]?.text).toBe("task completed");
-      expect(items[2]?.summary).toEqual(["new episode"]);
+      expect(items[2]?.summary).toEqual(titledReasoningSummary("new episode"));
       expect(items[3]?.aggregatedOutput).toBe("new episode");
       expect(items[4]?.text).toBe("ed notification");
     } finally {
@@ -833,7 +839,7 @@ describe("Host runtime idle background output on a completed Turn", () => {
       }
       const items = await readHistoryItems(fixture, threadId, 3);
       expect(items.filter((item) => item.type === "reasoning").map((item) => item.summary)).toEqual(
-        [["analysis: tail"], ["il again"]],
+        [titledReasoningSummary("analysis: tail"), titledReasoningSummary("il again")],
       );
       expect(
         items.find((item) => item.command === REASONING_TRANSCRIPT_COMMAND)?.aggregatedOutput,
@@ -885,7 +891,7 @@ describe("Host runtime idle background output on a completed Turn", () => {
       }
       const items = await readHistoryItems(fixture, threadId, 5);
       expect(items.filter((item) => item.type === "reasoning").map((item) => item.summary)).toEqual(
-        [["part-1"], ["part-2"]],
+        [titledReasoningSummary("part-1"), titledReasoningSummary("part-2")],
       );
       expect(items.some((item) => String(item.id).startsWith("live-reasoning"))).toBe(false);
     } finally {

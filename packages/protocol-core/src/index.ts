@@ -21,6 +21,7 @@ export {
   historicalPlanUpdate,
   projectHistoricalTurn,
 } from "./codex-ui-projector.js";
+export { reasoningSummaryParts } from "./reasoning-summary-parts.js";
 export type {
   CodexApprovalProjection,
   CodexQuestionProjection,

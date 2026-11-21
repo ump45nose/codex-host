@@ -336,6 +336,11 @@ export class ExternalThreadRuntime {
     thread.sessionUnavailable = true;
   }
 
+  /** The lifecycle owns one close per Session, so a release and an output failure share it. */
+  closeSession(session: HarnessSession): Promise<void> {
+    return this.#lifecycle.close(session);
+  }
+
   #idleForRestore(thread: ExternalThread): boolean {
     if (thread.running || thread.activeTurnId !== null) return false;
     if (thread.session.hasBackgroundWork?.()) return false;

@@ -392,6 +392,7 @@ import {
   jsonRpcRequestSchema,
   threadForkResult,
   threadRevertResult,
+  reasoningSummaryParts,
   threadRollbackResult,
   transportModelIdForHarness,
   type CodexApprovalProjection,
@@ -511,6 +512,22 @@ function backgroundItemText(item: JsonObject): string | null {
   return null;
 }
 
+/**
+ * The Reasoner previews a fork-formatted summary (`**Title**` paragraphs). Alignment
+ * compares the Harness' own text, which the parallel transcript Item retains.
+ */
+function reasoningTranscriptText(items: readonly JsonObject[], index: number): string | null {
+  const transcript = items[index + 1];
+  if (
+    transcript?.type === "commandExecution" &&
+    transcript.command === REASONING_TRANSCRIPT_COMMAND &&
+    typeof transcript.aggregatedOutput === "string"
+  ) {
+    return transcript.aggregatedOutput;
+  }
+  return null;
+}
+
 function longestSuffixPrefixOverlap(historical: string, live: string): number {
   for (let size = Math.min(historical.length, live.length); size > 0; size -= 1) {
     if (historical.endsWith(live.slice(0, size))) return size;
@@ -531,22 +548,17 @@ function appendBackgroundText(
 ): void {
   const item = items[index];
   if (!item) return;
+  const merged = text + suffix;
   if (item.type !== "reasoning") {
-    items[index] = { ...item, text: text + suffix };
+    items[index] = { ...item, text: merged };
     return;
   }
-  const summary = Array.isArray(item.summary) ? item.summary : [];
-  const last = summary.at(-1);
-  items[index] = {
-    ...item,
-    summary:
-      typeof last === "string" ? [...summary.slice(0, -1), last + suffix] : [...summary, suffix],
-  };
+  // Re-derive the preview from the merged Harness text so the title formatting and
+  // the transcript twin keep agreeing with what history projects for this Item.
+  items[index] = { ...item, summary: reasoningSummaryParts(merged, true) };
   const transcript = items[index + 1];
   if (transcript?.command === REASONING_TRANSCRIPT_COMMAND) {
-    const output =
-      typeof transcript.aggregatedOutput === "string" ? transcript.aggregatedOutput : text;
-    items[index + 1] = { ...transcript, aggregatedOutput: output + suffix };
+    items[index + 1] = { ...transcript, aggregatedOutput: merged };
   }
 }
 
@@ -565,7 +577,12 @@ function backgroundTextCandidates(
     const item = items[index];
     if (item?.type === "commandExecution" && item.command === REASONING_TRANSCRIPT_COMMAND)
       continue;
-    const itemText = item && item.type === type ? backgroundItemText(item) : null;
+    const itemText =
+      item && item.type === type
+        ? type === "reasoning"
+          ? (reasoningTranscriptText(items, index) ?? backgroundItemText(item))
+          : backgroundItemText(item)
+        : null;
     if (itemText !== null) run.push({ index, text: itemText, start: 0 });
   }
   if (run.length === 0) return null;
@@ -587,13 +604,11 @@ function alignBackgroundTextRun(
   type: string,
   liveText: string,
   consumedEnd: number,
-  foregroundItems: readonly JsonObject[],
+  foregroundText: string,
   allowPartialTail: boolean,
 ): number | null {
   const run = backgroundTextCandidates(items, historicalCount, type);
   if (!run) return null;
-  const foregroundRun = backgroundTextCandidates(foregroundItems, foregroundItems.length, type);
-  const foregroundText = foregroundRun?.text ?? "";
   if (!run.text.startsWith(foregroundText)) return null;
   const searchStart = Math.max(consumedEnd, foregroundText.length);
   const exactStart = run.text.indexOf(liveText, searchStart);
@@ -6044,9 +6059,20 @@ export class AppServerHost {
     });
     const historicalCount = items.length;
     const consumedEnd = new Map<string, number>();
+    // Alignment compares Harness text: Reasoning previews are rewritten into titled
+    // summary parts, so the wire Items cannot stand in for the text they project.
+    const harnessText = (item: JsonObject, kind: string): string | null =>
+      kind === "reasoning"
+        ? (projector.harnessText(item.id as HostItemId) ?? backgroundItemText(item))
+        : backgroundItemText(item);
     const foregroundItems = [...foreground.values()];
+    const foregroundText = (kind: string): string =>
+      foregroundItems
+        .filter((item) => item.type === kind)
+        .map((item) => harnessText(item, kind) ?? "")
+        .join("");
     for (const [index, live] of liveItems.entries()) {
-      const liveText = backgroundItemText(live);
+      const liveText = typeof live.type === "string" ? harnessText(live, live.type) : null;
       if (liveText === null || typeof live.type !== "string") {
         items.push(live);
         continue;
@@ -6057,7 +6083,7 @@ export class AppServerHost {
         live.type,
         liveText,
         consumedEnd.get(live.type) ?? 0,
-        foregroundItems,
+        foregroundText(live.type),
         index === liveItems.length - 1 && items.length === historicalCount,
       );
       if (aligned === null) {
@@ -6934,6 +6960,7 @@ export class AppServerHost {
         error,
         (output) => this.#projectHarnessOutput(thread, output),
         (failure) => this.#diagnose(failure),
+        (session) => this.#externalRuntime.closeSession(session),
       );
     } finally {
       this.#externalSteering.fault(
@@ -6956,6 +6983,7 @@ export class AppServerHost {
           new Error("External Harness output ended before the active Turn settled"),
           (output) => this.#projectHarnessOutput(thread, output),
           (failure) => this.#diagnose(failure),
+          (session) => this.#externalRuntime.closeSession(session),
         );
         // Completed Turn projections can remain for late background output;
         // only active work should prevent the final status cleanup.

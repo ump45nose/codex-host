@@ -690,13 +690,16 @@ function projectItem(
   }
 }
 
+/** Reasoning preview wire ids carry this suffix; the transcript twin keeps the host id. */
+const PREVIEW_SUFFIX = "-summary";
+
 /**
  * Codex only renders a Command Execution card for the Item id it was given by
  * the Host, so the transcript twin keeps the original id and the ephemeral
  * native Reasoning preview takes the derived one.
  */
 export function reasoningPreviewItemId(itemId: HostItemId): string {
-  return `${itemId}-summary`;
+  return `${itemId}${PREVIEW_SUFFIX}`;
 }
 
 function reasoningDisplayText(text: string): string {
@@ -975,6 +978,23 @@ export class CodexTurnProjector {
       if (projected) items.set(itemId, this.#projectItem(projected.item, projected.outcome));
     }
     return items;
+  }
+
+  /**
+   * Harness text of a projected Item before the preview formatting. History
+   * alignment compares this text, so titled Reasoning summaries cannot make the
+   * same Harness output look like a different Item.
+   */
+  harnessText(itemId: HostItemId): string | null {
+    const item =
+      this.#items.get(itemId)?.item ??
+      (itemId.endsWith(PREVIEW_SUFFIX)
+        ? this.#items.get(itemId.slice(0, -PREVIEW_SUFFIX.length) as HostItemId)?.item
+        : undefined);
+    if (!item) return null;
+    if (item.type === "agentMessage") return item.text;
+    if (item.type === "reasoning") return reasoningDisplayText(item.text);
+    return null;
   }
 
   foregroundWireItems(): ReadonlyMap<HostItemId, JsonObject> {

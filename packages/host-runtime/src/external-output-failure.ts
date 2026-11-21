@@ -7,6 +7,7 @@ export async function settleExternalOutputFailure(
   error: unknown,
   project: (output: HarnessOutput) => Promise<void>,
   diagnose: (error: unknown) => void,
+  close: (session: ExternalThread["session"]) => Promise<void>,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   thread.sessionUnavailable = true;
@@ -14,7 +15,9 @@ export async function settleExternalOutputFailure(
   // Stop native work before allowing the Host Turn to leave its running state.
   // Outputs emitted by close belong to the broken stream and are not projected.
   try {
-    await thread.session.close();
+    // The owner caches the close, so an idle release that already closed this Session
+    // is awaited here instead of closing it a second time.
+    await close(thread.session);
   } catch (closeError) {
     diagnose(closeError);
   }

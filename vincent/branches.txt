@@ -37,4 +37,4 @@ thin/shared-thread-pin # PR #989 (list cache invalidation); shared beforeThreadI
 fix/agy-acp-wakeup-and-watch-delivery # PR #974 (busy watch delivery) + PR #975 (no session/close); autonomous-turn part waits on upstream issue #991
 thin/shim-local-host-relaunch # upstream 82c1da2f3 (on upstream main after v0.22.0): keep the App server host utility on the Host Runtime
 fix/desktop-mcp-session-reap-v0.22 # PR #981: reap browser MCP sessions abandoned without DELETE
-fix/macos-descriptor-mode # no upstream PR yet: create desktop-runtime-v1.json with mode 0600 on macOS
+fix/macos-descriptor-mode # PR #1004: create desktop-runtime-v1.json with mode 0600 on macOS

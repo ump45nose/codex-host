@@ -1,21 +1,21 @@
 # Feature branches merged onto each upstream release by scripts/vincent-release.sh.
-# Format: <fork branch or full commit SHA>   # upstream PR / plugin-bound / Bot-bound / fork infrastructure; base
+# Format: <fork branch or full commit SHA>   # upstream PR / plugin-bound / fork infrastructure; base
 # Each line holds only its own change, cut from upstream v0.22.0 or from the one branch named as its base.
-# Delete a line when upstream releases its PR; plugin- and Bot-bound lines go when their replacements pass acceptance.
+# Delete a line when upstream releases its PR; plugin-bound lines go when their replacements pass acceptance.
 thin/sidebar-archive-thread-children # stays until upstream #947 (own #709/#717 closed): nest child Threads in the sidebar, archive children with parent
 thin/sidebar-sticky-mirrors # stays until upstream #947; base thin/sidebar-archive-thread-children: keep sidebar mirrors when Recents collapses
 thin/sidebar-pinned-child # stays until upstream #947; base thin/sidebar-sticky-mirrors: keep and deduplicate pinned child Threads
 thin/sidebar-stash # plugin-bound; base thin/sidebar-archive-thread-children (shared Sidebar settings group): sidebar stash (收纳箱)
 thin/remote-client-access # PR #785: scoped remote clients, tailnet/Funnel, OAuth, webhook delivery, console page
-thin/nas-bot-integration # Bot-bound; base thin/remote-client-access (its webhook reconfigure fix is also in PR #785): NAS Bot entry, receipts, multi-device delegation
 thin/thread-watch-stall # PR #783: notify watched Threads when Harness activity stalls
-thin/remote-client-hardening # PR #785; base thin/remote-client-access: OAuth, Funnel teardown, webhook delivery, cross-process locks
+thin/remote-client-hardening # PR #785; base thin/remote-client-access: OAuth, Funnel teardown, webhook delivery (keeps pending events across reconfigure), cross-process locks
 thin/delegation-capacity # PR #784; base thin/thread-watch-stall: queue top-level delegations beyond a local running limit
 thin/delegation-capacity-hardening # PR #784; base thin/delegation-capacity: release claims on rewrite failure, route settings, serialize adoption
 thin/local-design-preview # fork infrastructure (own #728 closed; removed at the switch to official): codexhost preview in the built-in browser
 thin/local-preview-npm-forwarding # fork infrastructure; base thin/local-design-preview: forward the preview command in the npm wrapper
 thin/cursor-side-chat-edit # PR #576: revert External Threads to earlier native Fork Checkpoints
 thin/cursor-fast-selection # PR #782: Cursor native Fast models and live selection confirmation
+thin/delegation-inspect-fast-models # PR #986 (merged upstream after v0.23.0): list Fast model variants in delegation inspect output
 thin/independent-native-provider-quota # PR #470: custom provider inference independent of Codex quota (fork copy keeps the continuation UI dropped from the narrowed PR)
 thin/macos-nested-codex-cli # PR #396: discover the official CLI across nested macOS Desktop bundles
 thin/project-picker-default-dir # plugin-bound: default project picker directory to ~/Developer/Repos/Personal
@@ -25,7 +25,6 @@ thin/delegation-catalog-parent # PR #970: route a shared parent Thread to the Ha
 thin/windows-socket-lock-rename # PR #971: retry replacing the remote socket lock record on Windows
 thin/settings-hide-desktop-envs # PR #972: keep Desktop-internal environments out of the connection list
 thin/settle-turns-after-session-fault # PR #969 (fork copy predates the PR's review changes): settle open Turns when a Session faults
-thin/bot-model-selection # Bot-bound (its delegate inspect Fast-model part is PR #986); base thin/nas-bot-integration: Bot model and thinking selection
 thin/shared-host-single-lock-and-resume # PR #987 (item-anchor cursor); the replay-after-resume part is fork-only until a Desktop repro shows it is needed
 thin/vertical-screen-ux-overhaul # plugin-bound; base thin/sidebar-stash: vertical-screen sidebar overlay, top tabs (with stash entry), Pet avatar view
 thin/external-thread-turn-recency # PR #973: advance External Thread updatedAt when a Turn starts or ends

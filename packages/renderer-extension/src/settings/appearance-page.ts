@@ -3,12 +3,6 @@ import {
   readReasoningTranscriptSoftWrap,
   setReasoningTranscriptSoftWrap,
 } from "../renderer-transcript-dom.js";
-import {
-  isArchiveChildrenMode,
-  readArchiveChildrenMode,
-  setArchiveChildrenMode,
-  subscribeArchiveChildrenMode,
-} from "../renderer-archive-children-preference.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
 import { mountDelegationCapacityControls } from "./delegation-capacity-controls.js";
@@ -17,7 +11,6 @@ import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import {
   createPreferenceGroup,
   createPreferenceItem,
-  createPreferenceSelect,
   createPreferenceSwitch,
   preferenceId,
 } from "./preference-ui.js";
@@ -61,35 +54,7 @@ export function createAppearanceSettingsPage(
       row.item.append(toggle);
       card.append(row.item);
 
-      const sidebar = createPreferenceGroup(document, messages.sidebarGroup);
-      const archiveChildrenId = preferenceId("archive-children");
-      const archiveChildrenRow = createPreferenceItem(document, {
-        title: messages.archiveChildrenTitle,
-        description: messages.archiveChildrenDescription,
-        controlId: archiveChildrenId,
-      });
-      const archiveChildren = createPreferenceSelect(document, {
-        id: archiveChildrenId,
-        describedBy: archiveChildrenRow.description.id,
-        options: [
-          { value: "ask", label: messages.archiveChildrenAsk },
-          { value: "always", label: messages.archiveChildrenAlways },
-          { value: "never", label: messages.archiveChildrenNever },
-        ],
-      });
-      archiveChildren.value = readArchiveChildrenMode(ownerWindow);
-      archiveChildren.addEventListener("change", () => {
-        if (isArchiveChildrenMode(archiveChildren.value)) {
-          setArchiveChildrenMode(ownerWindow, archiveChildren.value);
-        }
-      });
-      const disposeArchiveChildren = subscribeArchiveChildrenMode(ownerWindow, () => {
-        archiveChildren.value = readArchiveChildrenMode(ownerWindow);
-      });
-      archiveChildrenRow.item.append(archiveChildren);
-      sidebar.card.append(archiveChildrenRow.item);
-
-      context.content.append(heading, description, group, sidebar.group);
+      context.content.append(heading, description, group);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
         messages,
@@ -98,7 +63,6 @@ export function createAppearanceSettingsPage(
       const disposeDelegationCapacity = mountDelegationCapacityControls(context, messages);
       return () => {
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
-        disposeArchiveChildren();
         disposeIdleRelease();
         disposeDelegationCapacity();
       };

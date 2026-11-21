@@ -34,8 +34,6 @@
 | [`architecture/delegation-thread-list.md`](architecture/delegation-thread-list.md) | 委派 CLI 列表的共享 catalog、独立来源分页、查询绑定与活列表一致性边界。 |
 | [`architecture/desktop-ui-extensions.md`](architecture/desktop-ui-extensions.md) | Desktop 界面扩展：市场与包管理、manifest、API v1、侧栏槽位、回收与兜底。 |
 | [`architecture/web-thread-tree.md`](architecture/web-thread-tree.md) | Web 侧栏会话树：委派关系决定的显示父 Thread、Host 树接口、祖先补齐、归档级联、排序与置顶规则；修改侧栏层级或委派显示时阅读。 |
-| [`architecture/sidebar-thread-tree.md`](architecture/sidebar-thread-tree.md) | 侧边栏按委派和 Fork 关系缩进父子 Thread 的数据来源、Renderer 绑定与边界。 |
-| [`architecture/sidebar-archive-children.md`](architecture/sidebar-archive-children.md) | 归档父 Thread 时询问或按设置归档其委派和 Fork 子 Thread 的交互、实现与边界。 |
 | [`architecture/thread-watch.md`](architecture/thread-watch.md) | Thread 停下、等待回答及可选卡住提醒的模型、结果和送达边界。 |
 | [`architecture/external-clients.md`](architecture/external-clients.md) | 同用户 CLI 自动认证、命名客户端登记、本机监听、Thread 引用、调试导出、事件日志与 MCP；修改外部接入时阅读。 |
 | [`architecture/delegation-questions.md`](architecture/delegation-questions.md) | 委派问题（`pendingQuestions`/`thread answer`）的来源、唯一状态、回答与失效语义；修改子 Agent 提问交互时阅读。 |

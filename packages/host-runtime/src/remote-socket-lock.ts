@@ -223,24 +223,7 @@ async function writeLockRecordAtomic(
     await handle.close();
   }
   try {
-    // Windows readers can briefly deny replacing the published register.
-    // Retry the same complete record without removing the current register.
-    const retryDelays = [10, 30, 70, 150, 300];
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rename(temporary, entryPath);
-        break;
-      } catch (error) {
-        const retryDelay = retryDelays[attempt];
-        if (
-          process.platform !== "win32" ||
-          retryDelay === undefined ||
-          !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")
-        )
-          throw error;
-        await delay(retryDelay);
-      }
-    }
+    await rename(temporary, entryPath);
   } finally {
     await rm(temporary, { force: true });
   }

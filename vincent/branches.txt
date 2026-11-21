@@ -2,9 +2,6 @@
 # Format: <fork branch or full commit SHA>   # upstream PR / fork infrastructure; base
 # Each line holds only its own change, cut from upstream v0.22.0 or from the one branch named as its base.
 # Delete a line when upstream releases its PR.
-thin/sidebar-archive-thread-children # stays until upstream #947 (own #709/#717 closed): nest child Threads in the sidebar, archive children with parent
-thin/sidebar-sticky-mirrors # stays until upstream #947; base thin/sidebar-archive-thread-children: keep sidebar mirrors when Recents collapses
-thin/sidebar-pinned-child # stays until upstream #947; base thin/sidebar-sticky-mirrors: keep and deduplicate pinned child Threads
 thin/remote-client-access # PR #785: scoped remote clients, tailnet/Funnel, OAuth, webhook delivery, console page
 thin/thread-watch-stall # PR #783: notify watched Threads when Harness activity stalls
 thin/remote-client-hardening # PR #785; base thin/remote-client-access: OAuth, Funnel teardown, webhook delivery (keeps pending events across reconfigure), cross-process locks
@@ -19,7 +16,6 @@ thin/independent-native-provider-quota # PR #470: custom provider inference inde
 thin/macos-nested-codex-cli # PR #396: discover the official CLI across nested macOS Desktop bundles
 thin/fork-release-channel # fork infrastructure: update checks and npm meta package against ump45nose/codex-host releases
 thin/delegation-catalog-parent # PR #970: route a shared parent Thread to the Harness catalog
-thin/windows-socket-lock-rename # PR #971: retry replacing the remote socket lock record on Windows
 thin/settings-hide-desktop-envs # PR #972: keep Desktop-internal environments out of the connection list
 thin/settle-turns-after-session-fault # PR #969 (fork copy predates the PR's review changes): settle open Turns when a Session faults
 thin/shared-host-single-lock-and-resume # PR #987 (item-anchor cursor); the replay-after-resume part is fork-only until a Desktop repro shows it is needed
@@ -30,6 +26,5 @@ thin/shared-archived-thread-revival # PR #988: hide local copies of Threads the 
 thin/codexhost-partial-swap # fork infrastructure: vincent-release.sh deploy/patch/audit
 thin/shared-thread-pin # PR #989 (list cache invalidation); shared beforeThreadId routing and downstream placement merge are fork-only
 fix/agy-acp-wakeup-and-watch-delivery # PR #974 (busy watch delivery) + PR #975 (no session/close); autonomous-turn part waits on upstream issue #991
-thin/shim-local-host-relaunch # upstream 82c1da2f3 (on upstream main after v0.22.0): keep the App server host utility on the Host Runtime
 fix/desktop-mcp-session-reap-v0.22 # PR #981: reap browser MCP sessions abandoned without DELETE
 fix/macos-descriptor-mode # PR #1004: create desktop-runtime-v1.json with mode 0600 on macOS

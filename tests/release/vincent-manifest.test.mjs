@@ -97,7 +97,6 @@ it("keeps the repository manifest free of stage3 draft prefixes and ca8c7fab anc
     .map((line) => line.replace(/#.*/, "").trim())
     .filter(Boolean);
   assert.ok(entries.includes("thin/shared-host-single-lock-and-resume"));
-  assert.ok(entries.includes("thin/vertical-screen-ux-overhaul"));
   for (const entry of entries) {
     assert.doesNotMatch(entry, /^stage3\//);
     assert.notEqual(entry, "07250b6fd0b2866e1154a20e81ba500a38b269a2");

@@ -544,7 +544,6 @@ describe("Renderer fixed Model request client", () => {
       "readDelegationThread",
       "readDesktopExtensionAsset",
       "readNativeThreadForkSource",
-      "readSidebarStashLegacyFile",
       "readUpdateStatus",
       "refreshCodexAccounts",
       "runtimeStatus",

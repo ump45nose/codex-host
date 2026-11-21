@@ -13,16 +13,11 @@ import {
   type RendererDraftPrewarmPolicyStatus,
 } from "./renderer-draft-prewarm-policy.js";
 
-import { syncMacOsOpenPanelDefaultDirectory } from "./macos-open-panel-default-dir.js";
 import {
   installRendererLoadedModules,
   type RendererModuleCdpClient,
 } from "./renderer-loaded-modules.js";
 import { installNativeRpcRemoteControlDirect } from "./renderer-native-rpc-install.js";
-import {
-  AVATAR_OVERLAY_STACK_PATCHED_EXPR,
-  installAvatarOverlayChunkPatch,
-} from "./avatar-overlay-chunk-patch.js";
 import { installRendererRpcSteeringDirect } from "./renderer-rpc-steering.js";
 import type { RendererDesktopExtensions } from "./renderer-desktop-extensions.js";
 
@@ -149,39 +144,6 @@ export function selectPrimaryRendererTarget(
   return candidates.find((target) => target.id === preferredTargetId) ?? candidates.at(0) ?? null;
 }
 
-export function isAvatarOverlayRendererUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "app:") return false;
-    if (url.pathname === "/avatar-overlay" || url.pathname.endsWith("/avatar-overlay.html"))
-      return true;
-    const rawRoute = url.searchParams.get("initialRoute") ?? "";
-    let decoded = rawRoute;
-    try {
-      decoded = decodeURIComponent(rawRoute);
-    } catch {}
-    return (
-      [rawRoute, decoded].some(
-        (r) =>
-          r === "/avatar-overlay" ||
-          r.startsWith("/avatar-overlay?") ||
-          r.startsWith("/avatar-overlay/"),
-      ) || url.searchParams.get("desktopSurface") === "avatarOverlay"
-    );
-  } catch {
-    return false;
-  }
-}
-
-export function selectAvatarOverlayRendererTargets(targets: readonly CdpTarget[]): CdpTarget[] {
-  return targets.filter(
-    (target) => target.type === "page" && isAvatarOverlayRendererUrl(target.url),
-  );
-}
-
-const AVATAR_OVERLAY_INSTALLED_EXPR =
-  'document.documentElement?.getAttribute("data-codexhost-avatar-overlay") === "true"';
-
 class RendererAdapterReadinessError extends Error {
   constructor(
     readonly state: string,
@@ -221,20 +183,20 @@ async function waitForPrimaryTarget(
   pollIntervalMs: number,
   preferredTargetId?: string,
   signal?: AbortSignal,
-): Promise<{ target: CdpTarget; targets: readonly CdpTarget[] }> {
+): Promise<CdpTarget> {
   const discovery = discoveryTimeoutSignal(timeoutMs, signal);
   let lastError: unknown;
   while (!discovery.aborted) {
     try {
-      const targets = await awaitWithSignal(
-        operations.listTargets(endpoint, discovery),
-        discovery,
-        "Renderer CDP target discovery timed out",
+      const target = selectPrimaryRendererTarget(
+        await awaitWithSignal(
+          operations.listTargets(endpoint, discovery),
+          discovery,
+          "Renderer CDP target discovery timed out",
+        ),
+        preferredTargetId,
       );
-      const target = selectPrimaryRendererTarget(targets, preferredTargetId);
-      if (target) {
-        return { target, targets };
-      }
+      if (target) return target;
       lastError = new Error("Renderer CDP has no primary app://-/index.html page target");
     } catch (error) {
       lastError = error;
@@ -362,9 +324,6 @@ async function installTarget(
 
 class InstalledRendererCdpControlSession implements RendererCdpControlSession {
   #closed = false;
-  readonly #overlayClients = new Map<string, RendererCdpClient>();
-  readonly #stackPatchReloadedTargets = new Set<string>();
-  #overlayPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private renderer: RendererCdpClient,
@@ -377,120 +336,21 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
     private currentSnapshot: RendererCdpControlSnapshot,
     private disposeModules: () => Promise<void> | undefined,
     private readonly extensions?: RendererDesktopExtensions,
-  ) {
-    this.#scheduleOverlayPoll();
-  }
+  ) {}
 
   get snapshot(): RendererCdpControlSnapshot {
     return this.currentSnapshot;
   }
 
-  #scheduleOverlayPoll(): void {
-    if (this.#closed || this.#overlayPollTimer) return;
-    this.#overlayPollTimer = setTimeout(
-      () => {
-        this.#overlayPollTimer = null;
-        void this.reconcileAvatarOverlays().finally(() => this.#scheduleOverlayPoll());
-      },
-      Math.max(this.pollIntervalMs, 250),
-    );
-    this.#overlayPollTimer.unref?.();
-  }
-
-  async reconcileAvatarOverlays(
-    knownTargets?: readonly CdpTarget[],
-    verifyExisting = false,
-  ): Promise<void> {
-    if (this.#closed) return;
-    const discovery = discoveryTimeoutSignal(Math.min(this.timeoutMs, 2_000));
-    const targets =
-      knownTargets ??
-      (await awaitWithSignal(
-        this.operations.listTargets(this.rendererCdpEndpoint, discovery),
-        discovery,
-        "Avatar overlay CDP target discovery timed out",
-      ).catch(() => null));
-    if (!targets || this.#closed) return;
-    const overlays = selectAvatarOverlayRendererTargets(targets);
-    const activeIds = new Set(overlays.map((item) => item.id));
-    for (const [targetId, client] of this.#overlayClients) {
-      if (!activeIds.has(targetId)) {
-        this.#overlayClients.delete(targetId);
-        client.close();
-      }
-    }
-    for (const overlay of overlays) {
-      if (this.#closed) return;
-      const existing = this.#overlayClients.get(overlay.id);
-      if (existing) {
-        if (!verifyExisting) continue;
-        try {
-          if (!(await existing.evaluate<boolean>(AVATAR_OVERLAY_INSTALLED_EXPR)))
-            await evaluateSource(existing, this.rendererSource);
-          continue;
-        } catch {
-          this.#overlayClients.delete(overlay.id);
-          existing.close();
-        }
-      }
-      let client: RendererCdpClient | null = null;
-      try {
-        client = await this.operations.connect(overlay.webSocketDebuggerUrl);
-        if (this.#closed) {
-          client.close();
-          return;
-        }
-        // Script registration and chunk interception belong to this CDP session, so both are
-        // set up on every connection; they only take effect on the next Pet load.
-        await client.command("Page.enable");
-        await client.command("Page.addScriptToEvaluateOnNewDocument", {
-          source: this.rendererSource,
-        });
-        await installAvatarOverlayChunkPatch(client);
-        if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_INSTALLED_EXPR)))
-          await evaluateSource(client, this.rendererSource);
-        this.#overlayClients.set(overlay.id, client);
-        if (!(await client.evaluate<boolean>(AVATAR_OVERLAY_STACK_PATCHED_EXPR)))
-          await this.#reloadAvatarOverlay(overlay.id, client);
-      } catch {
-        client?.close();
-      }
-    }
-  }
-
-  /** Applies the stack height patch to a Pet that loaded before this session attached. Once per
-   * target, so an incompatible Codex build is not reloaded again. A Pet that was showing is
-   * reopened, since Codex keeps a reloaded Pet hidden. */
-  async #reloadAvatarOverlay(targetId: string, client: RendererCdpClient): Promise<void> {
-    if (this.#stackPatchReloadedTargets.has(targetId)) return;
-    this.#stackPatchReloadedTargets.add(targetId);
-    const wasVisible = await client.evaluate<boolean>("document.visibilityState === 'visible'");
-    await client.command("Page.reload");
-    if (!wasVisible) return;
-    for (let attempt = 0; attempt < 10 && !this.#closed; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-      if (
-        await client.evaluate<boolean>("document.visibilityState === 'visible'").catch(() => true)
-      )
-        return;
-      await this.renderer
-        .evaluate(
-          "void window.electronBridge?.sendMessageFromView?.({ type: 'avatar-overlay-open' })",
-        )
-        .catch(() => undefined);
-    }
-  }
-
   async ensureInstalled(): Promise<RendererCdpControlSnapshot> {
     if (this.#closed) throw new Error("Renderer CDP Control Session is closed");
-    const { target, targets } = await waitForPrimaryTarget(
+    const target = await waitForPrimaryTarget(
       this.rendererCdpEndpoint,
       this.operations,
       this.timeoutMs,
       this.pollIntervalMs,
       this.currentSnapshot.target.id,
     );
-    await this.reconcileAvatarOverlays(targets, true);
     if (target.id === this.currentSnapshot.target.id) {
       try {
         const existing = await readBinding(this.renderer);
@@ -555,9 +415,6 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
-    if (this.#overlayPollTimer) clearTimeout(this.#overlayPollTimer);
-    for (const client of this.#overlayClients.values()) client.close();
-    this.#overlayClients.clear();
     const renderer = this.renderer;
     const detached = this.disposeModules();
     if (detached)
@@ -576,7 +433,6 @@ const defaultOperations: RendererCdpControlOperations = {
     const status = await installRendererDraftPrewarmPolicyDirect(renderer);
     await installNativeRpcRemoteControlDirect(renderer);
     await installRendererRpcSteeringDirect(renderer);
-    await syncMacOsOpenPanelDefaultDirectory(renderer);
     return status;
   },
 };
@@ -588,7 +444,7 @@ export async function createRendererCdpControlSession(
   const timeoutMs = options.timeoutMs ?? 30_000;
   const pollIntervalMs = options.pollIntervalMs ?? 250;
   const operations = options.operations ?? defaultOperations;
-  const { target, targets } = await waitForPrimaryTarget(
+  const target = await waitForPrimaryTarget(
     options.rendererCdpEndpoint,
     operations,
     timeoutMs,
@@ -605,7 +461,7 @@ export async function createRendererCdpControlSession(
     operations,
     options.desktopExtensions,
   );
-  const session = new InstalledRendererCdpControlSession(
+  return new InstalledRendererCdpControlSession(
     installed.renderer,
     options.rendererCdpEndpoint,
     options.rendererSource,
@@ -617,8 +473,6 @@ export async function createRendererCdpControlSession(
     installed.disposeModules,
     options.desktopExtensions,
   );
-  await session.reconcileAvatarOverlays(targets);
-  return session;
 }
 
 export function installRendererCdpControlSession(

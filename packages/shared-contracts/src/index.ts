@@ -461,14 +461,12 @@ export {
   type WebUiExtensionMeta,
   type WebUiExtensionsState,
 } from "./web-ui-extensions.js";
-export * from "./sidebar-stash.js";
 export {
   remoteSessionOperationSchema,
   remoteSessionRequestBytes,
   REMOTE_CONTROLLER_REQUEST_MAX_BYTES,
   type RemoteSessionOperation,
 } from "./remote-sessions.js";
-export * from "./sidebar-stash.js";
 
 export {
   encodeOfficialCodexModelRef,

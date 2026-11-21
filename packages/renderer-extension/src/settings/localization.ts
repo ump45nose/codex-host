@@ -99,16 +99,6 @@ export interface RendererSettingsMessages {
   readonly archiveChildrenAsk: string;
   readonly archiveChildrenAlways: string;
   readonly archiveChildrenNever: string;
-  readonly sidebarStashTitle: string;
-  readonly sidebarStashDescription: string;
-  readonly sidebarAutoCollapseTitle: string;
-  readonly sidebarAutoCollapseDescription: string;
-  readonly topTabsTitle: string;
-  readonly topTabsDescription: string;
-  readonly topTabsTwoRowsTitle: string;
-  readonly topTabsTwoRowsDescription: string;
-  readonly petsStackMaxHeightTitle: string;
-  readonly petsStackMaxHeightDescription: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -405,21 +395,6 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   archiveChildrenAsk: "Ask every time",
   archiveChildrenAlways: "Always archive child threads",
   archiveChildrenNever: "Never archive child threads",
-  sidebarStashTitle: "Stash (收纳箱)",
-  sidebarStashDescription:
-    "Pin a Stash section under Pinned. Stashed threads sort by due date, show a Due badge, and leave the stash when you send a message. Shortcuts: ⌘⇧H stash/unstash, ⌘⇧D resume date, ⌘⇧J open first due item.",
-  sidebarAutoCollapseTitle: "Auto-collapse left sidebar on narrow screens",
-  sidebarAutoCollapseDescription:
-    "Collapse the sidebar once when entering < 1080px, keeping the native 57px rail and left-edge drawer; manual expansion stays docked.",
-  topTabsTitle: "Top active session strip",
-  topTabsDescription:
-    "Show only running, waiting, and unread sessions at the top of the page surface; viewed sessions exit smoothly upon leaving.",
-  topTabsTwoRowsTitle: "Two rows of session tabs",
-  topTabsTwoRowsDescription:
-    "Show up to ten tabs in two rows of five; turn off for a single row. Remaining sessions open from the +N button.",
-  petsStackMaxHeightTitle: "Pet session stack max height",
-  petsStackMaxHeightDescription:
-    "Height of the expanded session stack next to the Pet, so more sessions show at once. Capped to fit the screen.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -760,19 +735,6 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   archiveChildrenAsk: "每次询问",
   archiveChildrenAlways: "总是归档子会话",
   archiveChildrenNever: "从不归档子会话",
-  sidebarStashTitle: "收纳箱",
-  sidebarStashDescription:
-    "在置顶下方显示收纳箱。按恢复日期排序，到期显示徽标；发送消息后自动移出。快捷键：⌘⇧H 收纳/移出，⌘⇧D 设置恢复日期，⌘⇧J 打开首个到期会话。",
-  sidebarAutoCollapseTitle: "窄屏自动收起左边栏",
-  sidebarAutoCollapseDescription:
-    "跨入 < 1080px 时触发一次原生收起，保留 57px 侧轨与左缘抽屉；窄屏下手动展开后保持常驻。",
-  topTabsTitle: "顶部活动会话条",
-  topTabsDescription: "在主内容区顶部仅展示运行中、待确认与未读会话；读完离开平滑退场。",
-  topTabsTwoRowsTitle: "会话标签双排显示",
-  topTabsTwoRowsDescription: "每排 5 个，最多两排；关闭后只显示一排。其余会话从 +N 按钮展开。",
-  petsStackMaxHeightTitle: "Pet 会话栈最大高度",
-  petsStackMaxHeightDescription:
-    "Pet 旁会话栈展开后的高度，越高同时显示的会话越多；超出屏幕时自动收窄。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

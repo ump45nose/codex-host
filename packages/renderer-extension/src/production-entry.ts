@@ -1,10 +1,5 @@
 import "./renderer-schema-config.js";
 import { installRendererBinding } from "./install-renderer-binding.js";
-import {
-  installPetsStackHeightHook,
-  installRendererAvatarOverlay,
-  isAvatarOverlayLocation,
-} from "./renderer-avatar-overlay.js";
 import { installRendererRpcSteering } from "./renderer-rpc-steering.js";
 import { installDesktopExtensionHost } from "./desktop-extension-host.js";
 
@@ -46,17 +41,8 @@ Object.defineProperty(window, "__codexhostInstallRpcSteeringV1", {
 });
 
 const install = (): void => {
-  if (isAvatarOverlayLocation(window.location)) {
-    (window as unknown as { __codexhostAvatarOverlayV1?: unknown }).__codexhostAvatarOverlayV1 =
-      installRendererAvatarOverlay({ document, window });
-    return;
-  }
   installRendererBinding();
 };
-
-// The Pet chunk reads its stack height as soon as it renders, before the DOM is ready for the
-// overlay itself.
-if (isAvatarOverlayLocation(window.location)) installPetsStackHeightHook(window);
 
 if (document.documentElement && document.body) {
   install();

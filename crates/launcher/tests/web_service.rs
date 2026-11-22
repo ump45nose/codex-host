@@ -5,7 +5,7 @@ mod windows_service;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -95,7 +95,7 @@ log('web-start');
 fs.writeFileSync(path.join(data, 'npm-entrypoint.json'), JSON.stringify({node: process.env.CODEXHOST_NPM_NODE_PATH, wrapper: process.env.CODEXHOST_NPM_LAUNCHER_PATH}));
 fs.appendFileSync(path.join(data, 'starts'), 'start\n');
 if (fs.existsSync(path.join(data, 'fail'))) {
-  console.error('first diagnostic' + 'x'.repeat(16384) + 'fixture port is occupied; use --port');
+  fs.writeSync(2, 'first diagnostic' + 'x'.repeat(16384) + 'fixture port is occupied; use --port\n');
   process.exit(1);
 }
 const ready = value('--ready-file');
@@ -185,7 +185,11 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port));
     }
 
     fn public_command(&self, action: &str) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_codexhost"));
+        self.public_command_at(Path::new(env!("CARGO_BIN_EXE_codexhost")), action)
+    }
+
+    fn public_command_at(&self, launcher: &Path, action: &str) -> Command {
+        let mut command = Command::new(launcher);
         command
             .env_clear()
             .env("PATH", env::var_os("PATH").unwrap())
@@ -757,8 +761,22 @@ fn missing_host_entry_reports_failure_but_still_stops_web_and_console() {
             .status
             .success()
     );
+    // The missing Host path has no sibling Console entrypoint. Supply the installed
+    // fallback within this fixture rather than relying on a built console in the checkout.
+    let launcher = fixture
+        .root
+        .join("bin")
+        .join(format!("codexhost{}", std::env::consts::EXE_SUFFIX));
+    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_codexhost"), &launcher).unwrap();
+    fs::create_dir_all(fixture.root.join("app")).unwrap();
+    fs::copy(
+        fixture.root.join("console-server.mjs"),
+        fixture.root.join("app/console-server.mjs"),
+    )
+    .unwrap();
     let result = fixture
-        .public_command("stop")
+        .public_command_at(&launcher, "stop")
         .arg("--host-runtime")
         .arg(fixture.root.join("missing-host.mjs"))
         .output()
@@ -954,6 +972,25 @@ fn owned_gui_activation(refuse_stop: bool) {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_service_start_explains_missing_home() {
+    let fixture = Fixture::new();
+    for service in ["host", "web-service"] {
+        let started = fixture
+            .command(service, "ensure")
+            .env_remove("HOME")
+            .output()
+            .unwrap();
+        assert!(!started.status.success());
+        let stderr = String::from_utf8_lossy(&started.stderr);
+        assert!(
+            stderr.contains("HOME must be set to an absolute path"),
+            "{service}: {stderr}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn service_supervisor_hands_off_once_and_can_retry_without_desktop() {
@@ -983,14 +1020,14 @@ fn service_supervisor_hands_off_once_and_can_retry_without_desktop() {
         .unwrap()
         .parse()
         .unwrap();
-    let state = PathBuf::from(
-        environment["CODEXHOST_RUNTIME_DESCRIPTOR_PATH"]
-            .as_str()
-            .unwrap(),
-    )
-    .parent()
-    .unwrap()
-    .join("updates");
+    // Stage the operation where the Host Runtime writes it, even when the
+    // Launcher stores the Desktop runtime descriptor in a different directory.
+    #[cfg(target_os = "linux")]
+    let state = fixture.root.join(".codexhost").join("updates");
+    #[cfg(target_os = "macos")]
+    let state = fixture
+        .root
+        .join("Library/Application Support/codexhost/updates");
     fs::create_dir_all(&state).unwrap();
     let deadline = || Instant::now() + Duration::from_secs(15);
     for attempt in 1..=2 {
@@ -1066,13 +1103,12 @@ setInterval(() => {{
         // A service handoff leaves Host online until the Updater stops it.
         assert!(fixture.root.join("shared-host-ready.json").exists());
         if attempt == 2 {
+            let stopped = fixture.command("host", "stop").output().unwrap();
             assert!(
-                fixture
-                    .command("host", "stop")
-                    .output()
-                    .unwrap()
-                    .status
-                    .success()
+                stopped.status.success(),
+                "host stop exited with {}: {}",
+                stopped.status,
+                String::from_utf8_lossy(&stopped.stderr)
             );
             assert!(
                 codexhost_platform::process_snapshot(updater).is_ok(),

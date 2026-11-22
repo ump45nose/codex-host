@@ -27,7 +27,10 @@ import {
 } from "../src/claude-code-adapter.js";
 import { ClaudeCodeExecutableError } from "../src/command.js";
 import { ClaudeUltracodeUnavailableError } from "../src/ultracode.js";
-import { CLAUDE_DEFAULT_MODEL_REF, encodeClaudeModelRef } from "../src/model-catalog.js";
+import {
+  CLAUDE_DEFAULT_MODEL_REF,
+  claudeModelRef as encodeClaudeModelRef,
+} from "../src/model-catalog.js";
 import {
   claudeBypassPermissionsAvailable,
   type ClaudePermissionMode,
@@ -1219,6 +1222,7 @@ describe("Claude Code HarnessAdapter", () => {
       },
       history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
       subagents: { observe: true, readTranscript: true },
+      persistentPlan: true,
       // No CLI has reported its init capabilities yet.
       steer: false,
     });
@@ -3576,6 +3580,71 @@ describe("Claude Code HarnessAdapter", () => {
           type: "toolExecution",
           toolName: "Todo",
           arguments: { todos: [{ id: "1", content: "Run tests", status: "in_progress" }] },
+        },
+      },
+    });
+
+    transport.finish({ status: "succeeded" });
+    await nextEvent(iterator);
+    await session.close();
+  });
+
+  it("continues a resumed Session's Claude task list from its history", async () => {
+    const { adapter, history, transports } = fixture();
+    const sourceRef = nativeSessionRefSchema.parse({
+      harnessId: "claude-code",
+      nativeSessionId: "tasks-session",
+      formatVersion: 1,
+    });
+    const record = (type: "user" | "assistant", uuid: string, content: unknown) => ({
+      type,
+      uuid,
+      session_id: "tasks-session",
+      message: { role: type, content },
+    });
+    history.push(
+      record("user", "user-1", "plan"),
+      record("assistant", "create", [
+        { type: "tool_use", id: "create-1", name: "TaskCreate", input: { subject: "Write code" } },
+      ]),
+      {
+        ...record("user", "create-result", [
+          { type: "tool_result", tool_use_id: "create-1", content: "Task #1 created" },
+        ]),
+        toolUseResult: { task: { id: "1", subject: "Write code" } },
+      },
+    );
+    const opened = await adapter.open({ kind: "resume", cwd: "/synthetic", nativeRef: sourceRef });
+    if (!opened.ok) throw new Error(opened.error.message);
+    const session = opened.value;
+    expect((await session.readSnapshot()).ok).toBe(true);
+
+    const iterator = session.outputs[Symbol.asyncIterator]();
+    await session.execute(textTurn("continue"));
+    await nextEvent(iterator);
+    await nextEvent(iterator);
+    await nextEvent(iterator);
+    const transport = transports[0];
+    if (!transport) throw new Error("Fake Claude transport was not created");
+    transport.event({
+      type: "tool.started",
+      callId: "update-1",
+      toolName: "TaskUpdate",
+      arguments: { taskId: "1", status: "in_progress" },
+    });
+    await nextEvent(iterator);
+    transport.event({
+      type: "tool.completed",
+      callId: "update-1",
+      toolName: "TaskUpdate",
+      isError: false,
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: "item.completed",
+      snapshot: {
+        item: {
+          toolName: "Todo",
+          arguments: { todos: [{ id: "1", content: "Write code", status: "in_progress" }] },
         },
       },
     });
@@ -6139,9 +6208,10 @@ describe("Claude Code HarnessAdapter", () => {
     await session.close();
   });
 
-  it("applies a create-time alias lazily and publishes the configured Model before the Turn", async () => {
+  it("applies a create-time Model lazily and publishes the exact native ID before the Turn", async () => {
     const { adapter, dependencies, transports } = fixture();
-    const selected = encodeClaudeModelRef("sonnet");
+    const id = " provider/模型 [1m] & (test) ";
+    const selected = encodeClaudeModelRef(id);
     const thinkingOptionId = harnessThinkingOptionIdSchema.parse("max");
     const opened = await adapter.open({
       kind: "create",
@@ -6157,7 +6227,7 @@ describe("Claude Code HarnessAdapter", () => {
     await expect(session.execute(textTurn("selected-first"))).resolves.toMatchObject({ ok: true });
     expect(dependencies.createTransport).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "sonnet",
+        model: id,
         openMode: "create",
         thinkingOptionId: "max",
       }),
@@ -6213,6 +6283,70 @@ describe("Claude Code HarnessAdapter", () => {
     await expect(resetting).resolves.toEqual({ ok: true, value: { completed: true } });
     expect(transport.setModel).toHaveBeenLastCalledWith(undefined, "auto");
     expect(transport.getContextUsage).toHaveBeenCalledTimes(contextReadsBeforeSelection);
+    await session.close();
+  });
+
+  it("resumes a stored Fable alias using the catalog Model and its Thinking options", async () => {
+    const { adapter, dependencies, transports } = fixture();
+    const cwd = "/synthetic";
+    const currentId = "claude-fable-5-1";
+    dependencies.createInspector = () => ({
+      close: async () => undefined,
+      inspect: async () => ({
+        canSelectModel: true,
+        canSelectPermissionMode: true,
+        models: [
+          {
+            value: currentId,
+            displayName: "Fable 5.1",
+            supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+            supportsThinkingOff: false,
+          },
+        ],
+      }),
+    });
+    const inspection = await adapter.inspect({ cwd });
+    if (inspection.status !== "ready" || !inspection.catalog) throw new Error("Missing catalog");
+    const model = adapter.normalizeStoredModelRef(
+      encodeClaudeModelRef("claude-model-v1.ZmFibGU"), // Base64url of the saved native ID `fable`.
+      inspection.catalog,
+    );
+    if (model?.id !== currentId) throw new Error("Stored Fable alias did not resolve");
+
+    const opened = await adapter.open({
+      kind: "resume",
+      cwd,
+      model,
+      nativeRef: nativeSessionRefSchema.parse({
+        harnessId: "claude-code",
+        nativeSessionId: "restored-fable-session",
+        formatVersion: 1,
+      }),
+    });
+    if (!opened.ok) throw new Error(opened.error.message);
+    const session = opened.value;
+    const events = session.outputs[Symbol.asyncIterator]();
+    await expect(
+      session.execute({
+        type: "thinking.select",
+        thinkingOptionId: harnessThinkingOptionIdSchema.parse("max"),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const optionIds = ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"];
+    await expect(nextEvent(events)).resolves.toMatchObject({
+      type: "session.state.changed",
+      state: {
+        effectiveModel: model,
+        effectiveThinkingOptionId: "max",
+        availableThinkingOptions: optionIds.map((id) => ({ id })),
+      },
+    });
+    await expect(session.execute(textTurn("restored-fable"))).resolves.toMatchObject({ ok: true });
+    expect(dependencies.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ openMode: "resume", model: currentId, thinkingOptionId: "max" }),
+    );
+    expect(transports[0]?.turns.map(({ text }) => text)).toEqual(["restored-fable"]);
+    transports[0]?.finish({ status: "succeeded" });
     await session.close();
   });
 
@@ -8333,7 +8467,25 @@ describe("Claude Code HarnessAdapter", () => {
     }
   });
 
-  it("retains a failed hard-cancel Transport and rejects reuse and confirmed close", async () => {
+  it("waits on the same native close after a Session close times out", async () => {
+    const { adapter, transports } = fixture({ closeTimeoutMs: 10 });
+    const session = await openSession(adapter);
+    await session.execute(textTurn("timed-out-close"));
+    const transport = transports[0];
+    if (!transport) throw new Error("Expected an active Transport");
+    const stopped = Promise.withResolvers<undefined>();
+    // An overlapping close would return success even though native cleanup is still pending.
+    transport.close.mockReturnValueOnce(stopped.promise).mockResolvedValue(undefined);
+    try {
+      await expect(session.close()).rejects.toThrow("could not stop safely");
+      await expect(session.close()).rejects.toThrow("could not stop safely");
+    } finally {
+      stopped.resolve(undefined);
+      await session.close();
+    }
+  });
+
+  it("retains a failed hard-cancel Transport and retries shutdown without allowing reuse", async () => {
     const { adapter, transports } = fixture({ cancelTimeoutMs: 10 });
     const session = await openSession(adapter);
     const events: HarnessOutput[] = [];
@@ -8353,6 +8505,16 @@ describe("Claude Code HarnessAdapter", () => {
     expect(
       events.some((output) => output.kind === "event" && output.event.type === "session.faulted"),
     ).toBe(true);
+
+    const rechecked = Promise.withResolvers<undefined>();
+    transport.close.mockReturnValue(rechecked.promise);
+    const confirmed = session.close();
+    expect(session.close()).toBe(confirmed);
+    await expect(session.execute(textTurn("still-unsafe"))).resolves.toMatchObject({ ok: false });
+    rechecked.resolve(undefined);
+    await expect(confirmed).resolves.toBeUndefined();
+    expect(session.close()).toBe(confirmed);
+    await expect(session.readSnapshot()).resolves.toMatchObject({ ok: false });
   });
 
   it("maps failed native results without faulting a reusable Session", async () => {

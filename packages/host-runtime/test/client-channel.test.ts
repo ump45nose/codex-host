@@ -1,18 +1,32 @@
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HostClientChannel,
   discoverHostClientChannel,
   type HostClientUpdate,
 } from "@codexhost/desktop-control";
-import type { ClientChannelEvent } from "@codexhost/shared-contracts";
+import {
+  THREAD_STEER_STRICT_TARGET_PARAM,
+  jsonObjectSchema,
+  type ClientChannelEvent,
+} from "@codexhost/shared-contracts";
 import { ClientChannelEvents } from "../src/client-channel-events.js";
+import { routeDelegationRequest } from "../src/delegation-control-server.js";
+import { DelegationControlRegistry } from "../src/delegation-control-registry.js";
 import { ClientCommandReceipts } from "../src/client-command-receipts.js";
 import { startClientChannelServer } from "../src/client-channel-server.js";
 import {
+  createOwnedConnectionBackend,
+  OfficialRuntimeScope,
+} from "../src/codex-runtime/official-runtime-scope.js";
+import type { OfficialAppServerExit } from "../src/official-app-server-connection.js";
+import {
   createFixture,
+  JsonLineCollector,
   startPiThread,
   startExternalThread,
   completePiTurn,
@@ -100,7 +114,9 @@ describe("public authenticated owner channel", () => {
     await fixture.host.handleConsoleRequest("codexhost/harness/inspect", {
       harnessId: "pi",
       refresh: true,
+      credentialAccess: "retry",
     });
+    expect(inspect).toHaveBeenLastCalledWith({ refresh: true, credentialAccess: "retry" });
     await vi.waitFor(() => expect(changes()).toHaveLength(2));
     expect(changes()).toEqual([
       expect.objectContaining({
@@ -110,6 +126,38 @@ describe("public authenticated owner channel", () => {
       expect.objectContaining({ harnessId: "pi" }),
     ]);
     expect(fixture.adapter.sessions).toHaveLength(0);
+  });
+
+  it("notifies Web clients when the CLI control route refreshes a project catalog", async () => {
+    const api = new DelegationControlRegistry();
+    const { fixture, events } = await setup({
+      onDelegationApi: (registration) => api.register(registration, { harnessCatalog: true }),
+    });
+    const inspect = vi.spyOn(fixture.adapter, "inspect");
+    const call = (refresh: boolean, credentialAccess?: "retry") =>
+      routeDelegationRequest({ api }, "/v1/harness/inspect", {
+        harnessId: "pi",
+        cwd: process.cwd(),
+        refresh,
+        ...(credentialAccess ? { credentialAccess } : {}),
+      });
+    const changes = () => events.filter((event) => event.type === "harness-inspection-changed");
+    await call(false);
+    expect(changes()).toHaveLength(0);
+    await call(true); // MCP also uses this route for a refresh, not for re-detect.
+    expect(inspect).toHaveBeenLastCalledWith({ cwd: process.cwd(), refresh: true });
+    await call(true, "retry");
+    expect(inspect).toHaveBeenLastCalledWith({
+      cwd: process.cwd(),
+      refresh: true,
+      credentialAccess: "retry",
+    });
+    await vi.waitFor(() =>
+      expect(changes()).toEqual([
+        expect.objectContaining({ harnessId: "pi" }),
+        expect.objectContaining({ harnessId: "pi" }),
+      ]),
+    );
   });
 
   it.each([false, true])(
@@ -150,6 +198,80 @@ describe("public authenticated owner channel", () => {
       );
     },
   );
+
+  it("broadcasts one Codex catalog invalidation when the replacement backend is ready", async () => {
+    const starting = Promise.withResolvers<undefined>();
+    const ready = Promise.withResolvers<undefined>();
+    let replace = false;
+    const scope = new OfficialRuntimeScope({
+      permanentHome: tmpdir(),
+      diagnosticOutput: new PassThrough(),
+      shouldReplaceIdleBackend: () => replace,
+      createBackend: () => {
+        const model = replace ? "updated-model" : "original-model";
+        replace = false;
+        return createOwnedConnectionBackend(async () => {
+          if (model === "updated-model") {
+            starting.resolve(undefined);
+            await ready.promise;
+          }
+          const stdin = new PassThrough();
+          const stdout = new PassThrough();
+          const stderr = new PassThrough();
+          const closed = Promise.withResolvers<OfficialAppServerExit>();
+          const requests = new JsonLineCollector(stdin);
+          stdin.on("data", () => {
+            for (const { id, method } of requests.messages.splice(0)) {
+              if (id === undefined) continue;
+              const result =
+                method === "initialize"
+                  ? { userAgent: "fixture" }
+                  : { data: method === "model/list" ? [{ model, isDefault: true }] : [] };
+              stdout.write(`${JSON.stringify({ id, result })}\n`);
+            }
+          });
+          return {
+            stdin,
+            stdout,
+            stderr,
+            closed: closed.promise,
+            close() {
+              stdin.end();
+              stdout.end();
+              stderr.end();
+              closed.resolve({ code: 0, signal: null });
+            },
+          };
+        });
+      },
+    });
+    cleanup.push(() => scope.close());
+    const { fixture, a, events } = await setup({ externalOnly: true, officialRuntimeScope: scope });
+    const journal = fixture.host.clientEvents;
+    const before = journal.cursor;
+    const inspect = () => a.request("codexhost/harness/inspect", { harnessId: "codex" });
+    await expect(inspect()).resolves.toMatchObject({
+      catalog: { models: [expect.objectContaining({ label: "original-model" })] },
+    });
+    expect(journal.cursor).toEqual(before);
+
+    replace = true;
+    const refreshed = inspect();
+    await starting.promise;
+    const whileStarting = journal.cursor;
+    ready.resolve(undefined);
+    await expect(refreshed).resolves.toMatchObject({
+      catalog: { models: [expect.objectContaining({ label: "updated-model" })] },
+    });
+    expect(whileStarting).toEqual(before);
+    await inspect();
+    await vi.waitFor(() =>
+      expect(events.filter((event) => event.type === "harness-inspection-changed")).toEqual([
+        expect.objectContaining({ harnessId: "codex" }),
+      ]),
+    );
+    expect(journal.cursor.sequence).toBe(before.sequence + 1);
+  });
 
   it("forwards the GUI's paginated Revert with canonical identities and notifies both clients", async () => {
     const adapter = rollbackCapableAdapter();
@@ -225,12 +347,14 @@ describe("public authenticated owner channel", () => {
   });
   it("shares durable preferences between Desktop and Web without creating Harness sessions", async () => {
     const { fixture, a, b, events } = await setup();
+    const model = fixture.adapter.catalog.defaultModel;
+    assert(model, "Expected a default Model in the fake catalog");
     const patchMethod = "codexhost/harness/preferences/patch";
     const getMethod = "codexhost/harness/preferences/get";
     writeRequest(fixture.desktopInput, {
       id: 700,
       method: patchMethod,
-      params: {
+      params: jsonObjectSchema.parse({
         scope: "external",
         operations: [
           { kind: "idleRelease", value: { enabled: true, timeoutMinutes: 20 } },
@@ -238,10 +362,10 @@ describe("public authenticated owner channel", () => {
             kind: "newThread",
             lastHarness: "pi",
             harnessId: "pi",
-            configuration: { model: { id: "native" } },
+            configuration: { model },
           },
         ],
-      },
+      }),
     });
     await fixture.collector.waitFor((message) => message.id === 700);
     await vi.waitFor(() =>
@@ -250,15 +374,15 @@ describe("public authenticated owner channel", () => {
     expect(await a.request(getMethod, {})).toMatchObject({
       values: {
         idleRelease: { enabled: true, timeoutMinutes: 20 },
-        newThread: { lastHarness: "pi" },
+        newThread: { lastHarness: "pi", byHarness: { pi: { model } } },
       },
     });
     await b.request(patchMethod, {
-      operations: [{ kind: "favorite", harnessId: "pi", modelId: "native", enabled: true }],
+      operations: [{ kind: "favorite", harnessId: "pi", modelId: model.id, enabled: true }],
     });
     writeRequest(fixture.desktopInput, { id: 701, method: getMethod, params: {} });
     expect(await fixture.collector.waitFor((message) => message.id === 701)).toMatchObject({
-      result: { values: { favorites: { pi: ["native"] } } },
+      result: { values: { favorites: { pi: [model.id] } } },
     });
     expect(
       JSON.parse(
@@ -267,16 +391,29 @@ describe("public authenticated owner channel", () => {
           "utf8",
         ),
       ).scopes.external.favorites.pi,
-    ).toEqual(["native"]);
+    ).toEqual([model.id]);
+    const codexDefault = { newThread: { byHarness: { codex: { model: { id: "gpt" } } } } };
     await expect(
       a.request(patchMethod, {
         operations: [
           { kind: "newThread", harnessId: "codex", configuration: { model: { id: "gpt" } } },
         ],
       }),
-    ).resolves.toMatchObject({
-      values: { newThread: { byHarness: { codex: { model: { id: "gpt" } } } } },
-    });
+    ).resolves.toMatchObject({ values: codexDefault });
+    const codexPreferences = b.request(getMethod, {});
+    let request = await readJsonLine(fixture.official.stdin);
+    if (request.method === "initialize") {
+      fixture.official.stdout.write(
+        `${JSON.stringify({ id: request.id, result: { userAgent: "fixture" } })}\n`,
+      );
+      request = await readJsonLine(fixture.official.stdin);
+      if (request.method === "initialized") request = await readJsonLine(fixture.official.stdin);
+    }
+    expect(request.method).toBe("model/list");
+    fixture.official.stdout.write(
+      `${JSON.stringify({ id: request.id, result: { data: [{ model: "gpt", isDefault: true }] } })}\n`,
+    );
+    await expect(codexPreferences).resolves.toMatchObject({ values: codexDefault });
     expect(fixture.adapter.sessions).toHaveLength(0);
   });
   it("rejects unauthenticated/browser-origin traffic and official Thread execution", async () => {
@@ -621,7 +758,7 @@ describe("public authenticated owner channel", () => {
     expect((await a.snapshot(id)).queue?.items).toEqual([]);
     current(fixture).succeedTurn();
   });
-  it("keeps a late Web Steer as a queued follow-up after the busy window closes", async () => {
+  it("rejects a late targeted steer while retaining the older client-channel behavior", async () => {
     const { fixture, a } = await setup();
     const id = await startPiThread(fixture);
     const completedTurnId = await startPiTurn(fixture, id);
@@ -630,6 +767,21 @@ describe("public authenticated owner channel", () => {
       (value) =>
         value.method === "turn/completed" && JSON.stringify(value).includes(completedTurnId),
     );
+    await expect(
+      a.request("turn/steer", {
+        threadId: id,
+        expectedTurnId: completedTurnId,
+        [THREAD_STEER_STRICT_TARGET_PARAM]: true,
+        clientUserMessageId: "targeted-web-steer",
+        input: [{ type: "text", text: "keep this draft" }],
+      }),
+    ).rejects.toMatchObject({
+      code: -32074,
+      message: "External steering must reference the active Turn",
+    });
+    const idle = await a.snapshot(id);
+    expect(idle.thread.status.type).toBe("idle");
+    expect(idle.queue?.items).toEqual([]);
     await expect(
       a.request("turn/steer", {
         threadId: id,

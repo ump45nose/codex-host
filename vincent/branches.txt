@@ -10,21 +10,10 @@ thin/delegation-capacity-hardening # PR #784; base thin/delegation-capacity: rel
 thin/local-design-preview # fork infrastructure (own #728 closed; removed at the switch to official): codexhost preview in the built-in browser
 thin/local-preview-npm-forwarding # fork infrastructure; base thin/local-design-preview: forward the preview command in the npm wrapper
 thin/cursor-side-chat-edit # PR #576: revert External Threads to earlier native Fork Checkpoints
-thin/cursor-fast-selection # PR #782: Cursor native Fast models and live selection confirmation
-thin/delegation-inspect-fast-models # PR #986 (merged upstream after v0.23.0): list Fast model variants in delegation inspect output
 thin/independent-native-provider-quota # PR #470: custom provider inference independent of Codex quota (fork copy keeps the continuation UI dropped from the narrowed PR)
 thin/macos-nested-codex-cli # PR #396: discover the official CLI across nested macOS Desktop bundles
 thin/fork-release-channel # fork infrastructure: update checks and npm meta package against ump45nose/codex-host releases
-thin/delegation-catalog-parent # PR #970: route a shared parent Thread to the Harness catalog
-thin/settings-hide-desktop-envs # PR #972: keep Desktop-internal environments out of the connection list
-thin/settle-turns-after-session-fault # PR #969 (fork copy predates the PR's review changes): settle open Turns when a Session faults
 thin/shared-host-single-lock-and-resume # PR #987 (item-anchor cursor); the replay-after-resume part is fork-only until a Desktop repro shows it is needed
-thin/external-thread-turn-recency # PR #973: advance External Thread updatedAt when a Turn starts or ends
-thin/claude-code-todo-tools # PR #976 (fork copy predates the PR's review changes): Claude Code task tools -> plan panel and history replay
-thin/reasoning-summary-parts # PR #967: Reasoning previews as titled summary parts
-thin/shared-archived-thread-revival # PR #988: hide local copies of Threads the shared Host owns
 thin/codexhost-partial-swap # fork infrastructure: vincent-release.sh deploy/patch/audit
 thin/shared-thread-pin # PR #989 (list cache invalidation); shared beforeThreadId routing and downstream placement merge are fork-only
 fix/agy-acp-wakeup-and-watch-delivery # PR #974 (busy watch delivery) + PR #975 (no session/close); autonomous-turn part waits on upstream issue #991
-fix/desktop-mcp-session-reap-v0.22 # PR #981: reap browser MCP sessions abandoned without DELETE
-fix/macos-descriptor-mode # PR #1004: create desktop-runtime-v1.json with mode 0600 on macOS

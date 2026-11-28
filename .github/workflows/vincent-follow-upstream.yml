@@ -362,6 +362,16 @@ jobs:
           existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -1)"
           if [[ -n "$existing" ]]; then
+            # The schedule retries the same tag every six hours, so an unmergeable manifest would
+            # post the same conflict list again and again. Comment only when the report changed;
+            # the "Run:" line is dropped from the comparison because it is new in every run.
+            count="$(gh api "repos/$GITHUB_REPOSITORY/issues/$existing" --jq .comments)"
+            last="$(gh api "repos/$GITHUB_REPOSITORY/issues/$existing/comments?per_page=100&page=$(( (count + 99) / 100 ))" \
+              --jq '.[-1].body // ""' | tail -n +2)"
+            if [[ "$last" == "$(tail -n +2 "$RUNNER_TEMP/body.md")" ]]; then
+              echo "Same report as the latest comment on #$existing; not repeated." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/body.md"
